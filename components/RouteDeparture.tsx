@@ -5,12 +5,11 @@ import { SharePointService } from '../services/sharepointService';
 import * as XLSX from 'xlsx';
 import {
   Clock, X, Loader2, RefreshCw, ShieldCheck,
-  AlertTriangle, CheckCircle2, ChevronDown,
+  CheckCircle2, ChevronDown,
   Filter, Search, CheckSquare, Square,
-  BarChart3, TrendingUp, SortAsc,
-  Activity, ChevronRight, Maximize2, Minimize2,
+  ChevronRight, Maximize2, Minimize2,
   Archive, Database, Save, Link as LinkIcon,
-  Layers, Trash2, Settings2, Check, Table
+  Layers, Trash2, Settings2, Check, Table, SortAsc
 } from 'lucide-react';
 
 const MOTIVOS = [
@@ -85,7 +84,6 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   // Armazena os últimos checklists de motorista por operação
   const [lastMotoristaChecklist, setLastMotoristaChecklist] = useState<Record<string, { data: string, porcentagem: string }>>({});
 
-  const [isStatsModalOpen, setIsStatsModalOpen] = useState(false);
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
   const [isMappingModalOpen, setIsMappingModalOpen] = useState(false);
   const [pendingMappingRoute, setPendingMappingRoute] = useState<string | null>(null);
@@ -1584,13 +1582,6 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   // Calcula quantas rotas estão ocultas pelos filtros
   const hiddenRoutesCount = routes.length - filteredRoutes.length;
 
-  const dashboardStats = useMemo(() => {
-    const total = filteredRoutes.length; if (total === 0) return null;
-    const okCount = filteredRoutes.filter(r => r.statusOp === 'OK').length;
-    const delayedCount = filteredRoutes.filter(r => r.statusOp === 'Atrasada').length;
-    return { total, okCount, delayedCount };
-  }, [filteredRoutes]);
-
   // Cálculo dos indicadores GERAL e INTERNO
   const performanceIndicators = useMemo(() => {
     // Usa TODAS as rotas do usuário, ignorando filtros de coluna
@@ -1741,7 +1732,6 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
             )}
           </div>
           <button onClick={() => setIsHistoryModalOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-slate-800 text-slate-300 rounded-lg hover:bg-slate-700 font-bold border border-slate-700 uppercase text-[10px] tracking-wide transition-all shadow-sm"><Database size={16} /> Histórico</button>
-          <button onClick={() => setIsStatsModalOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-slate-800 text-slate-300 rounded-lg hover:bg-slate-700 font-bold border border-slate-700 uppercase text-[10px] tracking-wide transition-all shadow-sm"><BarChart3 size={16} /> Dashboard</button>
           <button onClick={loadData} className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-all border border-slate-700 bg-slate-900"><RefreshCw size={18} /></button>
           <button onClick={handleArchiveAll} disabled={isSyncing || filteredRoutes.length === 0} className="flex items-center gap-2 px-4 py-2 bg-slate-800 text-slate-300 rounded-lg hover:bg-slate-700 font-bold border border-slate-700 uppercase text-[10px] tracking-wide transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"><Archive size={16} /> Arquivar</button>
         </div>
@@ -2709,15 +2699,6 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                   </div>
               </div>
           </div>
-      )}
-
-      {isStatsModalOpen && dashboardStats && (
-        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-md z-[200] flex items-center justify-center p-4">
-            <div className="bg-white dark:bg-slate-900 rounded-[2rem] shadow-2xl w-full max-w-4xl overflow-hidden border dark:border-slate-800 animate-in zoom-in">
-                <div className="bg-[#1e293b] p-6 flex justify-between items-center text-white"><div className="flex items-center gap-4"><TrendingUp size={24} /><h3 className="font-black uppercase tracking-widest text-base">Dashboard Operacional</h3></div><button onClick={() => setIsStatsModalOpen(false)}><X size={28} /></button></div>
-                <div className="p-8 grid grid-cols-3 gap-6 bg-slate-50 dark:bg-slate-950">{[{ label: 'Total', value: dashboardStats.total, icon: Activity, color: 'text-slate-700 bg-white' }, { label: 'OK', value: `${((dashboardStats.okCount / dashboardStats.total) * 100).toFixed(2)}%`, icon: CheckCircle2, color: 'text-emerald-600 bg-emerald-50' }, { label: 'Atrasos', value: `${((dashboardStats.delayedCount / dashboardStats.total) * 100).toFixed(2)}%`, icon: AlertTriangle, color: 'text-orange-600 bg-orange-50' }].map((stat: any, idx) => ( <div key={idx} className={`p-6 rounded-2xl border dark:border-slate-800 flex flex-col gap-2 ${stat.color}`}><stat.icon size={20} /><span className="text-[10px] font-black uppercase text-slate-400 mt-2">{stat.label}</span><div className="text-3xl font-black">{stat.value}</div></div> ))}</div>
-            </div>
-        </div>
       )}
 
       {/* Modal de Edição de Horários */}
