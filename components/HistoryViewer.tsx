@@ -1,8 +1,9 @@
 
-import { HistoryRecord, Task, User as AppUser, RouteConfig } from '../types';
+import { HistoryRecord, Task, User as AppUser, RouteConfig, OperationStatus } from '../types';
 import { SharePointService } from '../services/sharepointService';
-import { History, Calendar, Clock, ChevronRight, ChevronDown, CheckCircle2, User, Loader2, MapPin, Eye, FileSearch } from 'lucide-react';
-import React, { useState, useEffect, useMemo } from 'react';
+import { getBrazilDate, toBrazilDate } from '../utils/dateUtils';
+import { History, Calendar, Clock, ChevronRight, ChevronDown, CheckCircle2, User, Loader2, MapPin, Eye, FileSearch, Filter, X, Search } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 
 const STATUS_CONFIG: Record<string, { label: string, color: string }> = {
   'PR': { label: 'PR', color: 'bg-slate-200 text-slate-600 border-slate-300 dark:bg-slate-700 dark:text-slate-300 dark:border-slate-600' },
@@ -30,9 +31,21 @@ const HistoryViewer: React.FC<HistoryViewerProps> = ({ currentUser }) => {
   const [collapsedCategories, setCollapsedCategories] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
+  // Estados para filtros das colunas (igual à tabela de saídas)
+  const [colFilters, setColFilters] = useState<Record<string, string[]>>({});
+  const [selectedFilters, setSelectedFilters] = useState<Record<string, string[]>>({});
+  const [activeFilterCol, setActiveFilterCol] = useState<string | null>(null);
+  const filterDropdownRef = useRef<HTMLDivElement>(null);
+
   // Filtros de busca manual
-  const [startDate, setStartDate] = useState(new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0]);
-  const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
+  const [startDate, setStartDate] = useState(() => {
+    // Usa data brasileira diretamente
+    const today = getBrazilDate();
+    const [year, month, day] = today.split('-').map(Number);
+    const startDateObj = new Date(year, month - 1, day - 7);
+    return startDateObj.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }).split('/').reverse().join('-');
+  });
+  const [endDate, setEndDate] = useState(getBrazilDate());
 
   const fetchHistory = async () => {
     const token = currentUser.accessToken || (window as any).__access_token; 
@@ -59,11 +72,117 @@ const HistoryViewer: React.FC<HistoryViewerProps> = ({ currentUser }) => {
   const displayTimestamp = (timestamp: string) => {
     try {
         if (!timestamp) return "--/--/---- --:--";
-        if (timestamp.includes('/') && !timestamp.includes('T')) return timestamp; 
+        if (timestamp.includes('/') && !timestamp.includes('T')) return timestamp;
         const date = new Date(timestamp);
-        return date.toLocaleString('pt-BR');
+        // Usa fuso de Brasília para exibição consistente
+        return date.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
     } catch(e) { return timestamp; }
   };
+
+  // Formata data ISO ou YYYY-MM-DD para DD/MM/AAAA
+  const formatDateBR = (dateString: string) => {
+    if (!dateString) return "--/--/----";
+    try {
+        // Se já estiver no formato DD/MM/AAAA, retorna como está
+        if (dateString.includes('/') && /^\d{2}\/\d{2}\/\d{4}$/.test(dateString)) {
+            return dateString;
+        }
+        // Se for ISO completo (com T e hora), usa new Date normal
+        if (dateString.includes('T')) {
+            const date = new Date(dateString);
+            if (isNaN(date.getTime())) return dateString;
+            return date.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+        }
+        // Se for apenas data (YYYY-MM-DD), parse manualmente para evitar problema de fuso
+        const match = dateString.match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (match) {
+            const [, year, month, day] = match;
+            // Cria data com timezone local explícito (meio-dia para evitar DST issues)
+            return `${day}/${month}/${year}`;
+        }
+        // Fallback
+        const date = new Date(dateString);
+        if (isNaN(date.getTime())) return dateString;
+        return date.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+    } catch {
+        return dateString;
+    }
+  };
+
+  // Funções de filtro das colunas (igual à tabela de saídas)
+  const getColUniqueValues = (col: string) => {
+    if (!selectedRecord) return [];
+    const tasks = viewingPartial && selectedRecord.partialRecord 
+      ? selectedRecord.partialRecord.tasks 
+      : selectedRecord.tasks || [];
+    
+    if (col === 'operacao') {
+      const allOps = Array.from(new Set(tasks.flatMap(t => Object.keys(t.operations))));
+      return allOps.filter(op => userConfigs.some(c => c.operacao === op)).sort();
+    }
+    
+    if (col === 'categoria') {
+      return Array.from(new Set(tasks.map(t => t.category || 'Geral'))).sort();
+    }
+    
+    return [];
+  };
+
+  const toggleColFilter = (col: string, value: string) => {
+    setSelectedFilters(prev => {
+      const current = prev[col] || [];
+      const updated = current.includes(value)
+        ? current.filter(v => v !== value)
+        : [...current, value];
+      return { ...prev, [col]: updated };
+    });
+  };
+
+  const clearColFilters = () => {
+    setSelectedFilters({});
+    setColFilters({});
+  };
+
+  const hasActiveColFilters = Object.keys(selectedFilters).some(col => (selectedFilters[col] || []).length > 0);
+
+  // Fecha dropdown ao clicar fora
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (filterDropdownRef.current && !filterDropdownRef.current.contains(e.target as Node)) {
+        setActiveFilterCol(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Aplica filtros às tarefas exibidas
+  const filteredTasksToDisplay = useMemo(() => {
+    let tasks = viewingPartial && selectedRecord?.partialRecord 
+      ? selectedRecord.partialRecord.tasks 
+      : selectedRecord?.tasks || [];
+
+    if (!hasActiveColFilters) return tasks;
+
+    return tasks.filter(task => {
+      // Filtro por categoria
+      if (selectedFilters['categoria']?.length > 0) {
+        if (!selectedFilters['categoria'].includes(task.category || 'Geral')) {
+          return false;
+        }
+      }
+
+      // Filtro por operação (status em uma operação específica)
+      if (selectedFilters['operacao']?.length > 0) {
+        const taskOps = Object.entries(task.operations).filter(([op, status]) => 
+          selectedFilters['operacao']?.includes(op)
+        );
+        if (taskOps.length === 0) return false;
+      }
+
+      return true;
+    });
+  }, [selectedRecord, viewingPartial, selectedFilters, userConfigs]);
 
   const processedHistory = useMemo(() => {
     const groupedByDay: Record<string, HistoryRecord[]> = {};
@@ -107,7 +226,7 @@ const HistoryViewer: React.FC<HistoryViewerProps> = ({ currentUser }) => {
     return allLocsInRecord.filter(loc => myAllowedOps.has(loc));
   }, [selectedRecord, viewingPartial, userConfigs]);
 
-  const currentTasksToDisplay = (viewingPartial && selectedRecord?.partialRecord ? selectedRecord.partialRecord.tasks : selectedRecord?.tasks || []);
+  const currentTasksToDisplay = filteredTasksToDisplay;
 
   const getGroupedTasks = (tasks: Task[]) => {
     return tasks.reduce((acc, task) => {
@@ -159,8 +278,8 @@ const HistoryViewer: React.FC<HistoryViewerProps> = ({ currentUser }) => {
                     <Calendar size={16} />
                   </div>
                   <div className="flex-1">
-                    <div className="font-black text-xs dark:text-white">{displayTimestamp(record.timestamp).split(',')[0]}</div>
-                    <div className="text-[9px] text-slate-500 font-bold uppercase">{displayTimestamp(record.timestamp).split(',')[1]}</div>
+                    <div className="font-black text-xs dark:text-white">{formatDateBR(record.timestamp)}</div>
+                    <div className="text-[9px] text-slate-500 font-bold uppercase">{displayTimestamp(record.timestamp).split(', ')[1] || ''}</div>
                   </div>
                   {record.hasPartial && <div className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></div>}
               </div>
@@ -191,27 +310,167 @@ const HistoryViewer: React.FC<HistoryViewerProps> = ({ currentUser }) => {
                         {viewingPartial ? "Salvamento Parcial (10:00h)" : `Resp: ${selectedRecord.resetBy}`}
                     </h3>
                     <div className="flex gap-4 mt-1">
-                        <span className="text-[9px] font-black uppercase text-slate-500 flex items-center gap-1.5"><Calendar size={10} /> {displayTimestamp(viewingPartial && selectedRecord.partialRecord ? selectedRecord.partialRecord.timestamp : selectedRecord.timestamp)}</span>
+                        <span className="text-[9px] font-black uppercase text-slate-500 flex items-center gap-1.5">
+                            <Calendar size={10} /> {formatDateBR(viewingPartial && selectedRecord.partialRecord ? selectedRecord.partialRecord.timestamp : selectedRecord.timestamp)}
+                        </span>
                     </div>
                   </div>
                </div>
-               
-               {selectedRecord.hasPartial && (
-                  <button 
-                    onClick={() => setViewingPartial(!viewingPartial)}
-                    className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase border transition-all flex items-center gap-2 ${viewingPartial 
-                        ? 'bg-primary-600 text-white' : 'bg-amber-50 dark:bg-amber-900/20 text-amber-600 border-amber-200 dark:border-amber-800'}`}
-                  >
-                      {viewingPartial ? "Snapshot Principal" : "Snap Parcial (10h)"}
-                  </button>
-               )}
+
+               <div className="flex items-center gap-2">
+                  {hasActiveColFilters && (
+                    <button onClick={clearColFilters} className="px-3 py-2 text-[9px] font-bold text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-xl uppercase flex items-center gap-1">
+                      <X size={12} /> Limpar Filtros
+                    </button>
+                  )}
+
+                  {selectedRecord.hasPartial && (
+                    <button
+                      onClick={() => setViewingPartial(!viewingPartial)}
+                      className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase border transition-all flex items-center gap-2 ${viewingPartial
+                          ? 'bg-primary-600 text-white' : 'bg-amber-50 dark:bg-amber-900/20 text-amber-600 border-amber-200 dark:border-amber-800'}`}
+                    >
+                        {viewingPartial ? "Snapshot Principal" : "Snap Parcial (10h)"}
+                    </button>
+                  )}
+               </div>
             </div>
 
             <div className="flex-1 overflow-auto bg-slate-100 dark:bg-slate-950 scrollbar-thin">
+                {/* Indicador de filtros ativos */}
+                {hasActiveColFilters && (
+                  <div className="bg-primary-50 dark:bg-primary-900/20 border-b border-primary-200 dark:border-primary-800 px-4 py-2 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Filter size={12} className="text-primary-600 dark:text-primary-400" />
+                      <span className="text-[9px] font-bold text-primary-600 dark:text-primary-400 uppercase">
+                        Filtros ativos:
+                      </span>
+                      {Object.entries(selectedFilters).filter(([_, values]) => values.length > 0).map(([col, values]) => (
+                        <span key={col} className="text-[9px] font-bold text-slate-600 dark:text-slate-400 bg-white dark:bg-slate-800 px-2 py-0.5 rounded">
+                          {col}: {values.join(', ')}
+                        </span>
+                      ))}
+                    </div>
+                    <button onClick={clearColFilters} className="text-[9px] font-bold text-red-500 hover:text-red-600 uppercase flex items-center gap-1">
+                      <X size={12} /> Limpar
+                    </button>
+                  </div>
+                )}
+
+                {/* Filtros das Colunas */}
+                <div className="bg-slate-50 dark:bg-slate-900 border-b dark:border-slate-800 px-4 py-3 flex items-center gap-4">
+                  <div className="flex items-center gap-2 text-[10px] font-bold text-slate-500 uppercase">
+                    <Filter size={12} />
+                    <span>Filtros:</span>
+                  </div>
+
+                  {/* Filtro de Categoria */}
+                  <div className="relative" ref={filterDropdownRef}>
+                    <button
+                      onClick={() => setActiveFilterCol(activeFilterCol === 'categoria' ? null : 'categoria')}
+                      className={`px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase flex items-center gap-1.5 transition-all ${
+                        activeFilterCol === 'categoria' 
+                          ? 'bg-primary-600 text-white' 
+                          : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700 hover:border-primary-500'
+                      }`}
+                    >
+                      Categoria
+                      {selectedFilters['categoria']?.length > 0 && (
+                        <span className="w-2 h-2 bg-primary-500 rounded-full"></span>
+                      )}
+                      <ChevronDown size={12} />
+                    </button>
+
+                    {activeFilterCol === 'categoria' && (
+                      <div className="absolute top-full left-0 mt-1 w-48 bg-white dark:bg-slate-800 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden z-[100] animate-in fade-in slide-in-from-top-2">
+                        <div className="p-2 border-b dark:border-slate-700 flex justify-between items-center">
+                          <span className="text-[9px] font-black uppercase text-slate-600 dark:text-slate-400 px-2">Categoria</span>
+                          {selectedFilters['categoria']?.length > 0 && (
+                            <button 
+                              onClick={() => setSelectedFilters(prev => ({ ...prev, categoria: [] }))}
+                              className="text-[8px] font-bold text-primary-600 hover:text-primary-700 uppercase px-2"
+                            >
+                              Limpar
+                            </button>
+                          )}
+                        </div>
+                        <div className="max-h-48 overflow-y-auto p-2 space-y-1">
+                          {getColUniqueValues('categoria').map(cat => (
+                            <button
+                              key={cat}
+                              onClick={() => toggleColFilter('categoria', cat)}
+                              className={`w-full text-left px-3 py-2 rounded-lg text-[10px] font-bold transition-all flex items-center justify-between ${
+                                selectedFilters['categoria']?.includes(cat)
+                                  ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400'
+                                  : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700'
+                              }`}
+                            >
+                              {cat}
+                              {selectedFilters['categoria']?.includes(cat) && <CheckCircle2 size={12} />}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Filtro de Operação */}
+                  <div className="relative" ref={filterDropdownRef}>
+                    <button
+                      onClick={() => setActiveFilterCol(activeFilterCol === 'operacao' ? null : 'operacao')}
+                      className={`px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase flex items-center gap-1.5 transition-all ${
+                        activeFilterCol === 'operacao' 
+                          ? 'bg-primary-600 text-white' 
+                          : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700 hover:border-primary-500'
+                      }`}
+                    >
+                      Operação
+                      {selectedFilters['operacao']?.length > 0 && (
+                        <span className="w-2 h-2 bg-primary-500 rounded-full"></span>
+                      )}
+                      <ChevronDown size={12} />
+                    </button>
+
+                    {activeFilterCol === 'operacao' && (
+                      <div className="absolute top-full left-0 mt-1 w-40 bg-white dark:bg-slate-800 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-700 overflow-hidden z-[100] animate-in fade-in slide-in-from-top-2">
+                        <div className="p-2 border-b dark:border-slate-700 flex justify-between items-center">
+                          <span className="text-[9px] font-black uppercase text-slate-600 dark:text-slate-400 px-2">Operação</span>
+                          {selectedFilters['operacao']?.length > 0 && (
+                            <button 
+                              onClick={() => setSelectedFilters(prev => ({ ...prev, operacao: [] }))}
+                              className="text-[8px] font-bold text-primary-600 hover:text-primary-700 uppercase px-2"
+                            >
+                              Limpar
+                            </button>
+                          )}
+                        </div>
+                        <div className="max-h-48 overflow-y-auto p-2 space-y-1">
+                          {getColUniqueValues('operacao').map(op => (
+                            <button
+                              key={op}
+                              onClick={() => toggleColFilter('operacao', op)}
+                              className={`w-full text-left px-3 py-2 rounded-lg text-[10px] font-bold transition-all flex items-center justify-between ${
+                                selectedFilters['operacao']?.includes(op)
+                                  ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400'
+                                  : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700'
+                              }`}
+                            >
+                              {op.replace('LAT-', '').replace('ITA-', '')}
+                              {selectedFilters['operacao']?.includes(op) && <CheckCircle2 size={12} />}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
                 <table className="w-full border-collapse bg-white dark:bg-slate-900 text-[10px]">
                   <thead className="sticky top-0 z-20 bg-slate-800 dark:bg-slate-950 text-white shadow-lg">
                     <tr>
-                      <th className="p-4 text-left w-[30%] min-w-[300px] border-r border-slate-700 dark:border-slate-800 sticky left-0 bg-slate-800 dark:bg-slate-950 font-black uppercase text-[9px]">Ação / Tarefa</th>
+                      <th className="p-4 text-left w-[30%] min-w-[300px] border-r border-slate-700 dark:border-slate-800 sticky left-0 bg-slate-800 dark:bg-slate-950 font-black uppercase text-[9px]">
+                        Ação / Tarefa
+                      </th>
                       {filteredAllowedLocations.map(loc => (
                         <th key={loc} className="p-1 text-center min-w-[60px] border-r border-slate-700 dark:border-slate-800 font-black uppercase text-[9px]">
                             {loc.replace('LAT-', '').replace('ITA-', '')}

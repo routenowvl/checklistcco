@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { SharePointService } from '../services/sharepointService';
+import { getBrazilDate, getBrazilHours, isAfter10amBrazil } from '../utils/dateUtils';
 import { RouteDeparture, Task, User, RouteConfig } from '../types';
 import {
   TowerControl, Send, RefreshCw, Loader2,
@@ -99,12 +100,10 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     };
   }, []);
 
-  // Define o estado inicial do botão de Atualização baseado no horário atual
+  // Define o estado inicial do botão de Atualização baseado no horário atual (Brasília)
   useEffect(() => {
-    const now = new Date();
-    const hours = now.getHours();
-    // Entre 12:00h e 23:59h = ativado, entre 00:00h e 11:59h = desativado
-    setIsAtualizacao(hours >= 12);
+    // Entre 12:00h e 23:59h (Brasília) = ativado, entre 00:00h e 11:59h = desativado
+    setIsAtualizacao(isAfter10amBrazil());
   }, []);
 
   // Função para enviar saídas da operação selecionada
@@ -194,11 +193,11 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
           // Se só tem data, adiciona horário zerado
           dataHoraEnvio = `${dataEnvio} 00:00:00`;
         } else if (horarioEnvio) {
-          // Se só tem hora, usa data atual
-          const hoje = new Date().toLocaleDateString('pt-BR');
+          // Se só tem hora, usa data atual (fuso de Brasília)
+          const hoje = getBrazilDate();
           dataHoraEnvio = `${hoje} ${horarioEnvio}`;
         }
-        
+
         console.log('[DEBUG_DATA] dataEnvio:', dataEnvio, 'horarioEnvio:', horarioEnvio, 'dataHoraEnvio final:', dataHoraEnvio);
 
         // Se o webhook retornou data/hora de envio, atualiza no SharePoint
@@ -346,11 +345,11 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
           // Se só tem data, adiciona horário zerado
           dataHoraEnvio = `${dataEnvio} 00:00:00`;
         } else if (horarioEnvio) {
-          // Se só tem hora, usa data atual
-          const hoje = new Date().toLocaleDateString('pt-BR');
+          // Se só tem hora, usa data atual (fuso de Brasília)
+          const hoje = getBrazilDate();
           dataHoraEnvio = `${hoje} ${horarioEnvio}`;
         }
-        
+
         console.log('[DEBUG_DATA_NAO_COLETAS] dataEnvio:', dataEnvio, 'horarioEnvio:', horarioEnvio, 'dataHoraEnvio final:', dataHoraEnvio);
 
         // Se o webhook retornou data/hora de envio, atualiza no SharePoint
@@ -635,10 +634,12 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       let status = "PREVISTO";
       let color = "bg-slate-300 text-slate-600";
 
-      // Verifica se houve envio HOJE comparando datas
-      const today = new Date();
+      // Verifica se houve envio HOJE comparando datas no fuso de Brasília
+      const todayBrazil = getBrazilDate();
+      const [todayY, todayM, todayD] = todayBrazil.split('-').map(Number);
+      const today = new Date(todayY, todayM - 1, todayD);
       today.setHours(0, 0, 0, 0);
-      
+
       let envioDateObj: Date | null = null;
       if (ultimoEnvio) {
         if (ultimoEnvio.includes('T')) {

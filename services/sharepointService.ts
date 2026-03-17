@@ -3,6 +3,7 @@
 // Correct models: 'gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-2.5-flash-image', etc.
 
 import { SPTask, SPOperation, SPStatus, Task, OperationStatus, HistoryRecord, RouteDeparture, RouteOperationMapping, RouteConfig } from '../types';
+import { getBrazilDate, getBrazilISOString } from '../utils/dateUtils';
 
 export interface DailyWarning {
   id: string;
@@ -251,7 +252,7 @@ export const SharePointService = {
     const siteId = await getResolvedSiteId(token);
     const list = await findListByIdOrName(siteId, 'Status_Checklist', token);
     const { mapping, internalNames, readOnly } = await getListColumnMapping(siteId, list.id, token);
-    const today = new Date().toISOString().split('T')[0];
+    const today = getBrazilDate();
     const colData = resolveFieldName(mapping, 'DataReferencia');
     const filter = `fields/${colData} ge '${today}T00:00:00Z' and fields/${colData} le '${today}T23:59:59Z'`;
     const existing = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}&$top=999`, token);

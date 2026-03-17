@@ -2,8 +2,9 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Task, OperationStatus, User } from '../types';
 import { SharePointService, DailyWarning } from '../services/sharepointService';
-import { 
-  Maximize2, Minimize2, Loader2, Database, 
+import { getBrazilDate } from '../utils/dateUtils';
+import {
+  Maximize2, Minimize2, Loader2, Database,
   ShieldCheck, AlertCircle, RefreshCw, CheckCircle,
   Activity, Lock, CheckCircle2, PaintBucket,
   HelpCircle, X, LogOut, ChevronDown, ChevronRight,
@@ -54,7 +55,7 @@ const TaskManager: React.FC<TaskManagerProps> = ({
   const [isCreateWarningModalOpen, setIsCreateWarningModalOpen] = useState(false);
   const [isViewWarningsModalOpen, setIsViewWarningsModalOpen] = useState(false);
   const [newWarning, setNewWarning] = useState<Omit<DailyWarning, 'id' | 'visualizado'>>({
-      operacao: '', celula: currentUser.email, rota: '', descricao: '', dataOcorrencia: new Date().toISOString().split('T')[0]
+      operacao: '', celula: currentUser.email, rota: '', descricao: '', dataOcorrencia: getBrazilDate()
   });
 
   const [isResetModalOpen, setIsResetModalOpen] = useState(false);
@@ -95,7 +96,7 @@ const TaskManager: React.FC<TaskManagerProps> = ({
     try {
         await SharePointService.addDailyWarning(token, newWarning);
         setIsCreateWarningModalOpen(false);
-        setNewWarning({ operacao: '', celula: currentUser.email, rota: '', descricao: '', dataOcorrencia: new Date().toISOString().split('T')[0] });
+        setNewWarning({ operacao: '', celula: currentUser.email, rota: '', descricao: '', dataOcorrencia: getBrazilDate() });
         alert("Aviso registrado com sucesso!");
     } catch (err: any) {
         alert("Erro ao salvar aviso: " + err.message);
@@ -213,10 +214,10 @@ const TaskManager: React.FC<TaskManagerProps> = ({
     
     setIsUpdating(true);
     try {
-      const today = new Date().toISOString().split('T')[0];
+      const today = getBrazilDate();
       const todayKey = today.replace(/-/g, '');
       const uniqueKey = `${todayKey}_${taskId}_${location}`;
-      
+
       await SharePointService.updateStatus(currentUser.accessToken, {
         DataReferencia: today,
         TarefaID: taskId,
@@ -245,9 +246,9 @@ const TaskManager: React.FC<TaskManagerProps> = ({
 
     setIsUpdating(true);
     try {
-      const today = new Date().toISOString().split('T')[0];
+      const today = getBrazilDate();
       const todayKey = today.replace(/-/g, '');
-      
+
       await Promise.all(locations.map(loc => {
         const uniqueKey = `${todayKey}_${taskId}_${loc}`;
         return SharePointService.updateStatus(currentUser.accessToken!, {
@@ -269,18 +270,18 @@ const TaskManager: React.FC<TaskManagerProps> = ({
 
   const handleResetChecklist = async () => {
     if (!resetResponsible.trim() || !currentUser.accessToken) return;
-    
+
     setIsUpdating(true);
     try {
         await SharePointService.saveHistory(currentUser.accessToken, {
             id: Date.now().toString(),
-            timestamp: new Date().toISOString(),
+            timestamp: getBrazilISOString(),
             tasks: tasks,
             resetBy: resetResponsible,
             email: currentUser.email
         });
-        
-        const today = new Date().toISOString().split('T')[0];
+
+        const today = getBrazilDate();
         const todayKey = today.replace(/-/g, '');
         
         const resetPromises: Promise<any>[] = [];

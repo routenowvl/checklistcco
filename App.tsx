@@ -12,6 +12,7 @@ import { SharePointService } from './services/sharepointService';
 import { logout as msalLogout } from './services/authService';
 import { Task, User } from './types';
 import { setCurrentUser as setStorageUser } from './services/storageService';
+import { getBrazilDate, getBrazilHours, getBrazilISOString, isAfter10amBrazil, getBrazilMinutes } from './utils/dateUtils';
 
 const SidebarLink = ({ to, icon: Icon, label, active, collapsed }: any) => (
   <a href={`#${to}`} className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${active ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-100'} ${collapsed ? 'justify-center' : ''}`}>
@@ -59,7 +60,7 @@ const AppContent = () => {
       await SharePointService.ensureMatrix(user.accessToken, spTasks, spOps);
 
       setSyncMessage("Recuperando Status...");
-      const today = new Date().toISOString().split('T')[0];
+      const today = getBrazilDate();
       const spStatus = await SharePointService.getStatusByDate(user.accessToken, today);
 
       const opSiglas = spOps.map(o => o.Title);
@@ -98,33 +99,35 @@ const AppContent = () => {
     if (!currentUser || tasks.length === 0) return;
 
     const checkAutoSaveTrigger = async () => {
-      const now = new Date();
-      const hours = now.getHours();
-
-      if (hours >= 10) {
-        const localDateStr = now.toLocaleDateString('pt-BR').replace(/\//g, '-');
+      // Verifica se já passou das 10:00h no fuso de Brasília
+      if (isAfter10amBrazil()) {
+        const todayBrazil = getBrazilDate();
         const safeEmail = currentUser.email.replace(/[^a-zA-Z0-9]/g, '_');
-        const autoSaveFlag = `auto_save_done_${safeEmail}_${localDateStr}`;
-        
+        // Flag específica por dia no fuso brasileiro
+        const autoSaveFlag = `auto_save_done_${safeEmail}_${todayBrazil}`;
+
         if (localStorage.getItem(autoSaveFlag) !== 'true') {
+          console.log(`[AUTO_SAVE] Executando salvamento automático às ${getBrazilHours()}:${String(getBrazilMinutes()).padStart(2, '0')} (Brasília)`);
           try {
             await SharePointService.saveHistory(currentUser.accessToken!, {
               id: Date.now().toString(),
-              timestamp: now.toISOString(),
+              timestamp: getBrazilISOString(),
               tasks: tasks,
               resetBy: 'Salvamento automático (10:00h)',
               email: currentUser.email
             });
             localStorage.setItem(autoSaveFlag, 'true');
+            console.log('[AUTO_SAVE] Salvamento concluído com sucesso');
           } catch (e) {
-            console.error("Falha no backup automático:", e);
+            console.error("[AUTO_SAVE] Falha no backup automático:", e);
           }
         }
       }
     };
 
-    const interval = setInterval(checkAutoSaveTrigger, 60000);
+    // Verifica imediatamente e depois a cada minuto
     checkAutoSaveTrigger();
+    const interval = setInterval(checkAutoSaveTrigger, 60000);
     return () => clearInterval(interval);
   }, [currentUser, tasks]);
 

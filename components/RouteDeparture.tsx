@@ -3,12 +3,13 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { RouteDeparture, User, RouteOperationMapping, RouteConfig } from '../types';
 import { SharePointService } from '../services/sharepointService';
 import * as XLSX from 'xlsx';
+import { getBrazilDate, getBrazilHours, getBrazilMinutes, toBrazilDate } from '../utils/dateUtils';
 import {
   Clock, X, Loader2, RefreshCw, ShieldCheck,
   CheckCircle2, ChevronDown,
   Filter, Search, CheckSquare, Square,
   ChevronRight, Maximize2, Minimize2,
-  Archive, Database, Save, Link as LinkIcon,
+  Archive, Database, Save, LinkIcon,
   Layers, Trash2, Settings2, Check, Table, SortAsc
 } from 'lucide-react';
 
@@ -78,7 +79,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   const [isBulkMappingModalOpen, setIsBulkMappingModalOpen] = useState(false);
 
   const [ghostRow, setGhostRow] = useState<Partial<RouteDeparture>>({
-    id: 'ghost', rota: '', data: new Date().toISOString().split('T')[0], inicio: '', saida: '', motorista: '', placa: '', statusGeral: '', aviso: 'NÃO', operacao: '', statusOp: 'Previsto', tempo: '', semana: ''
+    id: 'ghost', rota: '', data: getBrazilDate(), inicio: '', saida: '', motorista: '', placa: '', statusGeral: '', aviso: 'NÃO', operacao: '', statusOp: 'Previsto', tempo: '', semana: ''
   });
 
   // Armazena os últimos checklists de motorista por operação
@@ -95,14 +96,20 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   // Estado para o popup de edição do checklist (GERAL)
   const [isChecklistEditModalOpen, setIsChecklistEditModalOpen] = useState(false);
   const [checklistEditData, setChecklistEditData] = useState<{ routeId: string; data: string; porcentagem: string; motivos: string } | null>(null);
-  
-  const [histStart, setHistStart] = useState(new Date().toISOString().split('T')[0]);
-  const [histEnd, setHistEnd] = useState(new Date().toISOString().split('T')[0]);
+
+  const [histStart, setHistStart] = useState(getBrazilDate());
+  const [histEnd, setHistEnd] = useState(getBrazilDate());
   const [archivedResults, setArchivedResults] = useState<RouteDeparture[]>([]);
   const [isSearchingArchive, setIsSearchingArchive] = useState(false);
   const [isHistoryFullscreen, setIsHistoryFullscreen] = useState(false);
   const [editingHistoryId, setEditingHistoryId] = useState<string | null>(null);
   const [editingHistoryField, setEditingHistoryField] = useState<keyof RouteDeparture | null>(null);
+  
+  // Estados para filtros do histórico
+  const [historyColFilters, setHistoryColFilters] = useState<Record<string, string[]>>({});
+  const [historySelectedFilters, setHistorySelectedFilters] = useState<Record<string, string[]>>({});
+  const [historyActiveFilterCol, setHistoryActiveFilterCol] = useState<string | null>(null);
+  const historyFilterDropdownRef = useRef<HTMLDivElement>(null);
 
   const [activeObsId, setActiveObsId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -238,6 +245,25 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     });
   };
 
+  // Limpa estados de envio para uma operação
+  const cleanupSendState = (operacao: string) => {
+    setSendingOps(prev => {
+      const next = new Set(prev);
+      next.delete(operacao);
+      return next;
+    });
+    setPendingSendOps(prev => {
+      const next = new Set(prev);
+      next.delete(operacao);
+      return next;
+    });
+    setCountdowns(prev => {
+      const next = { ...prev };
+      delete next[operacao];
+      return next;
+    });
+  };
+
   // Envia o status da operação para o webhook ao final do countdown
   const handleSendStatus = async (operacao: string) => {
     const token = getAccessToken();
@@ -250,29 +276,48 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
       return;
     }
 
-    // Verifica se já enviou hoje para evitar duplicidade
-    const today = new Date().toISOString().split('T')[0];
+    // Verifica se já enviou hoje para evitar duplicidade (usando fuso de Brasília)
+    const today = getBrazilDate();
     const sentKey = `${operacao}_${today}`;
-    
+
+    // Verifica primeiro no sentTodayRef (sessão atual)
     if (sentTodayRef.current.has(sentKey)) {
-      console.log(`[WEBHOOK] ⚠️ Já enviado hoje para ${operacao}, ignorando envio duplicado`);
-      // Limpa estados mesmo assim
-      setSendingOps(prev => {
-        const next = new Set(prev);
-        next.delete(operacao);
-        return next;
-      });
-      setPendingSendOps(prev => {
-        const next = new Set(prev);
-        next.delete(operacao);
-        return next;
-      });
-      setCountdowns(prev => {
-        const next = { ...prev };
-        delete next[operacao];
-        return next;
-      });
+      console.log(`[WEBHOOK] ⚠️ Já enviado hoje para ${operacao} (sessão atual), ignorando envio duplicado`);
+      cleanupSendState(operacao);
       return;
+    }
+
+    // Verifica também no SharePoint (persistência entre sessões)
+    // Se o ultimoEnvioSaida estiver preenchido e for de hoje, bloqueia o envio
+    if (config?.ultimoEnvioSaida && config.ultimoEnvioSaida.trim() !== '') {
+      try {
+        let envioDate: Date | null = null;
+        
+        // Tenta converter o ultimoEnvioSaida para Date
+        if (config.ultimoEnvioSaida.includes('T')) {
+          envioDate = new Date(config.ultimoEnvioSaida);
+        } else if (config.ultimoEnvioSaida.includes('/')) {
+          const [data, hora] = config.ultimoEnvioSaida.split(' ');
+          const [dia, mes, ano] = data.split('/');
+          const [h, m, s] = hora ? hora.split(':') : ['00', '00', '00'];
+          envioDate = new Date(Number(ano), Number(mes) - 1, Number(dia), Number(h), Number(m), Number(s));
+        }
+        
+        if (envioDate && !isNaN(envioDate.getTime())) {
+          // Verifica se o envio foi HOJE no fuso de Brasília
+          const envioDateBrazil = envioDate.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+          const todayBrazil = getBrazilDate();
+          
+          if (envioDateBrazil === todayBrazil) {
+            console.log(`[WEBHOOK] ⚠️ Já enviado hoje para ${operacao} (SharePoint: ${config.ultimoEnvioSaida}), ignorando envio duplicado`);
+            cleanupSendState(operacao);
+            return;
+          }
+        }
+      } catch (err) {
+        console.error(`[WEBHOOK] Erro ao verificar ultimoEnvioSaida:`, err);
+        // Em caso de erro, continua com o envio por segurança
+      }
     }
 
     // Marca como enviado para evitar duplicidade
@@ -382,23 +427,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
       // Remove do sentTodayRef em caso de erro para permitir retry
       sentTodayRef.current.delete(sentKey);
       alert(`Erro ao enviar status automático: ${e.message}`);
-    } finally {
-      // Remove dos estados
-      setSendingOps(prev => {
-        const next = new Set(prev);
-        next.delete(operacao);
-        return next;
-      });
-      setPendingSendOps(prev => {
-        const next = new Set(prev);
-        next.delete(operacao);
-        return next;
-      });
-      setCountdowns(prev => {
-        const next = { ...prev };
-        delete next[operacao];
-        return next;
-      });
+      cleanupSendState(operacao);
     }
   };
 
@@ -413,7 +442,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   useEffect(() => {
     if (routes.length === 0 || userConfigs.length === 0) return;
 
-    const today = new Date().toISOString().split('T')[0];
+    const today = getBrazilDate();
     const now = Date.now();
 
     // Para cada operação do usuário, verifica se todas as rotas estão OK
@@ -468,7 +497,15 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   }, [routes, userConfigs, pendingSendOps, sendingOps]);
 
   useEffect(() => {
-    const timer = setInterval(() => setCurrentTime(new Date()), 30000);
+    // Atualiza o tempo a cada 30 segundos usando fuso de Brasília
+    const timer = setInterval(() => {
+      const now = new Date();
+      const brazilTimeStr = now.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+      const [hours, minutes, seconds] = brazilTimeStr.split(':').map(Number);
+      const brazilDate = new Date();
+      brazilDate.setHours(hours, minutes, seconds);
+      setCurrentTime(brazilDate);
+    }, 30000);
     return () => clearInterval(timer);
   }, []);
 
@@ -667,8 +704,12 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         return { status: 'Atrasada', gap: 'Não saiu' };
     }
 
-    const today = new Date();
+    // Usa data brasileira para comparação correta
+    const todayBrazil = getBrazilDate();
+    const [todayY, todayM, todayD] = todayBrazil.split('-').map(Number);
+    const today = new Date(todayY, todayM - 1, todayD);
     today.setHours(0, 0, 0, 0);
+    
     const [y, m, d] = routeDate.split('-').map(Number);
     const rDate = new Date(y, m - 1, d);
     rDate.setHours(0, 0, 0, 0);
@@ -691,10 +732,10 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     if (rDate > today) return { status: 'Programada', gap: '' };
     if (rDate < today) return { status: 'Atrasada', gap: '' };
 
-    // Calcula atraso baseado no horário atual vs horário de início
-    const nowSec = currentTime.getHours() * 3600 + currentTime.getMinutes() * 60 + currentTime.getSeconds();
+    // Calcula atraso baseado no horário atual (Brasília) vs horário de início
+    const nowSec = getBrazilHours() * 3600 + getBrazilMinutes() * 60 + currentTime.getSeconds();
     const diffAtual = nowSec - startSec;
-    
+
     if (diffAtual > toleranceSec) {
         // Está atrasada - calcula quanto tempo passou do horário
         const gapFormatted = secondsToTime(diffAtual);
@@ -899,9 +940,10 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         data = matchedDate;
       }
     } else {
-      // Data padrão no formato DD/MM/AAAA
-      const today = new Date();
-      data = `${String(today.getDate()).padStart(2, '0')}/${String(today.getMonth() + 1).padStart(2, '0')}/${today.getFullYear()}`;
+      // Data padrão no fuso de Brasília
+      const today = getBrazilDate();
+      const [year, month, day] = today.split('-');
+      data = `${day}/${month}/${year}`;
     }
     
     const porcentagem = percentMatch ? percentMatch[1] : '100';
@@ -1217,7 +1259,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     setRoutes(prev => [...prev, ...newRoutes]);
     setBulkStatus(null);
     setPendingBulkRoutes([]);
-    setGhostRow({ id: 'ghost', rota: '', data: new Date().toISOString().split('T')[0], inicio: '', saida: '', motorista: '', placa: '', statusGeral: '', aviso: 'NÃO', operacao: '', statusOp: 'Previsto', tempo: '' });
+    setGhostRow({ id: 'ghost', rota: '', data: getBrazilDate(), inicio: '', saida: '', motorista: '', placa: '', statusGeral: '', aviso: 'NÃO', operacao: '', statusOp: 'Previsto', tempo: '' });
   };
 
   const handleMultilinePaste = async (field: keyof RouteDeparture, startRowIndex: number, value: string) => {
@@ -1327,10 +1369,10 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                 setColFilters({});
                 setSelectedFilters({});
 
-                setGhostRow({ id: 'ghost', rota: '', data: new Date().toISOString().split('T')[0], inicio: '', saida: '', motorista: '', placa: '', statusGeral: '', aviso: 'NÃO', operacao: '', statusOp: 'Previsto', tempo: '' });
+                setGhostRow({ id: 'ghost', rota: '', data: getBrazilDate(), inicio: '', saida: '', motorista: '', placa: '', statusGeral: '', aviso: 'NÃO', operacao: '', statusOp: 'Previsto', tempo: '' });
             } catch (e) {} finally { setIsSyncing(false); }
-        } else { 
-            setGhostRow(updatedGhost); 
+        } else {
+            setGhostRow(updatedGhost);
         }
         return;
     }
@@ -1381,15 +1423,15 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     try {
         const route = archivedResults.find(r => r.id === id);
         if (!route) return;
-        
+
         const updatedRoute = { ...route, [field]: value };
-        
+
         // Recalcula status baseado nos horários
         const config = userConfigs.find(c => c.operacao === updatedRoute.operacao);
         const { status, gap } = calculateStatusWithTolerance(updatedRoute.inicio, updatedRoute.saida, config?.tolerancia || "00:00:00", updatedRoute.data);
         updatedRoute.statusOp = status;
         updatedRoute.tempo = gap;
-        
+
         await SharePointService.updateDeparture(getAccessToken(), updatedRoute);
         setEditingHistoryId(null);
         setEditingHistoryField(null);
@@ -1401,13 +1443,154 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     }
   };
 
+  // Funções de filtro do histórico (igual à tabela principal)
+  const getHistoryColUniqueValues = (col: string) => {
+    if (col === 'operacao') {
+      return Array.from(new Set(archivedResults.map(r => r.operacao).filter(Boolean))).sort();
+    }
+    if (col === 'motorista') {
+      return Array.from(new Set(archivedResults.map(r => r.motorista).filter(Boolean))).sort();
+    }
+    if (col === 'rota') {
+      return Array.from(new Set(archivedResults.map(r => r.rota).filter(Boolean))).sort();
+    }
+    if (col === 'status') {
+      return Array.from(new Set(archivedResults.map(r => r.statusOp).filter(Boolean))).sort();
+    }
+    return [];
+  };
+
+  const toggleHistoryColFilter = (col: string, value: string) => {
+    setHistorySelectedFilters(prev => {
+      const current = prev[col] || [];
+      const updated = current.includes(value)
+        ? current.filter(v => v !== value)
+        : [...current, value];
+      return { ...prev, [col]: updated };
+    });
+  };
+
+  const clearHistoryColFilters = () => {
+    setHistorySelectedFilters({});
+    setHistoryColFilters({});
+  };
+
+  const hasHistoryActiveColFilters = Object.keys(historySelectedFilters).some(col => (historySelectedFilters[col] || []).length > 0);
+
+  // Fecha dropdown ao clicar fora
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (historyFilterDropdownRef.current && !historyFilterDropdownRef.current.contains(e.target as Node)) {
+        setHistoryActiveFilterCol(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Aplica filtros aos resultados do histórico
+  const filteredArchivedResults = useMemo(() => {
+    if (!hasHistoryActiveColFilters) return archivedResults;
+
+    return archivedResults.filter(r => {
+      // Filtro por operação
+      if (historySelectedFilters['operacao']?.length > 0) {
+        if (!historySelectedFilters['operacao'].includes(r.operacao)) {
+          return false;
+        }
+      }
+
+      // Filtro por motorista
+      if (historySelectedFilters['motorista']?.length > 0) {
+        if (!historySelectedFilters['motorista'].includes(r.motorista || '')) {
+          return false;
+        }
+      }
+
+      // Filtro por rota
+      if (historySelectedFilters['rota']?.length > 0) {
+        if (!historySelectedFilters['rota'].includes(r.rota)) {
+          return false;
+        }
+      }
+
+      // Filtro por status
+      if (historySelectedFilters['status']?.length > 0) {
+        if (!historySelectedFilters['status'].includes(r.statusOp || '')) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }, [archivedResults, historySelectedFilters]);
+
+  // Converte data YYYY-MM-DD para DD/MM/AAAA (parse manual para evitar fuso)
+  const formatDateToBR = (dateString: string) => {
+    if (!dateString) return '';
+    const match = dateString.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (match) {
+      const [, year, month, day] = match;
+      return `${day}/${month}/${year}`;
+    }
+    return dateString;
+  };
+
+  // Converte data DD/MM/AAAA para YYYY-MM-DD (para input type="date")
+  const formatDateToInput = (dateString: string) => {
+    if (!dateString) return '';
+    const match = dateString.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (match) {
+      const [, day, month, year] = match;
+      return `${year}-${month}-${day}`;
+    }
+    // Se já estiver no formato YYYY-MM-DD, retorna como está
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dateString)) {
+      return dateString;
+    }
+    return dateString;
+  };
+
   const handleExportToExcel = () => {
     if (archivedResults.length === 0) return;
+
+    // Formata datas para o padrão brasileiro
+    const formatDateBR = (dateString: string) => {
+        if (!dateString) return '';
+        // Se já estiver no formato DD/MM/AAAA, retorna como está
+        if (dateString.includes('/') && /^\d{2}\/\d{2}\/\d{4}$/.test(dateString)) {
+            return dateString;
+        }
+        // Se for ISO completo (com T e hora), usa new Date normal
+        if (dateString.includes('T')) {
+            try {
+                const date = new Date(dateString);
+                if (isNaN(date.getTime())) return dateString;
+                return date.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+            } catch {
+                return dateString;
+            }
+        }
+        // Se for apenas data (YYYY-MM-DD), parse manualmente para evitar problema de fuso
+        const match = dateString.match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (match) {
+            const [, year, month, day] = match;
+            return `${day}/${month}/${year}`;
+        }
+        // Fallback
+        try {
+            const date = new Date(dateString);
+            if (isNaN(date.getTime())) return dateString;
+            return date.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+        } catch {
+            return dateString;
+        }
+    };
 
     // Prepara os dados formatados
     const data = archivedResults.map(r => ({
       'Rota': r.rota,
-      'Data': r.data,
+      'Data': formatDateBR(r.data || ''),
       'Início': r.inicio || '',
       'Motorista': r.motorista || '',
       'Placa': r.placa || '',
@@ -1454,8 +1637,8 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     // Adiciona tabela ao workbook
     XLSX.utils.book_append_sheet(wb, ws, 'Histórico');
 
-    // Gera nome do arquivo
-    const fileName = `Historico_CCO_${histStart}_ate_${histEnd}.xlsx`;
+    // Gera nome do arquivo com datas no formato brasileiro
+    const fileName = `Historico_CCO_${formatDateBR(histStart).replace(/\//g, '-')}_ate_${formatDateBR(histEnd).replace(/\//g, '-')}.xlsx`;
 
     // Download
     XLSX.writeFile(wb, fileName, {
@@ -1815,9 +1998,36 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                     }
 
                     if (col.id === 'data') {
+                      // Converte a data para exibição brasileira
+                      const displayDate = formatDateToBR(route.data || '');
                       return (
                         <td key={cellKey} className="p-0 border border-slate-300 dark:border-slate-700" style={{ verticalAlign: 'middle', minHeight: '48px' }}>
-                          <input type="date" value={route.data} onChange={(e) => updateCell(route.id!, 'data', e.target.value)} className={`${inputClass} text-center`} />
+                          <input
+                            type="text"
+                            value={displayDate}
+                            onChange={(e) => {
+                              // Converte de DD/MM/AAAA para YYYY-MM-DD ao salvar
+                              let val = e.target.value;
+                              // Aplica máscara DD/MM/AAAA
+                              val = val.replace(/\D/g, '');
+                              if (val.length > 8) val = val.slice(0, 8);
+                              if (val.length >= 8) {
+                                val = `${val.slice(0, 2)}/${val.slice(2, 4)}/${val.slice(4, 8)}`;
+                              }
+                              updateCell(route.id!, 'data', val);
+                            }}
+                            onBlur={(e) => {
+                              // Garante que o formato seja DD/MM/AAAA e converte para YYYY-MM-DD no SharePoint
+                              let val = e.target.value;
+                              const match = val.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+                              if (match) {
+                                const [, day, month, year] = match;
+                                updateCell(route.id!, 'data', `${year}-${month}-${day}`);
+                              }
+                            }}
+                            placeholder="DD/MM/AAAA"
+                            className={`${inputClass} text-center font-mono`}
+                          />
                         </td>
                       );
                     }
@@ -2218,9 +2428,36 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                     }
 
                     if (col.id === 'data') {
+                      // Converte a data para exibição brasileira
+                      const displayDate = formatDateToBR(route.data || '');
                       return (
                         <td key={cellKey} className="p-0 border border-slate-300 dark:border-slate-700" style={{ verticalAlign: 'middle', minHeight: '48px' }}>
-                          <input type="date" value={route.data} onChange={(e) => updateCell(route.id!, 'data', e.target.value)} className={`${inputClass} text-center`} />
+                          <input
+                            type="text"
+                            value={displayDate}
+                            onChange={(e) => {
+                              // Converte de DD/MM/AAAA para YYYY-MM-DD ao salvar
+                              let val = e.target.value;
+                              // Aplica máscara DD/MM/AAAA
+                              val = val.replace(/\D/g, '');
+                              if (val.length > 8) val = val.slice(0, 8);
+                              if (val.length >= 8) {
+                                val = `${val.slice(0, 2)}/${val.slice(2, 4)}/${val.slice(4, 8)}`;
+                              }
+                              updateCell(route.id!, 'data', val);
+                            }}
+                            onBlur={(e) => {
+                              // Garante que o formato seja DD/MM/AAAA e converte para YYYY-MM-DD no SharePoint
+                              let val = e.target.value;
+                              const match = val.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+                              if (match) {
+                                const [, day, month, year] = match;
+                                updateCell(route.id!, 'data', `${year}-${month}-${day}`);
+                              }
+                            }}
+                            placeholder="DD/MM/AAAA"
+                            className={`${inputClass} text-center font-mono`}
+                          />
                         </td>
                       );
                     }
@@ -2472,21 +2709,201 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                               <table className="w-full border-collapse text-[10px]">
                                   <thead className="sticky top-0 bg-slate-200 dark:bg-slate-800 text-slate-600 font-black uppercase z-10">
                                       <tr>
-                                          <th className="p-2 border border-slate-300 dark:border-slate-700 text-left">Rota</th>
+                                          <th className="p-2 border border-slate-300 dark:border-slate-700 text-left relative group">
+                                              <div className="flex items-center justify-between">
+                                                  <span>Rota</span>
+                                                  <button
+                                                    onClick={() => setHistoryActiveFilterCol(historyActiveFilterCol === 'rota' ? null : 'rota')}
+                                                    className={`p-1 rounded transition-all opacity-0 group-hover:opacity-100 ${
+                                                      historyActiveFilterCol === 'rota' || historySelectedFilters['rota']?.length > 0
+                                                        ? 'opacity-100 bg-primary-600 text-white'
+                                                        : 'hover:bg-slate-300 dark:hover:bg-slate-600'
+                                                    }`}
+                                                  >
+                                                    <Filter size={10} />
+                                                  </button>
+                                              </div>
+                                              {historyActiveFilterCol === 'rota' && (
+                                                <div className="absolute top-full left-0 mt-1 w-56 bg-white dark:bg-slate-700 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-600 overflow-hidden z-[100] animate-in fade-in slide-in-from-top-2">
+                                                    <div className="p-2 border-b dark:border-slate-600 flex justify-between items-center">
+                                                        <span className="text-[9px] font-black uppercase text-slate-600 dark:text-slate-400 px-2">Rota</span>
+                                                        {historySelectedFilters['rota']?.length > 0 && (
+                                                            <button
+                                                                onClick={() => setHistorySelectedFilters(prev => ({ ...prev, rota: [] }))}
+                                                                className="text-[8px] font-bold text-primary-600 hover:text-primary-700 uppercase px-2"
+                                                            >
+                                                                Limpar
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                    <div className="max-h-48 overflow-y-auto p-2 space-y-1">
+                                                        {getHistoryColUniqueValues('rota').map(r => (
+                                                            <button
+                                                                key={r}
+                                                                onClick={() => toggleHistoryColFilter('rota', r)}
+                                                                className={`w-full text-left px-3 py-2 rounded-lg text-[10px] font-bold transition-all flex items-center justify-between ${
+                                                                    historySelectedFilters['rota']?.includes(r)
+                                                                        ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400'
+                                                                        : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-600'
+                                                                }`}
+                                                            >
+                                                                {r}
+                                                                {historySelectedFilters['rota']?.includes(r) && <CheckCircle2 size={12} />}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                              )}
+                                          </th>
                                           <th className="p-2 border border-slate-300 dark:border-slate-700 text-center">Data</th>
                                           <th className="p-2 border border-slate-300 dark:border-slate-700 text-center">Início</th>
-                                          <th className="p-2 border border-slate-300 dark:border-slate-700 text-left">Motorista</th>
+                                          <th className="p-2 border border-slate-300 dark:border-slate-700 text-left relative group">
+                                              <div className="flex items-center justify-between">
+                                                  <span>Motorista</span>
+                                                  <button
+                                                    onClick={() => setHistoryActiveFilterCol(historyActiveFilterCol === 'motorista' ? null : 'motorista')}
+                                                    className={`p-1 rounded transition-all opacity-0 group-hover:opacity-100 ${
+                                                      historyActiveFilterCol === 'motorista' || historySelectedFilters['motorista']?.length > 0
+                                                        ? 'opacity-100 bg-primary-600 text-white'
+                                                        : 'hover:bg-slate-300 dark:hover:bg-slate-600'
+                                                    }`}
+                                                  >
+                                                    <Filter size={10} />
+                                                  </button>
+                                              </div>
+                                              {historyActiveFilterCol === 'motorista' && (
+                                                <div className="absolute top-full left-0 mt-1 w-56 bg-white dark:bg-slate-700 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-600 overflow-hidden z-[100] animate-in fade-in slide-in-from-top-2">
+                                                    <div className="p-2 border-b dark:border-slate-600 flex justify-between items-center">
+                                                        <span className="text-[9px] font-black uppercase text-slate-600 dark:text-slate-400 px-2">Motorista</span>
+                                                        {historySelectedFilters['motorista']?.length > 0 && (
+                                                            <button
+                                                                onClick={() => setHistorySelectedFilters(prev => ({ ...prev, motorista: [] }))}
+                                                                className="text-[8px] font-bold text-primary-600 hover:text-primary-700 uppercase px-2"
+                                                            >
+                                                                Limpar
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                    <div className="max-h-48 overflow-y-auto p-2 space-y-1">
+                                                        {getHistoryColUniqueValues('motorista').map(m => (
+                                                            <button
+                                                                key={m}
+                                                                onClick={() => toggleHistoryColFilter('motorista', m)}
+                                                                className={`w-full text-left px-3 py-2 rounded-lg text-[10px] font-bold transition-all flex items-center justify-between ${
+                                                                    historySelectedFilters['motorista']?.includes(m)
+                                                                        ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400'
+                                                                        : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-600'
+                                                                }`}
+                                                            >
+                                                                {m}
+                                                                {historySelectedFilters['motorista']?.includes(m) && <CheckCircle2 size={12} />}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                              )}
+                                          </th>
                                           <th className="p-2 border border-slate-300 dark:border-slate-700 text-center">Placa</th>
                                           <th className="p-2 border border-slate-300 dark:border-slate-700 text-center">Saída</th>
                                           <th className="p-2 border border-slate-300 dark:border-slate-700 text-left">Motivo</th>
                                           <th className="p-2 border border-slate-300 dark:border-slate-700 text-left">Observação</th>
-                                          <th className="p-2 border border-slate-300 dark:border-slate-700 text-center">Operação</th>
-                                          <th className="p-2 border border-slate-300 dark:border-slate-700 text-center">Status</th>
+                                          <th className="p-2 border border-slate-300 dark:border-slate-700 text-center relative group">
+                                              <div className="flex items-center justify-center gap-1">
+                                                  <span>Operação</span>
+                                                  <button
+                                                    onClick={() => setHistoryActiveFilterCol(historyActiveFilterCol === 'operacao' ? null : 'operacao')}
+                                                    className={`p-1 rounded transition-all opacity-0 group-hover:opacity-100 ${
+                                                      historyActiveFilterCol === 'operacao' || historySelectedFilters['operacao']?.length > 0
+                                                        ? 'opacity-100 bg-primary-600 text-white'
+                                                        : 'hover:bg-slate-300 dark:hover:bg-slate-600'
+                                                    }`}
+                                                  >
+                                                    <Filter size={10} />
+                                                  </button>
+                                              </div>
+                                              {historyActiveFilterCol === 'operacao' && (
+                                                <div className="absolute top-full left-0 mt-1 w-40 bg-white dark:bg-slate-700 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-600 overflow-hidden z-[100] animate-in fade-in slide-in-from-top-2">
+                                                    <div className="p-2 border-b dark:border-slate-600 flex justify-between items-center">
+                                                        <span className="text-[9px] font-black uppercase text-slate-600 dark:text-slate-400 px-2">Operação</span>
+                                                        {historySelectedFilters['operacao']?.length > 0 && (
+                                                            <button
+                                                                onClick={() => setHistorySelectedFilters(prev => ({ ...prev, operacao: [] }))}
+                                                                className="text-[8px] font-bold text-primary-600 hover:text-primary-700 uppercase px-2"
+                                                            >
+                                                                Limpar
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                    <div className="max-h-48 overflow-y-auto p-2 space-y-1">
+                                                        {getHistoryColUniqueValues('operacao').map(op => (
+                                                            <button
+                                                                key={op}
+                                                                onClick={() => toggleHistoryColFilter('operacao', op)}
+                                                                className={`w-full text-left px-3 py-2 rounded-lg text-[10px] font-bold transition-all flex items-center justify-between ${
+                                                                    historySelectedFilters['operacao']?.includes(op)
+                                                                        ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400'
+                                                                        : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-600'
+                                                                }`}
+                                                            >
+                                                                {op}
+                                                                {historySelectedFilters['operacao']?.includes(op) && <CheckCircle2 size={12} />}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                              )}
+                                          </th>
+                                          <th className="p-2 border border-slate-300 dark:border-slate-700 text-center relative group">
+                                              <div className="flex items-center justify-center gap-1">
+                                                  <span>Status</span>
+                                                  <button
+                                                    onClick={() => setHistoryActiveFilterCol(historyActiveFilterCol === 'status' ? null : 'status')}
+                                                    className={`p-1 rounded transition-all opacity-0 group-hover:opacity-100 ${
+                                                      historyActiveFilterCol === 'status' || historySelectedFilters['status']?.length > 0
+                                                        ? 'opacity-100 bg-primary-600 text-white'
+                                                        : 'hover:bg-slate-300 dark:hover:bg-slate-600'
+                                                    }`}
+                                                  >
+                                                    <Filter size={10} />
+                                                  </button>
+                                              </div>
+                                              {historyActiveFilterCol === 'status' && (
+                                                <div className="absolute top-full left-0 mt-1 w-40 bg-white dark:bg-slate-700 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-600 overflow-hidden z-[100] animate-in fade-in slide-in-from-top-2">
+                                                    <div className="p-2 border-b dark:border-slate-600 flex justify-between items-center">
+                                                        <span className="text-[9px] font-black uppercase text-slate-600 dark:text-slate-400 px-2">Status</span>
+                                                        {historySelectedFilters['status']?.length > 0 && (
+                                                            <button
+                                                                onClick={() => setHistorySelectedFilters(prev => ({ ...prev, status: [] }))}
+                                                                className="text-[8px] font-bold text-primary-600 hover:text-primary-700 uppercase px-2"
+                                                            >
+                                                                Limpar
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                    <div className="max-h-48 overflow-y-auto p-2 space-y-1">
+                                                        {getHistoryColUniqueValues('status').map(s => (
+                                                            <button
+                                                                key={s}
+                                                                onClick={() => toggleHistoryColFilter('status', s)}
+                                                                className={`w-full text-left px-3 py-2 rounded-lg text-[10px] font-bold transition-all flex items-center justify-between ${
+                                                                    historySelectedFilters['status']?.includes(s)
+                                                                        ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400'
+                                                                        : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-600'
+                                                                }`}
+                                                            >
+                                                                {s}
+                                                                {historySelectedFilters['status']?.includes(s) && <CheckCircle2 size={12} />}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                              )}
+                                          </th>
                                           <th className="p-2 border border-slate-300 dark:border-slate-700 text-center">Tempo</th>
                                       </tr>
                                   </thead>
                                   <tbody>
-                                      {archivedResults.map((r, i) => (
+                                      {filteredArchivedResults.map((r, i) => (
                                           <tr key={i} className="hover:bg-slate-50 dark:hover:bg-slate-800 border-b border-slate-200 dark:border-slate-800 group">
                                               <td className="p-2 border border-slate-300 dark:border-slate-700">
                                                   {editingHistoryId === r.id && editingHistoryField === 'rota' ? (
