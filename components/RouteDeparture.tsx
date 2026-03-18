@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { RouteDeparture, User, RouteOperationMapping, RouteConfig } from '../types';
 import { SharePointService } from '../services/sharepointService';
+import { getValidToken } from '../services/tokenService';
 import * as XLSX from 'xlsx';
 import { getBrazilDate, getBrazilHours, getBrazilMinutes, toBrazilDate } from '../utils/dateUtils';
 import {
@@ -10,7 +11,8 @@ import {
   Filter, Search, CheckSquare, Square,
   ChevronRight, Maximize2, Minimize2,
   Archive, Database, Save, LinkIcon,
-  Layers, Trash2, Settings2, Check, Table, SortAsc
+  Layers, Trash2, Settings2, Check, Table, SortAsc,
+  Sun, Moon
 } from 'lucide-react';
 
 const MOTIVOS = [
@@ -77,6 +79,10 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   const [bulkStatus, setBulkStatus] = useState<{ active: boolean, current: number, total: number } | null>(null);
   const [pendingBulkRoutes, setPendingBulkRoutes] = useState<string[]>([]);
   const [isBulkMappingModalOpen, setIsBulkMappingModalOpen] = useState(false);
+  const [isDarkMode, setIsDarkMode] = useState(() => {
+    const saved = localStorage.getItem('route_departure_dark_mode');
+    return saved !== 'false'; // Default: true (dark mode)
+  });
 
   const [ghostRow, setGhostRow] = useState<Partial<RouteDeparture>>({
     id: 'ghost', rota: '', data: getBrazilDate(), inicio: '', saida: '', motorista: '', placa: '', statusGeral: '', aviso: 'NÃO', operacao: '', statusOp: 'Previsto', tempo: '', semana: ''
@@ -176,13 +182,14 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   const hiddenColsMenuRef = useRef<HTMLDivElement>(null);
   const tooltipTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  const getAccessToken = (): string => {
-    const token = currentUser?.accessToken || (window as any).__access_token;
-    if (!token) {
-      console.error('[RouteDeparture] Token não encontrado!');
-      throw new Error('Token de autenticação não encontrado. Por favor, faça login novamente.');
-    }
-    return token;
+  const getAccessToken = async (): Promise<string> => {
+    // Tenta sempre obter o token mais fresco via MSAL (renova silenciosamente se necessário)
+    const freshToken = await getValidToken();
+    if (freshToken) return freshToken;
+    // Fallback para o token em memória (pode estar próximo de expirar, mas evita quebrar a operação)
+    const fallback = currentUser?.accessToken || (window as any).__access_token;
+    if (fallback) return fallback;
+    throw new Error('Sessão expirada. Por favor, renove sua sessão.');
   };
 
   // Verifica se todas as rotas de uma operação estão com statusGeral = 'OK'
@@ -266,7 +273,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
   // Envia o status da operação para o webhook ao final do countdown
   const handleSendStatus = async (operacao: string) => {
-    const token = getAccessToken();
+    const token = await getAccessToken();
     const config = userConfigs.find(c => c.operacao === operacao);
 
     // Filtra rotas da operação
@@ -517,6 +524,16 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
       }
     };
   }, []);
+
+  // Persistir preferência de tema
+  useEffect(() => {
+    localStorage.setItem('route_departure_dark_mode', String(isDarkMode));
+    if (isDarkMode) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [isDarkMode]);
 
   // Fechar dropdown de filtro ao clicar fora
   useEffect(() => {
@@ -1039,11 +1056,11 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   const loadData = async (isBackgroundRefresh: boolean = false) => {
     let token: string;
     try {
-      token = getAccessToken();
+      token = await getAccessToken();
     } catch (e: any) {
       console.error('[RouteDeparture] Erro ao obter token:', e.message);
-      alert('Sessão expirada. Você será redirecionado para o login.');
-      window.location.href = '/';
+      // Dispara o evento para o App.tsx exibir o modal de renovação de sessão
+      window.dispatchEvent(new CustomEvent('token-expired'));
       return;
     }
 
@@ -1147,7 +1164,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
   const handleDeleteRoute = async (id: string) => {
     if (!confirm('Deseja excluir permanentemente esta rota do SharePoint?')) return;
-    const token = getAccessToken();
+    const token = await getAccessToken();
     setIsSyncing(true);
     try {
       await SharePointService.deleteDeparture(token, id);
@@ -1160,7 +1177,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   const handleDeleteSelected = async () => {
     if (selectedIds.size === 0) return;
     if (!confirm(`Deseja excluir as ${selectedIds.size} rotas selecionadas do SharePoint?`)) return;
-    const token = getAccessToken();
+    const token = await getAccessToken();
     setIsSyncing(true);
     let success = 0;
     const idsToProcess = Array.from(selectedIds) as string[];
@@ -1181,7 +1198,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
     if (!confirm(`Arquivar ${filteredRoutes.length} itens no histórico e limpar status de envio?`)) return;
 
-    const token = getAccessToken();
+    const token = await getAccessToken();
     setIsSyncing(true);
 
     try {
@@ -1243,7 +1260,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   };
 
   const handleBulkCreateSave = async (operacao: string) => {
-    const token = getAccessToken();
+    const token = await getAccessToken();
     const total = pendingBulkRoutes.length;
     setIsBulkMappingModalOpen(false);
     setBulkStatus({ active: true, current: 0, total });
@@ -1265,7 +1282,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   const handleMultilinePaste = async (field: keyof RouteDeparture, startRowIndex: number, value: string) => {
     const lines = value.split(/[\n\r]/).map(l => l.trim()).filter(Boolean);
     if (lines.length <= 1) return;
-    const token = getAccessToken();
+    const token = await getAccessToken();
     setIsSyncing(true);
     
     // Usa routes diretamente em vez de filteredRoutes para evitar problemas de sincronização
@@ -1362,7 +1379,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                 const config = userConfigs.find(c => c.operacao === updatedGhost.operacao);
                 const { status, gap } = calculateStatusWithTolerance(updatedGhost.inicio || '', updatedGhost.saida || '', config?.tolerancia || "00:00:00", updatedGhost.data || "");
                 const payload = { ...updatedGhost, statusOp: status, tempo: gap, createdAt: new Date().toISOString() } as RouteDeparture;
-                const newId = await SharePointService.updateDeparture(getAccessToken(), payload);
+                const newId = await SharePointService.updateDeparture(await getAccessToken(), payload);
                 setRoutes(prev => [...prev, { ...payload, id: newId }]);
 
                 // Limpa filtros após criar nova rota para garantir que ela seja visível
@@ -1409,7 +1426,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     setIsSyncing(true);
 
     try {
-        await SharePointService.updateDeparture(getAccessToken(), updatedRoute);
+        await SharePointService.updateDeparture(await getAccessToken(), updatedRoute);
     } catch (e) {
         console.error('[UPDATE] Error:', e);
     } finally {
@@ -1432,7 +1449,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         updatedRoute.statusOp = status;
         updatedRoute.tempo = gap;
 
-        await SharePointService.updateDeparture(getAccessToken(), updatedRoute);
+        await SharePointService.updateDeparture(await getAccessToken(), updatedRoute);
         setEditingHistoryId(null);
         setEditingHistoryField(null);
     } catch (e) {
@@ -1456,6 +1473,12 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     }
     if (col === 'status') {
       return Array.from(new Set(archivedResults.map(r => r.statusOp).filter(Boolean))).sort();
+    }
+    if (col === 'placa') {
+      return Array.from(new Set(archivedResults.map(r => r.placa).filter(Boolean))).sort();
+    }
+    if (col === 'motivo') {
+      return Array.from(new Set(archivedResults.map(r => r.motivo).filter(Boolean))).sort();
     }
     return [];
   };
@@ -1517,6 +1540,20 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
       // Filtro por status
       if (historySelectedFilters['status']?.length > 0) {
         if (!historySelectedFilters['status'].includes(r.statusOp || '')) {
+          return false;
+        }
+      }
+
+      // Filtro por placa
+      if (historySelectedFilters['placa']?.length > 0) {
+        if (!historySelectedFilters['placa'].includes(r.placa || '')) {
+          return false;
+        }
+      }
+
+      // Filtro por motivo
+      if (historySelectedFilters['motivo']?.length > 0) {
+        if (!historySelectedFilters['motivo'].includes(r.motivo || '')) {
           return false;
         }
       }
@@ -1686,24 +1723,36 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   };
 
   const getRowStyle = (route: RouteDeparture | Partial<RouteDeparture>) => {
-    if (route.id === 'ghost') return "bg-slate-50 dark:bg-slate-900 italic text-slate-400";
+    if (route.id === 'ghost') return isDarkMode ? "bg-slate-800 italic text-slate-400" : "bg-slate-50 italic text-slate-500 border-l-4 border-dashed border-slate-300";
     const status = route.statusOp;
-    
+    const geralOK = route.statusGeral === 'OK';
+
     // Se a saída for "-", aplica estilo de atrasado crítico (não saiu)
     if (route.saida === '-') {
-      return "bg-red-600 dark:bg-red-700/40 text-white font-bold border-l-[12px] border-red-800 shadow-lg";
+      return isDarkMode ? "bg-red-700/40 text-white font-bold border-l-[12px] border-red-800 shadow-lg" : "bg-red-200 text-red-900 font-bold border-l-[12px] border-red-600 shadow-sm";
     }
-    
-    if (status === 'Previsto') return "bg-slate-50 dark:bg-slate-900 border-l-4 border-slate-300 text-slate-400 dark:text-slate-500";
-    if (status === 'Programada') return "bg-slate-100 dark:bg-slate-800 border-l-4 border-slate-400 text-slate-500 dark:text-slate-400";
-    if (status === 'OK') return "bg-emerald-50 dark:bg-emerald-900/10 border-l-4 border-emerald-600";
+
+    // Atrasada sem saída (amarelo) — prioridade sobre GERAL
     if (status === 'Atrasada' && (!route.saida || route.saida === '00:00:00' || route.saida === '')) {
-      return "bg-yellow-300 dark:bg-yellow-500/30 text-slate-900 dark:text-yellow-100 font-bold border-l-[12px] border-yellow-600 shadow-lg";
+      return isDarkMode ? "bg-yellow-500/30 text-yellow-100 font-bold border-l-[12px] border-yellow-500 shadow-lg" : "bg-amber-300 text-amber-950 font-bold border-l-[12px] border-amber-600 shadow-sm";
     }
+
+    // Atrasada/Adiantada com saída (laranja) — prioridade sobre GERAL
     if (status === 'Atrasada' || status === 'Adiantada') {
-      return "bg-orange-500 dark:bg-orange-600/30 text-white font-bold border-l-[12px] border-orange-700 shadow-lg";
+      return isDarkMode ? "bg-orange-500/30 text-orange-100 font-bold border-l-[12px] border-orange-500 shadow-lg" : "bg-orange-300 text-orange-950 font-bold border-l-[12px] border-orange-600 shadow-sm";
     }
-    return "bg-white dark:bg-slate-900 border-l-4 border-transparent";
+
+    // GERAL = OK + statusOp = OK → verde mais vivo (saiu dentro da tolerância)
+    if (geralOK && status === 'OK') {
+      return isDarkMode
+        ? "bg-emerald-800/40 border-l-4 border-emerald-400 text-emerald-100"
+        : "bg-emerald-200 border-l-4 border-emerald-500 text-slate-800";
+    }
+
+    if (status === 'Previsto') return isDarkMode ? "bg-slate-800 border-l-4 border-slate-600 text-slate-400" : "bg-white border-l-4 border-slate-300 text-slate-700";
+    if (status === 'Programada') return isDarkMode ? "bg-slate-700 border-l-4 border-slate-500 text-slate-400" : "bg-slate-50 border-l-4 border-slate-400 text-slate-700";
+    if (status === 'OK') return isDarkMode ? "bg-emerald-900/20 border-l-4 border-emerald-600" : "bg-emerald-50 border-l-4 border-emerald-500 text-slate-800";
+    return isDarkMode ? "bg-slate-800 border-l-4 border-transparent" : "bg-white border-l-4 border-transparent text-slate-800";
   };
 
   const filteredRoutes = useMemo(() => {
@@ -1799,7 +1848,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     setIsSearchingArchive(true);
     try {
         console.log('[SEARCH_ARCHIVE] Requesting history from SharePoint list {856bf9d5-6081-4360-bcad-e771cbabfda8}...');
-        const results = await SharePointService.getArchivedDepartures(getAccessToken(), null, histStart, histEnd);
+        const results = await SharePointService.getArchivedDepartures(await getAccessToken(), null, histStart, histEnd);
         console.log('[SEARCH_ARCHIVE] Results received:', results.length);
         
         const myOps = new Set(userConfigs.map(c => c.operacao));
@@ -1827,17 +1876,17 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   if (isLoading) return <div className="h-full flex flex-col items-center justify-center text-primary-500 gap-4"><Loader2 size={48} className="animate-spin" /><p className="font-bold text-[10px] uppercase tracking-widest">Carregando Grid...</p></div>;
 
   return (
-    <div className="flex flex-col h-full bg-[#020617] p-4 overflow-hidden select-none font-sans animate-fade-in relative">
+    <div className={`flex flex-col h-full p-4 overflow-hidden select-none font-sans animate-fade-in relative ${isDarkMode ? 'bg-[#020617]' : 'bg-gradient-to-br from-white via-slate-50/50 to-slate-50'}`}>
       {/* Header Section */}
       <div className="flex justify-between items-center mb-6 shrink-0 px-2">
         <div className="flex items-center gap-4">
-          <div className="p-3 bg-primary-600 text-white rounded-2xl shadow-lg"><Clock size={20} /></div>
+          <div className={`p-3 rounded-2xl shadow-lg ${isDarkMode ? 'bg-primary-600 text-white' : 'bg-primary-500 text-white'}`}><Clock size={20} /></div>
           <div>
-            <h2 className="text-xl font-black text-white uppercase tracking-tight flex items-center gap-3">
-              Controle de Saídas {isSyncing && <Loader2 size={16} className="animate-spin text-primary-500"/>}
+            <h2 className={`text-xl font-black uppercase tracking-tight flex items-center gap-3 ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>
+              Controle de Saídas {isSyncing && <Loader2 size={16} className={`animate-spin ${isDarkMode ? 'text-primary-500' : 'text-primary-600'}`}/>}
             </h2>
             <div className="flex items-center gap-2 mt-1">
-              <p className="text-[9px] text-slate-400 font-bold uppercase tracking-widest flex items-center gap-2">
+              <p className={`text-[9px] font-bold uppercase tracking-widest flex items-center gap-2 ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>
                 <ShieldCheck size={12} className="text-emerald-500"/> Operador: {currentUser.name}
               </p>
               {hiddenRoutesCount > 0 && (
@@ -1849,28 +1898,31 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
           </div>
           {/* Indicadores GERAL e INTERNO */}
           <div className="flex items-center gap-3 ml-8">
-            <div className="flex items-center gap-3 px-6 py-3 bg-emerald-900/30 border border-emerald-700/50 rounded-2xl min-w-[140px]">
+            <div className={`flex items-center gap-3 px-6 py-3 rounded-2xl min-w-[140px] ${isDarkMode ? 'bg-emerald-900/30 border border-emerald-700/50' : 'bg-emerald-100 border border-emerald-300'}`}>
               <div className="text-center flex-1">
-                <p className="text-[9px] font-black text-emerald-400 uppercase tracking-wider mb-1">Geral</p>
-                <p className="text-2xl font-black text-emerald-400 leading-none">{performanceIndicators.geral}%</p>
+                <p className={`text-[9px] font-black uppercase tracking-wider mb-1 ${isDarkMode ? 'text-emerald-400' : 'text-emerald-700'}`}>Geral</p>
+                <p className={`text-2xl font-black leading-none ${isDarkMode ? 'text-emerald-400' : 'text-emerald-700'}`}>{performanceIndicators.geral}%</p>
               </div>
               <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse shrink-0"></div>
             </div>
-            <div className="flex items-center gap-3 px-6 py-3 bg-blue-900/30 border border-blue-700/50 rounded-2xl min-w-[140px]">
+            <div className={`flex items-center gap-3 px-6 py-3 rounded-2xl min-w-[140px] ${isDarkMode ? 'bg-blue-900/30 border border-blue-700/50' : 'bg-blue-100 border border-blue-300'}`}>
               <div className="text-center flex-1">
-                <p className="text-[9px] font-black text-blue-400 uppercase tracking-wider mb-1">Interno</p>
-                <p className="text-2xl font-black text-blue-400 leading-none">{performanceIndicators.interno}%</p>
+                <p className={`text-[9px] font-black uppercase tracking-wider mb-1 ${isDarkMode ? 'text-blue-400' : 'text-blue-700'}`}>Interno</p>
+                <p className={`text-2xl font-black leading-none ${isDarkMode ? 'text-blue-400' : 'text-blue-700'}`}>{performanceIndicators.interno}%</p>
               </div>
               <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse shrink-0"></div>
             </div>
           </div>
         </div>
         <div className="flex gap-2 items-center">
-          <button onClick={() => setIsSortByTimeEnabled(!isSortByTimeEnabled)} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] transition-all ${isSortByTimeEnabled ? 'bg-primary-600 text-white border-primary-600' : 'bg-slate-800 text-slate-300 border-slate-700'}`}><SortAsc size={16} /> Horário</button>
+          <button onClick={() => setIsDarkMode(!isDarkMode)} className={`p-2 rounded-lg font-bold border transition-all shadow-sm ${isDarkMode ? 'bg-slate-800 text-yellow-400 border-slate-700 hover:bg-slate-700' : 'bg-white text-slate-700 border-slate-400 hover:bg-slate-50 hover:border-slate-500'}`} title={isDarkMode ? 'Modo Claro' : 'Modo Escuro'}>
+            {isDarkMode ? <Sun size={18} /> : <Moon size={18} />}
+          </button>
+          <button onClick={() => setIsSortByTimeEnabled(!isSortByTimeEnabled)} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] transition-all shadow-sm ${isSortByTimeEnabled ? 'bg-primary-600 text-white border-primary-600' : isDarkMode ? 'bg-slate-800 text-slate-300 border-slate-700' : 'bg-white text-slate-800 border-slate-400 hover:bg-slate-50 hover:border-slate-500'}`}><SortAsc size={16} /> Horário</button>
           <div className="relative">
             <button
               onClick={() => setIsHiddenColsMenuOpen(!isHiddenColsMenuOpen)}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] transition-all relative ${hiddenColumns.size > 0 ? 'bg-amber-600 text-white border-amber-600' : 'bg-slate-800 text-slate-300 border-slate-700'}`}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] transition-all relative shadow-sm ${hiddenColumns.size > 0 ? 'bg-amber-600 text-white border-amber-600' : isDarkMode ? 'bg-slate-800 text-slate-300 border-slate-700' : 'bg-white text-slate-800 border-slate-400 hover:bg-slate-50 hover:border-slate-500'}`}
             >
               <Settings2 size={16} /> Colunas
               {hiddenColumns.size > 0 && (
@@ -1914,9 +1966,9 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
               </div>
             )}
           </div>
-          <button onClick={() => setIsHistoryModalOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-slate-800 text-slate-300 rounded-lg hover:bg-slate-700 font-bold border border-slate-700 uppercase text-[10px] tracking-wide transition-all shadow-sm"><Database size={16} /> Histórico</button>
-          <button onClick={loadData} className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-all border border-slate-700 bg-slate-900"><RefreshCw size={18} /></button>
-          <button onClick={handleArchiveAll} disabled={isSyncing || filteredRoutes.length === 0} className="flex items-center gap-2 px-4 py-2 bg-slate-800 text-slate-300 rounded-lg hover:bg-slate-700 font-bold border border-slate-700 uppercase text-[10px] tracking-wide transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"><Archive size={16} /> Arquivar</button>
+          <button onClick={() => setIsHistoryModalOpen(true)} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] tracking-wide transition-all shadow-sm ${isDarkMode ? 'bg-slate-800 text-slate-300 hover:bg-slate-700 border-slate-700' : 'bg-white text-slate-800 hover:bg-slate-50 hover:border-slate-500 border-slate-400'}`}><Database size={16} /> Histórico</button>
+          <button onClick={loadData} className={`p-2 rounded-lg transition-all border shadow-sm ${isDarkMode ? 'text-slate-400 hover:text-white hover:bg-slate-800 border-slate-700 bg-slate-900' : 'text-slate-700 hover:text-slate-900 hover:bg-slate-50 hover:border-slate-500 border-slate-400 bg-white'}`}><RefreshCw size={18} /></button>
+          <button onClick={handleArchiveAll} disabled={isSyncing || filteredRoutes.length === 0} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] tracking-wide transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed ${isDarkMode ? 'bg-slate-800 text-slate-300 hover:bg-slate-700 border-slate-700' : 'bg-white text-slate-800 hover:bg-slate-50 hover:border-slate-500 border-slate-400'}`}><Archive size={16} /> Arquivar</button>
         </div>
       </div>
 
@@ -1931,24 +1983,24 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
       )}
 
       {/* Table Section - flex-1 para ocupar espaço restante */}
-      <div className="flex-1 overflow-y-auto overflow-x-auto bg-white dark:bg-slate-900 rounded-2xl border border-slate-700/50 shadow-2xl relative scrollbar-thin" id="table-container">
+      <div className={`flex-1 overflow-y-auto overflow-x-auto rounded-2xl border shadow-2xl relative scrollbar-thin ${isDarkMode ? 'bg-slate-900 border-slate-700/50' : 'bg-white border-slate-400 shadow-xl'}`} id="table-container">
         <div className="min-w-max" style={{ overflow: 'visible' }}>
         <table className="border-collapse" style={{ width: `${tableColumns.filter(col => !hiddenColumns.has(col.id)).reduce((acc, col) => acc + colWidths[col.id], 0) + 60}px`, tableLayout: 'fixed' }}>
-          <thead className="sticky top-0 z-[100] bg-[#1e293b] text-white shadow-md" style={{ position: 'sticky', top: 0, left: 0 }}>
-            <tr className="bg-[#1e293b]">
+          <thead className={`sticky top-0 z-[100] shadow-md ${isDarkMode ? 'bg-[#1e293b] text-white' : 'bg-gradient-to-r from-slate-800 to-slate-900 text-white shadow-slate-900/30'}`} style={{ position: 'sticky', top: 0, left: 0 }}>
+            <tr className={`${isDarkMode ? 'bg-[#1e293b]' : 'bg-slate-800'}`}>
               {/* Célula extra na esquerda para cobrir vão */}
-              <th className="sticky left-0 z-[102] bg-[#1e293b] w-[8px] p-0 m-0 border-none" style={{ position: 'sticky', left: 0, minWidth: '8px', maxWidth: '8px' }}></th>
+              <th className={`sticky left-0 z-[102] ${isDarkMode ? 'bg-[#1e293b]' : 'bg-slate-800'} w-[8px] p-0 m-0 border-none`} style={{ position: 'sticky', left: 0, minWidth: '8px', maxWidth: '8px' }}></th>
               {tableColumns.filter(col => !hiddenColumns.has(col.id)).map(col => (
-                <th key={col.id} data-col={col.id} style={{ width: colWidths[col.id] }} className="relative p-0 border border-slate-700/50 text-[10px] font-black uppercase tracking-wider text-left group">
+                <th key={col.id} data-col={col.id} style={{ width: colWidths[col.id] }} className={`relative p-0 border ${isDarkMode ? 'border-slate-700/50' : 'border-slate-600/60'} text-[10px] font-black uppercase tracking-wider text-left group`}>
                   <div className="flex items-center justify-between px-3 h-[48px]">
                     <span onContextMenu={(e) => handleContextMenu(e, col.id)}>{col.label}</span>
-                    <button onClick={(e) => { e.stopPropagation(); setActiveFilterCol(activeFilterCol === col.id ? null : col.id); }} className={`p-1 rounded ${!!colFilters[col.id] || (selectedFilters[col.id]?.length ?? 0) > 0 ? 'text-yellow-400' : 'text-white/40'}`}><Filter size={11} /></button>
+                    <button onClick={(e) => { e.stopPropagation(); setActiveFilterCol(activeFilterCol === col.id ? null : col.id); }} className={`p-1 rounded ${!!colFilters[col.id] || (selectedFilters[col.id]?.length ?? 0) > 0 ? 'text-yellow-400' : isDarkMode ? 'text-white/40' : 'text-white/60'}`}><Filter size={11} /></button>
                   </div>
                   {activeFilterCol === col.id && <FilterDropdown col={col.id} routes={routes} colFilters={colFilters} setColFilters={setColFilters} selectedFilters={selectedFilters} setSelectedFilters={setSelectedFilters} onClose={() => setActiveFilterCol(null)} dropdownRef={filterDropdownRef} />}
                   <div onMouseDown={(e) => { e.preventDefault(); resizingRef.current = { col: col.id, startX: e.clientX, startWidth: colWidths[col.id] }; }} className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize z-10" />
                 </th>
               ))}
-              <th style={{ width: 60 }} className="relative p-0 border border-slate-700/50 text-[10px] font-black uppercase text-center bg-slate-900/50">
+              <th style={{ width: 60 }} className={`relative p-0 border ${isDarkMode ? 'border-slate-700/50' : 'border-slate-600/60'} text-[10px] font-black uppercase text-center ${isDarkMode ? 'bg-slate-900/50' : 'bg-slate-700/60'}`}>
                   {selectedIds.size > 0 ? (
                       <button onClick={handleDeleteSelected} className="p-1 text-red-500 hover:text-red-400 transition-colors" title="Deletar Selecionados"><Trash2 size={16} /></button>
                   ) : <Settings2 size={14} className="mx-auto opacity-40" />}
@@ -1963,18 +2015,18 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
               const isDelayed = route.statusOp === 'Atrasada' || route.statusOp === 'Adiantada';
               const isDelayedFilled = isDelayed && (route.saida !== '' && route.saida !== '00:00:00');
               const isGhost = route.id === 'ghost';
-              const inputClass = `w-full bg-transparent outline-none border-none px-3 py-2 text-[11px] font-semibold uppercase transition-all ${isDelayedFilled ? 'text-white placeholder-white/50' : 'text-slate-800 dark:text-slate-200 placeholder-slate-400'}`;
+              const inputClass = `w-full bg-transparent outline-none border-none px-3 py-2 text-[11px] font-semibold uppercase transition-all ${isDelayedFilled ? (isDarkMode ? 'text-white placeholder-white/50' : 'text-slate-900 placeholder-slate-700') : isDarkMode ? 'text-slate-200 placeholder-slate-500' : 'text-slate-900 placeholder-slate-400'}`;
 
               return (
                 <tr key={route.id} className={`${isSelected ? 'bg-primary-600/20' : rowStyle} group transition-all`} style={{ height: 'auto', minHeight: '48px', verticalAlign: 'top' }}>
                   {/* Célula extra na esquerda para alinhar com o header */}
-                  <td className="sticky left-0 z-[99] bg-white dark:bg-slate-900 w-[8px] p-0 m-0 border-none" style={{ position: 'sticky', left: 0, minWidth: '8px', maxWidth: '8px' }}></td>
+                  <td className={`sticky left-0 z-[99] ${isDarkMode ? 'bg-slate-800' : 'bg-white'} w-[8px] p-0 m-0 border-none`} style={{ position: 'sticky', left: 0, minWidth: '8px', maxWidth: '8px' }}></td>
                   {tableColumns.filter(col => !hiddenColumns.has(col.id)).map(col => {
                     const cellKey = `${route.id}-${col.id}`;
 
                     if (col.id === 'rota') {
                       return (
-                        <td key={cellKey} className="p-0 border border-slate-300 dark:border-slate-700" style={{ verticalAlign: 'middle' }}>
+                        <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle' }}>
                             {isGhost ? (
                                 <textarea
                                   rows={1}
@@ -2001,7 +2053,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                       // Converte a data para exibição brasileira
                       const displayDate = formatDateToBR(route.data || '');
                       return (
-                        <td key={cellKey} className="p-0 border border-slate-300 dark:border-slate-700" style={{ verticalAlign: 'middle', minHeight: '48px' }}>
+                        <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
                           <input
                             type="text"
                             value={displayDate}
@@ -2034,7 +2086,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
                     if (col.id === 'inicio') {
                       return (
-                        <td key={cellKey} className="p-0 border border-slate-300 dark:border-slate-700" style={{ verticalAlign: 'middle', minHeight: '48px' }}>
+                        <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
                           <input
                               type="text"
                               key={route.id + '-inicio'}
@@ -2063,7 +2115,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
                     if (col.id === 'motorista') {
                       return (
-                        <td key={cellKey} className="p-0 border border-slate-300 dark:border-slate-700" style={{ verticalAlign: 'middle', minHeight: '48px' }}>
+                        <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
                           <input
                               type="text"
                               value={route.motorista}
@@ -2083,7 +2135,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
                     if (col.id === 'placa') {
                       return (
-                        <td key={cellKey} className="p-0 border border-slate-300 dark:border-slate-700" style={{ verticalAlign: 'middle', minHeight: '48px' }}>
+                        <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
                           <input
                               type="text"
                               value={route.placa}
@@ -2103,7 +2155,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
                     if (col.id === 'saida') {
                       return (
-                        <td key={cellKey} className="p-0 border border-slate-300 dark:border-slate-700" style={{ verticalAlign: 'middle', minHeight: '48px' }}>
+                        <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
                           <input
                               type="text"
                               key={route.id + '-saida'}
@@ -2144,7 +2196,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                       const isMaintenance = route.motivo === 'Manutenção';
 
                       return (
-                        <td key={cellKey} className="p-0 border border-slate-300 dark:border-slate-700" style={{ verticalAlign: 'middle', minHeight: '48px' }}>
+                        <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
                           {(isDelayed || route.statusOp === 'Programada' || route.statusOp === 'Previsto') && !isGhost && (
                             <select
                               value={route.motivo}
@@ -2176,7 +2228,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                       const tooltipContent = checklistData ? formatChecklistTooltip(checklistData) : '';
 
                       return (
-                        <td key={cellKey} className="p-0 border border-slate-300 dark:border-slate-700 relative align-top" style={{ minHeight: '48px', height: 'auto', overflow: 'visible' }}>
+                        <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} relative align-top`} style={{ minHeight: '48px', height: 'auto', overflow: 'visible' }}>
                           {canEdit && !isGhost && (
                             <div className="flex items-start w-full relative p-0" style={{ minHeight: '44px', height: 'auto', overflow: 'visible' }}>
                               <textarea
@@ -2276,7 +2328,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                               )}
 
                               {activeObsId === route.id && hasTemplates && (
-                                <div ref={obsDropdownRef} className="absolute top-full left-0 w-full z-[110] bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl shadow-2xl overflow-hidden animate-in fade-in slide-in-from-top-1">
+                                <div ref={obsDropdownRef} className="absolute top-full left-0 w-full z-[110] bg-white dark:bg-slate-800 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} rounded-xl shadow-2xl overflow-hidden animate-in fade-in slide-in-from-top-1">
                                   <div className="max-h-48 overflow-y-auto scrollbar-thin">{(route.motivo ? (OBSERVATION_TEMPLATES[route.motivo] || []) : []).map((template, tIdx) => {
                                     const hasTimes = template.match(/(\d{2}:\d{2}(?::\d{2})?)h/g);
                                     return (
@@ -2314,7 +2366,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                       const hasCopiedValue = copiedGeralStatus && copiedGeralStatus !== '';
                       const isHovered = hoveredGeralCell === route.id;
                       return (
-                        <td key={cellKey} data-col-cell="geral" className="p-0 border border-slate-300 dark:border-slate-700 relative" style={{ verticalAlign: 'middle', minHeight: '48px' }}>
+                        <td key={cellKey} data-col-cell="geral" className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} relative`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
                           <button
                             onClick={() => {
                               const newValue = route.statusGeral === 'OK' ? '' : 'OK';
@@ -2324,8 +2376,8 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                             onMouseLeave={() => setHoveredGeralCell(null)}
                             className="absolute inset-0 w-full h-full flex items-center justify-center font-bold text-[10px] transition-all border-none outline-none"
                             style={{
-                              backgroundColor: route.statusGeral === 'OK' ? '#059669' : isHovered ? (document.documentElement.classList.contains('dark') ? '#1e293b' : '#f1f5f9') : 'transparent',
-                              color: route.statusGeral === 'OK' ? '#ffffff' : document.documentElement.classList.contains('dark') ? '#94a3b8' : '#475569'
+                              backgroundColor: route.statusGeral === 'OK' ? '#059669' : isHovered ? (isDarkMode ? '#334155' : '#f1f5f9') : 'transparent',
+                              color: route.statusGeral === 'OK' ? '#ffffff' : isDarkMode ? '#94a3b8' : '#475569'
                             }}
                             title={hasCopiedValue ? `Valor copiado: "${copiedGeralStatus}" - Selecione rotas e pressione Ctrl+V para colar` : 'Clique para alternar OK/vazio'}
                           >
@@ -2341,7 +2393,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
                     if (col.id === 'operacao') {
                       return (
-                        <td key={cellKey} className="p-0 border border-slate-300 dark:border-slate-700" style={{ verticalAlign: 'middle', minHeight: '48px' }}>
+                        <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
                           <select value={route.operacao} onChange={(e) => updateCell(route.id!, 'operacao', e.target.value)} className="w-full h-full bg-transparent border-none text-[9px] font-black text-center uppercase">
                             <option value="">OP...</option>
                             {userConfigs.map(c => <option key={c.operacao} value={c.operacao}>{c.operacao}</option>)}
@@ -2352,9 +2404,9 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
                     if (col.id === 'status') {
                       return (
-                        <td key={cellKey} className="p-0 border border-slate-300 dark:border-slate-700" style={{ verticalAlign: 'middle', minHeight: '48px' }}>
+                        <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
                           <div className="w-full flex items-center justify-center">
-                            <span className={`px-2 py-0.5 rounded-full text-[8px] font-black border whitespace-nowrap ${route.statusOp === 'OK' ? 'bg-emerald-100 border-emerald-400 text-emerald-800' : route.statusOp === 'Atrasada' ? 'bg-yellow-100 border-yellow-400 text-yellow-800' : route.statusOp === 'Programada' ? 'bg-slate-200 border-slate-400 text-slate-600' : route.statusOp === 'Previsto' ? 'bg-slate-100 border-slate-300 text-slate-500' : 'bg-red-100 border-red-400 text-red-800'}`}>
+                            <span className={`px-2 py-0.5 rounded-full text-[8px] font-black border whitespace-nowrap ${route.statusOp === 'OK' ? 'bg-emerald-100 border-emerald-400 text-emerald-800' : route.statusOp === 'Atrasada' ? 'bg-yellow-100 border-yellow-400 text-yellow-800' : route.statusOp === 'Programada' ? 'bg-slate-200 border-slate-400 text-slate-600' : route.statusOp === 'Previsto' ? 'bg-slate-100 border-slate-400 text-slate-500' : 'bg-red-100 border-red-400 text-red-800'}`}>
                               {route.statusOp}
                             </span>
                           </div>
@@ -2364,7 +2416,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
                     if (col.id === 'tempo') {
                       return (
-                        <td key={cellKey} className="p-0 border border-slate-300 dark:border-slate-700" style={{ verticalAlign: 'middle', minHeight: '48px' }}>
+                        <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
                           <div className="w-full flex items-center justify-center text-[10px] font-bold">
                             {route.tempo}
                           </div>
@@ -2374,10 +2426,10 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
                     return null;
                   })}
-                  <td className="p-0 border border-slate-300 dark:border-slate-700 flex items-center justify-center gap-1" style={{ verticalAlign: 'middle', minHeight: '48px' }}>
+                  <td className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} flex items-center justify-center gap-1`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
                     {!isGhost && (
                       <>
-                        <button onClick={() => toggleSelection(route.id!)} className={`p-1.5 rounded-lg transition-colors ${isSelected ? 'text-primary-500 bg-primary-500/10' : 'text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}>
+                        <button onClick={() => toggleSelection(route.id!)} className={`p-1.5 rounded-lg transition-colors ${isSelected ? 'text-primary-500 bg-primary-500/10' : isDarkMode ? 'text-slate-400 hover:bg-slate-700' : 'text-slate-500 hover:bg-slate-200'}`}>
                           {isSelected ? <CheckSquare size={16}/> : <Square size={16}/>}
                         </button>
                         <button onClick={() => handleDeleteRoute(route.id!)} className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-colors">
@@ -2397,18 +2449,18 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
               const isSelected = selectedIds.has(route.id!);
               const isDelayed = route.statusOp === 'Atrasada' || route.statusOp === 'Adiantada';
               const isDelayedFilled = isDelayed && (route.saida !== '' && route.saida !== '00:00:00');
-              const inputClass = `w-full bg-transparent outline-none border-none px-3 py-2 text-[11px] font-semibold uppercase transition-all ${isDelayedFilled ? 'text-white placeholder-white/50' : 'text-slate-800 dark:text-slate-200 placeholder-slate-400'}`;
+              const inputClass = `w-full bg-transparent outline-none border-none px-3 py-2 text-[11px] font-semibold uppercase transition-all ${isDelayedFilled ? (isDarkMode ? 'text-white placeholder-white/50' : 'text-slate-900 placeholder-slate-700') : isDarkMode ? 'text-slate-200 placeholder-slate-500' : 'text-slate-900 placeholder-slate-400'}`;
 
               return (
                 <tr key={route.id} className={`${isSelected ? 'bg-primary-600/20' : rowStyle} group transition-all`} style={{ height: 'auto', minHeight: '48px', verticalAlign: 'top' }}>
                   {/* Célula extra na esquerda para alinhar com o header */}
-                  <td className="sticky left-0 z-[99] bg-slate-50 dark:bg-slate-900 w-[8px] p-0 m-0 border-none" style={{ position: 'sticky', left: 0, minWidth: '8px', maxWidth: '8px' }}></td>
+                  <td className={`sticky left-0 z-[99] ${isDarkMode ? 'bg-slate-800' : 'bg-white'} w-[8px] p-0 m-0 border-none`} style={{ position: 'sticky', left: 0, minWidth: '8px', maxWidth: '8px' }}></td>
                   {tableColumns.filter(col => !hiddenColumns.has(col.id)).map(col => {
                     const cellKey = `${route.id}-${col.id}`;
 
                     if (col.id === 'rota') {
                       return (
-                        <td key={cellKey} className="p-0 border border-slate-300 dark:border-slate-700" style={{ verticalAlign: 'middle' }}>
+                        <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle' }}>
                             <textarea
                               rows={1}
                               value={route.rota}
@@ -2431,7 +2483,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                       // Converte a data para exibição brasileira
                       const displayDate = formatDateToBR(route.data || '');
                       return (
-                        <td key={cellKey} className="p-0 border border-slate-300 dark:border-slate-700" style={{ verticalAlign: 'middle', minHeight: '48px' }}>
+                        <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
                           <input
                             type="text"
                             value={displayDate}
@@ -2464,7 +2516,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
                     if (col.id === 'inicio') {
                       return (
-                        <td key={cellKey} className="p-0 border border-slate-300 dark:border-slate-700" style={{ verticalAlign: 'middle', minHeight: '48px' }}>
+                        <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
                           <input
                               type="text"
                               key={`${route.id}-inicio`}
@@ -2486,7 +2538,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
                     if (col.id === 'motorista') {
                       return (
-                        <td key={cellKey} className="p-0 border border-slate-300 dark:border-slate-700" style={{ verticalAlign: 'middle', minHeight: '48px' }}>
+                        <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
                           <input
                               type="text"
                               value={route.motorista}
@@ -2499,7 +2551,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
                     if (col.id === 'placa') {
                       return (
-                        <td key={cellKey} className="p-0 border border-slate-300 dark:border-slate-700" style={{ verticalAlign: 'middle', minHeight: '48px' }}>
+                        <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
                           <input
                               type="text"
                               value={route.placa}
@@ -2512,7 +2564,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
                     if (col.id === 'saida') {
                       return (
-                        <td key={cellKey} className="p-0 border border-slate-300 dark:border-slate-700" style={{ verticalAlign: 'middle', minHeight: '48px' }}>
+                        <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
                           <input
                               type="text"
                               key={`${route.id}-saida`}
@@ -2544,7 +2596,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
                     if (col.id === 'motivo') {
                       return (
-                        <td key={cellKey} className="p-0 border border-slate-300 dark:border-slate-700" style={{ verticalAlign: 'middle', minHeight: '48px' }}>
+                        <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
                           <div className="w-full h-full flex items-center justify-center px-3 py-2 text-[10px] text-slate-400 italic">---</div>
                         </td>
                       );
@@ -2552,7 +2604,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
                     if (col.id === 'observacao') {
                       return (
-                        <td key={cellKey} className="p-0 border border-slate-300 dark:border-slate-700" style={{ verticalAlign: 'top', minHeight: '48px', height: 'auto' }}>
+                        <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'top', minHeight: '48px', height: 'auto' }}>
                           <div className="w-full px-1 py-2 text-[10px] text-slate-400 italic whitespace-pre-wrap break-words text-left" style={{ wordBreak: 'break-word', overflowWrap: 'break-word' }}>---</div>
                         </td>
                       );
@@ -2560,7 +2612,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
                     if (col.id === 'geral') {
                       return (
-                        <td key={cellKey} data-col-cell="geral" className="p-0 border border-slate-300 dark:border-slate-700" style={{ verticalAlign: 'middle', minHeight: '48px' }}>
+                        <td key={cellKey} data-col-cell="geral" className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
                           <div className="w-full h-full flex items-center justify-center px-3 py-2 text-[10px] text-slate-400 italic">---</div>
                         </td>
                       );
@@ -2568,7 +2620,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
                     if (col.id === 'operacao') {
                       return (
-                        <td key={cellKey} className="p-0 border border-slate-300 dark:border-slate-700" style={{ verticalAlign: 'middle', minHeight: '48px' }}>
+                        <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
                           <select value={route.operacao} onChange={(e) => updateCell(route.id!, 'operacao', e.target.value)} className="w-full h-full bg-transparent border-none text-[9px] font-black text-center uppercase">
                             <option value="">OP...</option>
                             {userConfigs.map(c => <option key={c.operacao} value={c.operacao}>{c.operacao}</option>)}
@@ -2579,9 +2631,9 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
                     if (col.id === 'status') {
                       return (
-                        <td key={cellKey} className="p-0 border border-slate-300 dark:border-slate-700" style={{ verticalAlign: 'middle', minHeight: '48px' }}>
+                        <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
                           <div className="w-full flex items-center justify-center">
-                            <span className={`px-2 py-0.5 rounded-full text-[8px] font-black border whitespace-nowrap ${route.statusOp === 'OK' ? 'bg-emerald-100 border-emerald-400 text-emerald-800' : route.statusOp === 'Atrasada' ? 'bg-yellow-100 border-yellow-400 text-yellow-800' : route.statusOp === 'Programada' ? 'bg-slate-200 border-slate-400 text-slate-600' : route.statusOp === 'Previsto' ? 'bg-slate-100 border-slate-300 text-slate-500' : 'bg-red-100 border-red-400 text-red-800'}`}>
+                            <span className={`px-2 py-0.5 rounded-full text-[8px] font-black border whitespace-nowrap ${route.statusOp === 'OK' ? 'bg-emerald-100 border-emerald-400 text-emerald-800' : route.statusOp === 'Atrasada' ? 'bg-yellow-100 border-yellow-400 text-yellow-800' : route.statusOp === 'Programada' ? 'bg-slate-200 border-slate-400 text-slate-600' : route.statusOp === 'Previsto' ? 'bg-slate-100 border-slate-400 text-slate-500' : 'bg-red-100 border-red-400 text-red-800'}`}>
                               {route.statusOp}
                             </span>
                           </div>
@@ -2591,7 +2643,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
                     if (col.id === 'tempo') {
                       return (
-                        <td key={cellKey} className="p-0 border border-slate-300 dark:border-slate-700" style={{ verticalAlign: 'middle', minHeight: '48px' }}>
+                        <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
                           <div className="w-full flex items-center justify-center text-[10px] font-bold">
                             {route.tempo}
                           </div>
@@ -2601,7 +2653,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
                     return null;
                   })}
-                  <td className="p-0 border border-slate-300 dark:border-slate-700 flex items-center justify-center gap-1" style={{ verticalAlign: 'middle', minHeight: '48px' }}>
+                  <td className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} flex items-center justify-center gap-1`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
                     {/* Ghost row não tem botões de ação */}
                   </td>
                 </tr>
@@ -2655,7 +2707,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
               <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-8 w-full max-w-md border border-primary-500 animate-in zoom-in">
                   <div className="flex items-center gap-3 text-primary-500 mb-6 font-black uppercase text-xs"><LinkIcon size={24} /> Vínculo Necessário</div>
                   <p className="text-sm text-slate-500 dark:text-slate-400 mb-6">A rota <span className="text-primary-500 font-black">{pendingMappingRoute}</span> não possui planta vinculada:</p>
-                  <div className="grid grid-cols-2 gap-3">{userConfigs.map(c => ( <button key={c.operacao} onClick={() => { SharePointService.addRouteOperationMapping(getAccessToken(), pendingMappingRoute!, c.operacao); setGhostRow(prev => ({...prev, operacao: c.operacao})); setIsMappingModalOpen(false); }} className="p-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 rounded-2xl hover:bg-primary-600 hover:text-white transition-all font-black text-xs uppercase">{c.operacao}</button> ))}</div>
+                  <div className="grid grid-cols-2 gap-3">{userConfigs.map(c => ( <button key={c.operacao} onClick={async () => { const tok = await getAccessToken(); SharePointService.addRouteOperationMapping(tok, pendingMappingRoute!, c.operacao); setGhostRow(prev => ({...prev, operacao: c.operacao})); setIsMappingModalOpen(false); }} className="p-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 rounded-2xl hover:bg-primary-600 hover:text-white transition-all font-black text-xs uppercase">{c.operacao}</button> ))}</div>
                   <button onClick={() => { setIsMappingModalOpen(false); setGhostRow(prev => ({...prev, rota: ''})); }} className="w-full mt-6 py-4 text-[10px] font-black uppercase text-slate-400">Cancelar</button>
               </div>
           </div>
@@ -2709,7 +2761,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                               <table className="w-full border-collapse text-[10px]">
                                   <thead className="sticky top-0 bg-slate-200 dark:bg-slate-800 text-slate-600 font-black uppercase z-10">
                                       <tr>
-                                          <th className="p-2 border border-slate-300 dark:border-slate-700 text-left relative group">
+                                          <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-left relative group">
                                               <div className="flex items-center justify-between">
                                                   <span>Rota</span>
                                                   <button
@@ -2755,9 +2807,9 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                                                 </div>
                                               )}
                                           </th>
-                                          <th className="p-2 border border-slate-300 dark:border-slate-700 text-center">Data</th>
-                                          <th className="p-2 border border-slate-300 dark:border-slate-700 text-center">Início</th>
-                                          <th className="p-2 border border-slate-300 dark:border-slate-700 text-left relative group">
+                                          <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center">Data</th>
+                                          <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center">Início</th>
+                                          <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-left relative group">
                                               <div className="flex items-center justify-between">
                                                   <span>Motorista</span>
                                                   <button
@@ -2803,11 +2855,101 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                                                 </div>
                                               )}
                                           </th>
-                                          <th className="p-2 border border-slate-300 dark:border-slate-700 text-center">Placa</th>
-                                          <th className="p-2 border border-slate-300 dark:border-slate-700 text-center">Saída</th>
-                                          <th className="p-2 border border-slate-300 dark:border-slate-700 text-left">Motivo</th>
-                                          <th className="p-2 border border-slate-300 dark:border-slate-700 text-left">Observação</th>
-                                          <th className="p-2 border border-slate-300 dark:border-slate-700 text-center relative group">
+                                          <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center relative group">
+                                              <div className="flex items-center justify-center gap-1">
+                                                  <span>Placa</span>
+                                                  <button
+                                                    onClick={() => setHistoryActiveFilterCol(historyActiveFilterCol === 'placa' ? null : 'placa')}
+                                                    className={`p-1 rounded transition-all opacity-0 group-hover:opacity-100 ${
+                                                      historyActiveFilterCol === 'placa' || historySelectedFilters['placa']?.length > 0
+                                                        ? 'opacity-100 bg-primary-600 text-white'
+                                                        : 'hover:bg-slate-300 dark:hover:bg-slate-600'
+                                                    }`}
+                                                  >
+                                                    <Filter size={10} />
+                                                  </button>
+                                              </div>
+                                              {historyActiveFilterCol === 'placa' && (
+                                                <div className="absolute top-full left-0 mt-1 w-40 bg-white dark:bg-slate-700 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-600 overflow-hidden z-[100] animate-in fade-in slide-in-from-top-2">
+                                                    <div className="p-2 border-b dark:border-slate-600 flex justify-between items-center">
+                                                        <span className="text-[9px] font-black uppercase text-slate-600 dark:text-slate-400 px-2">Placa</span>
+                                                        {historySelectedFilters['placa']?.length > 0 && (
+                                                            <button
+                                                                onClick={() => setHistorySelectedFilters(prev => ({ ...prev, placa: [] }))}
+                                                                className="text-[8px] font-bold text-primary-600 hover:text-primary-700 uppercase px-2"
+                                                            >
+                                                                Limpar
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                    <div className="max-h-48 overflow-y-auto p-2 space-y-1">
+                                                        {getHistoryColUniqueValues('placa').map(p => (
+                                                            <button
+                                                                key={p}
+                                                                onClick={() => toggleHistoryColFilter('placa', p)}
+                                                                className={`w-full text-left px-3 py-2 rounded-lg text-[10px] font-bold transition-all flex items-center justify-between ${
+                                                                    historySelectedFilters['placa']?.includes(p)
+                                                                        ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400'
+                                                                        : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-600'
+                                                                }`}
+                                                            >
+                                                                {p}
+                                                                {historySelectedFilters['placa']?.includes(p) && <CheckCircle2 size={12} />}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                              )}
+                                          </th>
+                                          <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center">Saída</th>
+                                          <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-left relative group">
+                                              <div className="flex items-center justify-between">
+                                                  <span>Motivo</span>
+                                                  <button
+                                                    onClick={() => setHistoryActiveFilterCol(historyActiveFilterCol === 'motivo' ? null : 'motivo')}
+                                                    className={`p-1 rounded transition-all opacity-0 group-hover:opacity-100 ${
+                                                      historyActiveFilterCol === 'motivo' || historySelectedFilters['motivo']?.length > 0
+                                                        ? 'opacity-100 bg-primary-600 text-white'
+                                                        : 'hover:bg-slate-300 dark:hover:bg-slate-600'
+                                                    }`}
+                                                  >
+                                                    <Filter size={10} />
+                                                  </button>
+                                              </div>
+                                              {historyActiveFilterCol === 'motivo' && (
+                                                <div className="absolute top-full left-0 mt-1 w-56 bg-white dark:bg-slate-700 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-600 overflow-hidden z-[100] animate-in fade-in slide-in-from-top-2">
+                                                    <div className="p-2 border-b dark:border-slate-600 flex justify-between items-center">
+                                                        <span className="text-[9px] font-black uppercase text-slate-600 dark:text-slate-400 px-2">Motivo</span>
+                                                        {historySelectedFilters['motivo']?.length > 0 && (
+                                                            <button
+                                                                onClick={() => setHistorySelectedFilters(prev => ({ ...prev, motivo: [] }))}
+                                                                className="text-[8px] font-bold text-primary-600 hover:text-primary-700 uppercase px-2"
+                                                            >
+                                                                Limpar
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                    <div className="max-h-48 overflow-y-auto p-2 space-y-1">
+                                                        {getHistoryColUniqueValues('motivo').map(m => (
+                                                            <button
+                                                                key={m}
+                                                                onClick={() => toggleHistoryColFilter('motivo', m)}
+                                                                className={`w-full text-left px-3 py-2 rounded-lg text-[10px] font-bold transition-all flex items-center justify-between ${
+                                                                    historySelectedFilters['motivo']?.includes(m)
+                                                                        ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400'
+                                                                        : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-600'
+                                                                }`}
+                                                            >
+                                                                {m}
+                                                                {historySelectedFilters['motivo']?.includes(m) && <CheckCircle2 size={12} />}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                              )}
+                                          </th>
+                                          <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-left">Observação</th>
+                                          <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center relative group">
                                               <div className="flex items-center justify-center gap-1">
                                                   <span>Operação</span>
                                                   <button
@@ -2853,7 +2995,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                                                 </div>
                                               )}
                                           </th>
-                                          <th className="p-2 border border-slate-300 dark:border-slate-700 text-center relative group">
+                                          <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center relative group">
                                               <div className="flex items-center justify-center gap-1">
                                                   <span>Status</span>
                                                   <button
@@ -2899,13 +3041,13 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                                                 </div>
                                               )}
                                           </th>
-                                          <th className="p-2 border border-slate-300 dark:border-slate-700 text-center">Tempo</th>
+                                          <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center">Tempo</th>
                                       </tr>
                                   </thead>
                                   <tbody>
                                       {filteredArchivedResults.map((r, i) => (
                                           <tr key={i} className="hover:bg-slate-50 dark:hover:bg-slate-800 border-b border-slate-200 dark:border-slate-800 group">
-                                              <td className="p-2 border border-slate-300 dark:border-slate-700">
+                                              <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}">
                                                   {editingHistoryId === r.id && editingHistoryField === 'rota' ? (
                                                       <input
                                                           type="text"
@@ -2925,7 +3067,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                                                       </div>
                                                   )}
                                               </td>
-                                              <td className="p-2 border border-slate-300 dark:border-slate-700 text-center">
+                                              <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center">
                                                   {editingHistoryId === r.id && editingHistoryField === 'data' ? (
                                                       <input
                                                           type="date"
@@ -2944,7 +3086,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                                                       </div>
                                                   )}
                                               </td>
-                                              <td className="p-2 border border-slate-300 dark:border-slate-700 text-center font-mono">
+                                              <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center font-mono">
                                                   {editingHistoryId === r.id && editingHistoryField === 'inicio' ? (
                                                       <input
                                                           type="text"
@@ -2964,7 +3106,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                                                       </div>
                                                   )}
                                               </td>
-                                              <td className="p-2 border border-slate-300 dark:border-slate-700">
+                                              <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}">
                                                   {editingHistoryId === r.id && editingHistoryField === 'motorista' ? (
                                                       <input
                                                           type="text"
@@ -2984,7 +3126,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                                                       </div>
                                                   )}
                                               </td>
-                                              <td className="p-2 border border-slate-300 dark:border-slate-700 text-center font-mono">
+                                              <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center font-mono">
                                                   {editingHistoryId === r.id && editingHistoryField === 'placa' ? (
                                                       <input
                                                           type="text"
@@ -3004,7 +3146,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                                                       </div>
                                                   )}
                                               </td>
-                                              <td className="p-2 border border-slate-300 dark:border-slate-700 text-center font-mono">
+                                              <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center font-mono">
                                                   {editingHistoryId === r.id && editingHistoryField === 'saida' ? (
                                                       <input
                                                           type="text"
@@ -3024,7 +3166,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                                                       </div>
                                                   )}
                                               </td>
-                                              <td className="p-2 border border-slate-300 dark:border-slate-700">
+                                              <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}">
                                                   {editingHistoryId === r.id && editingHistoryField === 'motivo' ? (
                                                       <select
                                                           value={r.motivo}
@@ -3045,7 +3187,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                                                       </div>
                                                   )}
                                               </td>
-                                              <td className="p-2 border border-slate-300 dark:border-slate-700 max-w-xs">
+                                              <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} max-w-xs">
                                                   {editingHistoryId === r.id && editingHistoryField === 'observacao' ? (
                                                       <textarea
                                                           value={r.observacao}
@@ -3070,22 +3212,22 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                                                       </div>
                                                   )}
                                               </td>
-                                              <td className="p-2 border border-slate-300 dark:border-slate-700 text-center font-black">
+                                              <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center font-black">
                                                   {r.operacao}
                                               </td>
-                                              <td className="p-2 border border-slate-300 dark:border-slate-700 text-center">
+                                              <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center">
                                                   <span className={`px-2 py-0.5 rounded-full text-[8px] font-black border ${
                                                       r.statusOp === 'OK' ? 'bg-emerald-100 border-emerald-400 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400' :
                                                       r.statusOp === 'Atrasada' ? 'bg-yellow-100 border-yellow-400 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400' :
                                                       r.statusOp === 'Adiantada' ? 'bg-blue-100 border-blue-400 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400' :
                                                       r.statusOp === 'Programada' ? 'bg-slate-200 border-slate-400 text-slate-600 dark:bg-slate-700 dark:text-slate-300' :
-                                                      r.statusOp === 'Previsto' ? 'bg-slate-100 border-slate-300 text-slate-500 dark:bg-slate-800 dark:text-slate-400' :
+                                                      r.statusOp === 'Previsto' ? 'bg-slate-100 border-slate-400 text-slate-500 dark:bg-slate-800 dark:text-slate-400' :
                                                       'bg-red-100 border-red-400 text-red-800 dark:bg-red-900/30 dark:text-red-400'
                                                   }`}>
                                                       {r.statusOp}
                                                   </span>
                                               </td>
-                                              <td className="p-2 border border-slate-300 dark:border-slate-700 text-center font-mono font-bold">
+                                              <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center font-mono font-bold">
                                                   {r.tempo}
                                               </td>
                                           </tr>

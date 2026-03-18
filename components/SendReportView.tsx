@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { SharePointService } from '../services/sharepointService';
+import { getValidToken } from '../services/tokenService';
 import { getBrazilDate, getBrazilHours, isAfter10amBrazil } from '../utils/dateUtils';
 import { RouteDeparture, Task, User, RouteConfig } from '../types';
 import {
@@ -41,7 +42,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
   const fetchAllData = async (forceRefresh: boolean = false) => {
     setIsLoading(true);
-    const token = (window as any).__access_token;
+    const token = await getValidToken();
     if (!token) return;
 
     try {
@@ -65,7 +66,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
   // Polling para atualizar apenas as configs (últimos envios) a cada 5 segundos
   useEffect(() => {
     const fetchConfigsOnly = async (force: boolean = false) => {
-      const token = (window as any).__access_token;
+      const token = await getValidToken();
       if (!token) return;
 
       try {
@@ -202,7 +203,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
         // Se o webhook retornou data/hora de envio, atualiza no SharePoint
         if (dataHoraEnvio) {
-          const token = currentUser.accessToken || (window as any).__access_token;
+          const token = await getValidToken() || currentUser.accessToken;
           if (token) {
             try {
               console.log('[ULTIMO_ENVIO] Enviando para atualização:', dataHoraEnvio);
@@ -223,7 +224,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
         // Processa e salva o status retornado pelo webhook
         const webhookStatus = responseData[0]?.status || responseData.status;
         if (webhookStatus) {
-          const token = currentUser.accessToken || (window as any).__access_token;
+          const token = await getValidToken() || currentUser.accessToken;
           if (token) {
             try {
               console.log('[STATUS_WEBHOOK] Status retornado:', webhookStatus);
@@ -354,7 +355,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
         // Se o webhook retornou data/hora de envio, atualiza no SharePoint
         if (dataHoraEnvio) {
-          const token = currentUser.accessToken || (window as any).__access_token;
+          const token = await getValidToken() || currentUser.accessToken;
           if (token) {
             try {
               console.log('[ULTIMO_ENVIO_NAO_COLETAS] Enviando para atualização:', dataHoraEnvio);
@@ -375,7 +376,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
         // Processa e salva o status retornado pelo webhook
         const webhookStatus = responseData[0]?.status || responseData.status;
         if (webhookStatus) {
-          const token = currentUser.accessToken || (window as any).__access_token;
+          const token = await getValidToken() || currentUser.accessToken;
           if (token) {
             try {
               console.log('[STATUS_WEBHOOK_NAO_COLETAS] Status retornado:', webhookStatus);
@@ -511,7 +512,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
         // Atualiza UltimoEnvioResumoSaida e StatusResumoSaida para todas as operações enviadas
         if (dataHoraEnvio) {
-          const token = currentUser.accessToken || (window as any).__access_token;
+          const token = await getValidToken() || currentUser.accessToken;
           if (token) {
             console.log('[ULTIMO_ENVIO_RESUMO] Atualizando para operações:', Object.keys(routesByOperation));
             

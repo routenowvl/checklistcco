@@ -1,24 +1,59 @@
-
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { HashRouter as Router, Routes, Route, useNavigate } from 'react-router-dom';
-import { CheckSquare, History, Truck, Moon, Sun, LogOut, ChevronLeft, ChevronRight, Loader2, Search, LayoutDashboard, TowerControl } from 'lucide-react';
+import { CheckSquare, History, Truck, LogOut, ChevronLeft, ChevronRight, Loader2, Search, LayoutDashboard, TowerControl, RefreshCw, AlertTriangle } from 'lucide-react';
 import TaskManager from './components/TaskManager';
 import HistoryViewer from './components/HistoryViewer';
 import RouteDepartureView from './components/RouteDeparture';
 import SharePointExplorer from './components/SharePointExplorer';
 import SendReportView from './components/SendReportView';
 import Login from './components/Login';
+import PWAInstallPrompt from './components/PWAInstallPrompt';
 import { SharePointService } from './services/sharepointService';
 import { logout as msalLogout } from './services/authService';
+import { msalInstance } from './services/authService';
+import { startTokenRefreshLoop, stopTokenRefreshLoop, clearTokenState, getValidToken } from './services/tokenService';
 import { Task, User } from './types';
 import { setCurrentUser as setStorageUser } from './services/storageService';
 import { getBrazilDate, getBrazilHours, getBrazilISOString, isAfter10amBrazil, getBrazilMinutes } from './utils/dateUtils';
+import { InteractionRequiredAuthError } from '@azure/msal-browser';
+
+const SCOPES = ["User.Read", "Sites.ReadWrite.All"];
 
 const SidebarLink = ({ to, icon: Icon, label, active, collapsed }: any) => (
   <a href={`#${to}`} className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${active ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-100'} ${collapsed ? 'justify-center' : ''}`}>
     <Icon size={20} />
     {!collapsed && <span className="font-medium whitespace-nowrap">{label}</span>}
   </a>
+);
+
+// Modal exibido quando a sessão expira e não é possível renovar silenciosamente
+const SessionExpiredModal: React.FC<{ onRenew: () => void; isRenewing: boolean }> = ({ onRenew, isRenewing }) => (
+  <div className="fixed inset-0 z-[9999] bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-300">
+    <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-10 w-full max-w-sm border border-amber-500/50 shadow-2xl flex flex-col items-center gap-6 text-center animate-in zoom-in duration-300">
+      <div className="w-16 h-16 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center">
+        <AlertTriangle size={32} className="text-amber-500" />
+      </div>
+      <div>
+        <h3 className="text-lg font-black uppercase text-slate-800 dark:text-white tracking-tight">Sessão Expirada</h3>
+        <p className="text-sm text-slate-500 dark:text-slate-400 mt-2 font-medium">
+          Sua sessão Microsoft expirou. Clique abaixo para renovar sem perder seu trabalho.
+        </p>
+      </div>
+      <button
+        onClick={onRenew}
+        disabled={isRenewing}
+        className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-black uppercase text-[11px] tracking-widest flex items-center justify-center gap-3 transition-all disabled:opacity-60 shadow-lg shadow-blue-500/20"
+      >
+        {isRenewing
+          ? <><Loader2 size={18} className="animate-spin" /> Renovando...</>
+          : <><RefreshCw size={18} /> Renovar Sessão</>
+        }
+      </button>
+      <p className="text-[9px] text-slate-400 font-bold uppercase tracking-widest">
+        Seus dados não serão perdidos
+      </p>
+    </div>
+  </div>
 );
 
 const AppContent = () => {
@@ -32,36 +67,104 @@ const AppContent = () => {
   const [collapsed, setCollapsed] = useState(true);
   const [collapsedCategories, setCollapsedCategories] = useState<string[]>([]);
 
+  // Estado do modal de sessão expirada
+  const [sessionExpired, setSessionExpired] = useState(false);
+  const [isRenewing, setIsRenewing] = useState(false);
+
+  // Ref para a função de cleanup do loop de refresh
+  const stopRefreshLoopRef = useRef<(() => void) | null>(null);
+
   const navigate = useNavigate();
+
+  // Atualiza o token no estado e no window global
+  const handleTokenRefresh = (newToken: string) => {
+    (window as any).__access_token = newToken;
+    setUser(prev => prev ? { ...prev, accessToken: newToken } : prev);
+  };
+
+  // Chamado quando o loop detecta que a sessão não pode ser renovada silenciosamente
+  const handleSessionExpired = () => {
+    console.warn('[APP] Sessão expirada — exibindo modal de renovação');
+    setSessionExpired(true);
+  };
+
+  // Renova a sessão via popup (sem perder estado)
+  const handleRenewSession = async () => {
+    setIsRenewing(true);
+    try {
+      const accounts = msalInstance.getAllAccounts();
+      const account = accounts[0];
+
+      let response;
+      try {
+        // Tenta primeiro sem UI (pode funcionar se o cookie de sessão ainda é válido)
+        response = await msalInstance.acquireTokenSilent({
+          scopes: SCOPES,
+          account,
+          forceRefresh: true,
+        });
+      } catch {
+        // Fallback: popup de login (prompt: none = sem tela de seleção se já logado)
+        response = await msalInstance.acquireTokenPopup({
+          scopes: SCOPES,
+          account,
+          prompt: 'none',
+        }).catch(() =>
+          // Último recurso: popup com seleção de conta
+          msalInstance.acquireTokenPopup({ scopes: SCOPES })
+        );
+      }
+
+      if (response?.accessToken) {
+        handleTokenRefresh(response.accessToken);
+        setSessionExpired(false);
+        console.log('[APP] ✅ Sessão renovada com sucesso');
+      }
+    } catch (err: any) {
+      console.error('[APP] Falha ao renovar sessão:', err.message);
+      // Se não conseguiu renovar de jeito nenhum, faz logout limpo
+      await handleLogout();
+    } finally {
+      setIsRenewing(false);
+    }
+  };
 
   const handleLogin = (user: User) => {
     setUser(user);
     (window as any).__access_token = user.accessToken;
+    setSessionExpired(false);
+
+    // Inicia o loop de refresh proativo
+    if (stopRefreshLoopRef.current) stopRefreshLoopRef.current();
+    stopRefreshLoopRef.current = startTokenRefreshLoop(handleTokenRefresh, handleSessionExpired);
+
     loadDataFromSharePoint(user);
   };
 
   const loadDataFromSharePoint = async (user: User) => {
-    if (!user.accessToken) {
+    // Sempre pega o token mais fresco disponível
+    const token = await getValidToken() || user.accessToken;
+    if (!token) {
       console.error('[APP] Token não encontrado');
       return;
     }
 
-    (window as any).__access_token = user.accessToken;
+    (window as any).__access_token = token;
     setIsLoading(true);
 
     try {
       setSyncMessage("Carregando Definições...");
-      const spTasks = await SharePointService.getTasks(user.accessToken);
-      const spOps = await SharePointService.getOperations(user.accessToken, user.email);
-      const spMembers = await SharePointService.getTeamMembers(user.accessToken);
+      const spTasks = await SharePointService.getTasks(token);
+      const spOps = await SharePointService.getOperations(token, user.email);
+      const spMembers = await SharePointService.getTeamMembers(token);
       setTeamMembers(spMembers);
 
       setSyncMessage("Sincronizando Matriz 1:1...");
-      await SharePointService.ensureMatrix(user.accessToken, spTasks, spOps);
+      await SharePointService.ensureMatrix(token, spTasks, spOps);
 
       setSyncMessage("Recuperando Status...");
       const today = getBrazilDate();
-      const spStatus = await SharePointService.getStatusByDate(user.accessToken, today);
+      const spStatus = await SharePointService.getStatusByDate(token, today);
 
       const opSiglas = spOps.map(o => o.Title);
       setLocations(opSiglas);
@@ -95,21 +198,22 @@ const AppContent = () => {
     }
   };
 
+  // Auto-save às 10:00h (Brasília)
   useEffect(() => {
     if (!currentUser || tasks.length === 0) return;
 
     const checkAutoSaveTrigger = async () => {
-      // Verifica se já passou das 10:00h no fuso de Brasília
       if (isAfter10amBrazil()) {
         const todayBrazil = getBrazilDate();
         const safeEmail = currentUser.email.replace(/[^a-zA-Z0-9]/g, '_');
-        // Flag específica por dia no fuso brasileiro
         const autoSaveFlag = `auto_save_done_${safeEmail}_${todayBrazil}`;
 
         if (localStorage.getItem(autoSaveFlag) !== 'true') {
-          console.log(`[AUTO_SAVE] Executando salvamento automático às ${getBrazilHours()}:${String(getBrazilMinutes()).padStart(2, '0')} (Brasília)`);
+          console.log(`[AUTO_SAVE] Executando às ${getBrazilHours()}:${String(getBrazilMinutes()).padStart(2, '0')} (Brasília)`);
           try {
-            await SharePointService.saveHistory(currentUser.accessToken!, {
+            // Usa sempre o token mais fresco
+            const token = await getValidToken() || currentUser.accessToken!;
+            await SharePointService.saveHistory(token, {
               id: Date.now().toString(),
               timestamp: getBrazilISOString(),
               tasks: tasks,
@@ -117,21 +221,34 @@ const AppContent = () => {
               email: currentUser.email
             });
             localStorage.setItem(autoSaveFlag, 'true');
-            console.log('[AUTO_SAVE] Salvamento concluído com sucesso');
+            console.log('[AUTO_SAVE] Concluído com sucesso');
           } catch (e) {
-            console.error("[AUTO_SAVE] Falha no backup automático:", e);
+            console.error("[AUTO_SAVE] Falha:", e);
           }
         }
       }
     };
 
-    // Verifica imediatamente e depois a cada minuto
     checkAutoSaveTrigger();
     const interval = setInterval(checkAutoSaveTrigger, 60000);
     return () => clearInterval(interval);
   }, [currentUser, tasks]);
 
+  // Escuta o evento token-expired disparado pelo sharepointService
+  useEffect(() => {
+    const onTokenExpired = () => handleSessionExpired();
+    window.addEventListener('token-expired', onTokenExpired);
+    return () => window.removeEventListener('token-expired', onTokenExpired);
+  }, []);
+
   const handleLogout = async () => {
+    // Para o loop de refresh antes de deslogar
+    if (stopRefreshLoopRef.current) {
+      stopRefreshLoopRef.current();
+      stopRefreshLoopRef.current = null;
+    }
+    clearTokenState();
+
     await msalLogout();
     setUser(null);
     setStorageUser(null);
@@ -144,10 +261,23 @@ const AppContent = () => {
     else document.documentElement.classList.remove('dark');
   }, [isDarkMode]);
 
+  // Cleanup do loop ao desmontar o componente
+  useEffect(() => {
+    return () => {
+      if (stopRefreshLoopRef.current) stopRefreshLoopRef.current();
+    };
+  }, []);
+
   if (!currentUser) return <Login onLogin={handleLogin} />;
 
   return (
     <div className="flex h-screen bg-slate-50 dark:bg-slate-950 overflow-hidden">
+
+      {/* Modal de sessão expirada — sobrepõe tudo */}
+      {sessionExpired && (
+        <SessionExpiredModal onRenew={handleRenewSession} isRenewing={isRenewing} />
+      )}
+
       <aside className={`bg-white dark:bg-slate-900 border-r dark:border-slate-800 transition-all ${collapsed ? 'w-20' : 'w-64'} p-4 flex flex-col`}>
         <div className="mb-10 flex items-center gap-3">
           <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold">V</div>
@@ -161,14 +291,12 @@ const AppContent = () => {
           <SidebarLink to="/explorer" icon={Search} label="Explorador" active={window.location.hash === '#/explorer'} collapsed={collapsed} />
         </nav>
         <div className="mt-auto space-y-2 border-t pt-4 dark:border-slate-800">
-           <button onClick={() => setIsDarkMode(!isDarkMode)} className="p-2 w-full flex justify-center text-slate-500 hover:bg-slate-100 rounded-lg">
-             {isDarkMode ? <Sun size={20}/> : <Moon size={20}/>}
-           </button>
            <button onClick={() => setCollapsed(!collapsed)} className="p-2 w-full flex justify-center text-slate-500 hover:bg-slate-100 rounded-lg">
              {collapsed ? <ChevronRight size={20}/> : <ChevronLeft size={20}/>}
            </button>
         </div>
       </aside>
+
       <main className="flex-1 overflow-hidden p-4">
         {isLoading ? (
           <div className="h-full flex items-center justify-center flex-col gap-4 text-blue-600">
@@ -178,14 +306,14 @@ const AppContent = () => {
         ) : (
           <Routes>
             <Route path="/" element={
-              <TaskManager 
-                tasks={tasks} 
-                setTasks={setTasks} 
-                locations={locations} 
-                setLocations={setLocations} 
-                onUserSwitch={() => loadDataFromSharePoint(currentUser)} 
-                collapsedCategories={collapsedCategories} 
-                setCollapsedCategories={setCollapsedCategories} 
+              <TaskManager
+                tasks={tasks}
+                setTasks={setTasks}
+                locations={locations}
+                setLocations={setLocations}
+                onUserSwitch={() => loadDataFromSharePoint(currentUser)}
+                collapsedCategories={collapsedCategories}
+                setCollapsedCategories={setCollapsedCategories}
                 currentUser={currentUser}
                 onLogout={handleLogout}
                 teamMembers={teamMembers}
@@ -198,6 +326,7 @@ const AppContent = () => {
           </Routes>
         )}
       </main>
+      <PWAInstallPrompt />
     </div>
   );
 };

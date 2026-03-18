@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Task, OperationStatus, User } from '../types';
 import { SharePointService, DailyWarning } from '../services/sharepointService';
+import { getValidToken } from '../services/tokenService';
 import { getBrazilDate } from '../utils/dateUtils';
 import {
   Maximize2, Minimize2, Loader2, Database,
@@ -70,7 +71,7 @@ const TaskManager: React.FC<TaskManagerProps> = ({
   const manuallyOpenedRef = useRef<Set<string>>(new Set());
 
   const fetchWarnings = async () => {
-    const token = currentUser.accessToken || (window as any).__access_token;
+    const token = await getValidToken() || currentUser.accessToken;
     if (token) {
         const warnings = await SharePointService.getDailyWarnings(token, currentUser.email);
         setDailyWarnings(warnings);
@@ -90,7 +91,7 @@ const TaskManager: React.FC<TaskManagerProps> = ({
 
   const handleAddWarning = async (e: React.FormEvent) => {
     e.preventDefault();
-    const token = currentUser.accessToken || (window as any).__access_token;
+    const token = await getValidToken() || currentUser.accessToken;
     if (!token) return;
     setIsUpdating(true);
     try {
@@ -106,7 +107,7 @@ const TaskManager: React.FC<TaskManagerProps> = ({
   };
 
   const handleMarkAsViewed = async (id: string) => {
-      const token = currentUser.accessToken || (window as any).__access_token;
+      const token = await getValidToken() || currentUser.accessToken;
       if (!token) return;
       try {
           await SharePointService.markWarningAsViewed(token, id);
@@ -186,7 +187,7 @@ const TaskManager: React.FC<TaskManagerProps> = ({
     setIsResetModalOpen(true);
     setIsLoadingUsers(true);
     try {
-        const token = currentUser.accessToken || (window as any).__access_token;
+        const token = await getValidToken() || currentUser.accessToken;
         if (token) {
             const users = await SharePointService.getRegisteredUsers(token, currentUser.email);
             setRegisteredUsers(users);
@@ -204,7 +205,8 @@ const TaskManager: React.FC<TaskManagerProps> = ({
   };
 
   const handleUpdateStatus = async (taskId: string, location: string, status: OperationStatus) => {
-    if (!currentUser.accessToken) return;
+    const token = await getValidToken() || currentUser.accessToken;
+    if (!token) return;
     
     const originalTasks = [...tasks];
     setTasks(prev => prev.map(t => t.id === taskId ? { 
@@ -218,7 +220,7 @@ const TaskManager: React.FC<TaskManagerProps> = ({
       const todayKey = today.replace(/-/g, '');
       const uniqueKey = `${todayKey}_${taskId}_${location}`;
 
-      await SharePointService.updateStatus(currentUser.accessToken, {
+      await SharePointService.updateStatus(token, {
         DataReferencia: today,
         TarefaID: taskId,
         OperacaoSigla: location,
@@ -236,7 +238,9 @@ const TaskManager: React.FC<TaskManagerProps> = ({
   };
 
   const handlePaintRow = async (taskId: string) => {
-    if (!activeTool || !currentUser.accessToken) return;
+    if (!activeTool) return;
+    const token = await getValidToken() || currentUser.accessToken;
+    if (!token) return;
     
     const originalTasks = [...tasks];
     setTasks(prev => prev.map(t => t.id === taskId ? { 
@@ -251,7 +255,7 @@ const TaskManager: React.FC<TaskManagerProps> = ({
 
       await Promise.all(locations.map(loc => {
         const uniqueKey = `${todayKey}_${taskId}_${loc}`;
-        return SharePointService.updateStatus(currentUser.accessToken!, {
+        return SharePointService.updateStatus(token, {
             DataReferencia: today,
             TarefaID: taskId,
             OperacaoSigla: loc,
@@ -269,11 +273,13 @@ const TaskManager: React.FC<TaskManagerProps> = ({
   };
 
   const handleResetChecklist = async () => {
-    if (!resetResponsible.trim() || !currentUser.accessToken) return;
+    if (!resetResponsible.trim()) return;
+    const token = await getValidToken() || currentUser.accessToken;
+    if (!token) return;
 
     setIsUpdating(true);
     try {
-        await SharePointService.saveHistory(currentUser.accessToken, {
+        await SharePointService.saveHistory(token, {
             id: Date.now().toString(),
             timestamp: getBrazilISOString(),
             tasks: tasks,
@@ -288,7 +294,7 @@ const TaskManager: React.FC<TaskManagerProps> = ({
         tasks.forEach(task => {
             locations.forEach(loc => {
                 const uniqueKey = `${todayKey}_${task.id}_${loc}`;
-                resetPromises.push(SharePointService.updateStatus(currentUser.accessToken!, {
+                resetPromises.push(SharePointService.updateStatus(token, {
                     DataReferencia: today,
                     TarefaID: task.id,
                     OperacaoSigla: loc,

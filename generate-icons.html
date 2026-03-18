@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Gerador de Ícones PWA</title>
+  <style>
+    body { font-family: Arial; padding: 20px; background: #1e293b; color: white; }
+    canvas { border: 1px solid #334155; margin: 10px; background: #0f172a; }
+    button { padding: 10px 20px; font-size: 16px; cursor: pointer; background: #2563eb; color: white; border: none; border-radius: 8px; }
+    button:hover { background: #1d4ed8; }
+    .info { margin-top: 20px; padding: 15px; background: #334155; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Gerador de Ícones PWA - Checklist CCO</h1>
+  <p>Clique no botão para gerar e baixar os ícones</p>
+  <button onclick="generateIcons()">Gerar Ícones</button>
+  
+  <div class="info">
+    <h3>Instruções:</h3>
+    <ol>
+      <li>Clique em "Gerar Ícones"</li>
+      <li>Os arquivos serão baixados automaticamente</li>
+      <li>Mova os arquivos para a pasta <code>public/</code> do projeto</li>
+    </ol>
+  </div>
+
+  <script>
+    function drawIcon(canvas, size) {
+      const ctx = canvas.getContext('2d');
+      canvas.width = size;
+      canvas.height = size;
+      
+      // Background gradient
+      const gradient = ctx.createLinearGradient(0, 0, size, size);
+      gradient.addColorStop(0, '#2563eb');
+      gradient.addColorStop(1, '#1d4ed8');
+      
+      // Rounded rectangle background
+      const radius = size * 0.195;
+      ctx.beginPath();
+      ctx.roundRect(0, 0, size, size, radius);
+      ctx.fillStyle = gradient;
+      ctx.fill();
+      
+      // White square with checkmark
+      const squareSize = size * 0.53;
+      const squareX = (size - squareSize) / 2;
+      const squareY = (size - squareSize) / 2 - size * 0.05;
+      const squareRadius = size * 0.078;
+      
+      ctx.beginPath();
+      ctx.roundRect(squareX, squareY, squareSize, squareSize, squareRadius);
+      ctx.fillStyle = 'white';
+      ctx.fill();
+      
+      // Checkmark
+      ctx.beginPath();
+      ctx.lineWidth = size * 0.068;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.strokeStyle = '#2563eb';
+      
+      const checkStartX = squareX + squareSize * 0.3;
+      const checkStartY = squareY + squareSize * 0.55;
+      const checkMidX = squareX + squareSize * 0.45;
+      const checkMidY = squareY + squareSize * 0.72;
+      const checkEndX = squareX + squareSize * 0.75;
+      const checkEndY = squareY + squareSize * 0.35;
+      
+      ctx.moveTo(checkStartX, checkStartY);
+      ctx.lineTo(checkMidX, checkMidY);
+      ctx.lineTo(checkEndX, checkEndY);
+      ctx.stroke();
+      
+      // Text "CCO"
+      ctx.fillStyle = 'white';
+      ctx.font = `bold ${size * 0.156}px Arial`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('CCO', size / 2, size * 0.88);
+    }
+    
+    function downloadCanvas(canvas, filename) {
+      const link = document.createElement('a');
+      link.download = filename;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    }
+    
+    function generateIcons() {
+      const canvas = document.createElement('canvas');
+      
+      // Generate 192x192
+      drawIcon(canvas, 192);
+      downloadCanvas(canvas, 'pwa-192x192.png');
+      
+      // Generate 512x512
+      setTimeout(() => {
+        drawIcon(canvas, 512);
+        downloadCanvas(canvas, 'pwa-512x512.png');
+      }, 100);
+      
+      // Generate apple-touch-icon (180x180)
+      setTimeout(() => {
+        drawIcon(canvas, 180);
+        downloadCanvas(canvas, 'apple-touch-icon.png');
+      }, 200);
+      
+      // Generate favicon (32x32)
+      setTimeout(() => {
+        drawIcon(canvas, 32);
+        downloadCanvas(canvas, 'favicon.png');
+      }, 300);
+      
+      alert('Ícones gerados! Mova os arquivos para a pasta public/ do projeto.');
+    }
+  </script>
+</body>
+</html>

@@ -2,19 +2,71 @@
 <img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
 </div>
 
-# Run and deploy your AI Studio app
+# Checklist CCO - VIA Group 📱
 
-This contains everything you need to run your app locally.
+Sistema de gestão de operações logísticas em tempo real para o CCO (Centro de Controle Operacional).
 
-View your app in AI Studio: https://ai.studio/apps/drive/1vDnhl1V3BmeBrVqzi4OXCZl3I1Nozt89
+> **Agora disponível como PWA!** Instale diretamente do navegador e tenha acesso rápido como um aplicativo nativo.
 
-## Run Locally
+## 🚀 Executar Localmente
 
-**Prerequisites:**  Node.js
+**Pré-requisitos:** Node.js 18+
 
+1. Instale as dependências:
+   ```bash
+   npm install
+   ```
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+2. Configure as variáveis de ambiente:
+   - Copie `.env.example` para `.env`
+   - Preencha com suas chaves (Gemini API, Azure AD, SharePoint)
+
+3. Execute o app em modo de desenvolvimento:
+   ```bash
+   npm run dev
+   ```
+
+4. Acesse em `http://localhost:3000`
+
+## 📱 Instalar como PWA
+
+Após abrir o aplicativo no navegador:
+
+1. **Aguarde alguns segundos** - Um popup aparecerá no canto inferior direito
+2. **Clique em "Instalar"**
+3. O app será instalado como um aplicativo nativo!
+
+**Ou manualmente:**
+- **Chrome/Edge:** Clique no ícone de instalar (⬇️) na barra de endereço
+- **Menu:** `⋯` → `Aplicativos` → `Instalar este aplicativo`
+
+Veja mais detalhes em [PWA.md](PWA.md)
+
+## 🛠️ Scripts
+
+| Comando | Descrição |
+|---------|-----------|
+| `npm run dev` | Inicia servidor de desenvolvimento |
+| `npm run build` | Compila para produção (com PWA) |
+| `npm run preview` | Visualiza build de produção |
+
+## 📁 Estrutura do Projeto
+
+```
+checklist-cco/
+├── components/       # Componentes React
+├── services/         # Integrações (SharePoint, Auth, IA)
+├── utils/            # Utilitários (datas, etc.)
+├── public/           # Ícones PWA e assets estáticos
+├── dist/             # Build de produção (gerado)
+└── PWA.md            # Documentação completa do PWA
+```
+
+## 📄 Documentação
+
+- [CONFIG.md](CONFIG.md) - Configuração de variáveis de ambiente
+- [PWA.md](PWA.md) - Guia completo de instalação do PWA
+
+---
+
+**Desenvolvido com ❤️ para VIA Group**

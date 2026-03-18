@@ -1,0 +1,13 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background -->
+  <rect width="512" height="512" rx="100" fill="#2563eb"/>
+  
+  <!-- Checkmark square -->
+  <rect x="120" y="120" width="272" height="272" rx="40" fill="white"/>
+  
+  <!-- Checkmark -->
+  <path d="M 200 320 L 250 380 L 360 240" stroke="#2563eb" stroke-width="35" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  
+  <!-- Letter C -->
+  <text x="256" y="460" font-family="Arial, sans-serif" font-size="80" font-weight="bold" fill="white" text-anchor="middle">CCO</text>
+</svg>

@@ -1,6 +1,7 @@
 
 import { HistoryRecord, Task, User as AppUser, RouteConfig, OperationStatus } from '../types';
 import { SharePointService } from '../services/sharepointService';
+import { getValidToken } from '../services/tokenService';
 import { getBrazilDate, toBrazilDate } from '../utils/dateUtils';
 import { History, Calendar, Clock, ChevronRight, ChevronDown, CheckCircle2, User, Loader2, MapPin, Eye, FileSearch, Filter, X, Search } from 'lucide-react';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
@@ -48,7 +49,7 @@ const HistoryViewer: React.FC<HistoryViewerProps> = ({ currentUser }) => {
   const [endDate, setEndDate] = useState(getBrazilDate());
 
   const fetchHistory = async () => {
-    const token = currentUser.accessToken || (window as any).__access_token; 
+    const token = await getValidToken() || currentUser.accessToken; 
     if (!token) return;
     
     setIsLoading(true);

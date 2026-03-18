@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { SharePointService } from '../services/sharepointService';
+import { getValidToken } from '../services/tokenService';
 import { User } from '../types';
 import { Database, Search, Table, Columns, AlertCircle, CheckCircle2, Loader2, Link } from 'lucide-react';
 
@@ -15,7 +16,7 @@ const SharePointExplorer: React.FC<SharePointExplorerProps> = ({ currentUser }) 
 
   useEffect(() => {
     const fetchMetadata = async () => {
-      const token = currentUser.accessToken || (window as any).__access_token;
+      const token = await getValidToken() || currentUser.accessToken;
       if (!token) {
         setIsLoading(false);
         return;
