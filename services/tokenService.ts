@@ -96,9 +96,11 @@ export const getValidTokenOrThrow = async (): Promise<string> => {
  * Inicia o loop de refresh proativo.
  * Deve ser chamado UMA VEZ após o login bem-sucedido.
  * Retorna função de cleanup para parar o loop.
+ * 
+ * IMPORTANTE: O refresh ocorre apenas em background (window.__access_token),
+ * sem atualizar estado React, evitando re-renderização dos componentes.
  */
 export const startTokenRefreshLoop = (
-  onTokenRefresh: (newToken: string) => void,
   onSessionExpired: () => void
 ): (() => void) => {
   // Para qualquer loop anterior antes de iniciar um novo
@@ -113,8 +115,6 @@ export const startTokenRefreshLoop = (
 
       const account = accounts[0];
 
-      // Verifica se o token atual está próximo de expirar
-      const cachedTokens = msalInstance.getActiveAccount();
       // Sempre tenta acquireTokenSilent — o MSAL decide se usa cache ou renova
       const response = await msalInstance.acquireTokenSilent({
         scopes: SCOPES,
@@ -135,13 +135,12 @@ export const startTokenRefreshLoop = (
             account,
             forceRefresh: true,
           });
+          // Atualiza APENAS no window — sem re-renderização
           (window as any).__access_token = forced.accessToken;
-          onTokenRefresh(forced.accessToken);
-          console.log('[TOKEN_LOOP] ✅ Token renovado proativamente');
+          console.log('[TOKEN_LOOP] ✅ Token renovado proativamente (background)');
         } else {
-          // Token ainda válido — apenas sincroniza
+          // Token ainda válido — apenas sincroniza no window
           (window as any).__access_token = response.accessToken;
-          onTokenRefresh(response.accessToken);
         }
       }
     } catch (err: any) {

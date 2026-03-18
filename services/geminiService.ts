@@ -89,7 +89,7 @@ export const parseRouteDeparturesManual = (rawText: string): Partial<RouteDepart
     if (dateMatch) {
       const dateStr = dateMatch[1];
       const tabs = line.split('\t');
-      
+
       if (tabs.length >= 3) {
           // Caso padrão: Colado direto do Excel (Tabulado)
           result.push({
@@ -97,7 +97,7 @@ export const parseRouteDeparturesManual = (rawText: string): Partial<RouteDepart
             data: convertDate(tabs[1] || ''),
             inicio: formatTime(tabs[2] || '00:00:00'),
             motorista: tabs[3] || '',
-            placa: tabs[4] || '',
+            placa: (tabs[4] || '').replace(/[\s-]/g, '').toUpperCase(),
             saida: formatTime(tabs[5] || '00:00:00'),
             motivo: tabs[6] || '',
             observacao: tabs[7] || '',
@@ -108,14 +108,14 @@ export const parseRouteDeparturesManual = (rawText: string): Partial<RouteDepart
           const dateIdx = line.indexOf(dateStr);
           const rota = line.substring(0, dateIdx).trim();
           const afterDate = line.substring(dateIdx + dateStr.length).trim();
-          
+
           const times = afterDate.match(timeRegex) || [];
           const inicio = times[0] || '00:00:00';
           const saida = times[1] || '00:00:00';
-          
+
           // Tenta extrair motorista e placa entre os horários ou após a data
           const parts = afterDate.split(/\s+/).filter(p => !p.match(timeRegex));
-          const placa = parts.length > 0 ? parts[parts.length - 1] : '';
+          const placa = parts.length > 0 ? parts[parts.length - 1].replace(/[\s-]/g, '').toUpperCase() : '';
           const motorista = parts.length > 1 ? parts.slice(0, -1).join(' ') : '';
 
           result.push({
@@ -175,7 +175,10 @@ export const parseRouteDepartures = async (rawText: string): Promise<Partial<Rou
         }
       }
     });
-    return response.text ? JSON.parse(response.text.trim()) : [];
+    return response.text ? JSON.parse(response.text.trim()).map((item: any) => ({
+      ...item,
+      placa: (item.placa || '').replace(/[\s-]/g, '').toUpperCase()
+    })) : [];
   } catch (error) {
     console.error("Gemini Error:", error);
     throw error;

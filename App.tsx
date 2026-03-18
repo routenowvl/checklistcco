@@ -76,12 +76,6 @@ const AppContent = () => {
 
   const navigate = useNavigate();
 
-  // Atualiza o token no estado e no window global
-  const handleTokenRefresh = (newToken: string) => {
-    (window as any).__access_token = newToken;
-    setUser(prev => prev ? { ...prev, accessToken: newToken } : prev);
-  };
-
   // Chamado quando o loop detecta que a sessão não pode ser renovada silenciosamente
   const handleSessionExpired = () => {
     console.warn('[APP] Sessão expirada — exibindo modal de renovação');
@@ -116,7 +110,9 @@ const AppContent = () => {
       }
 
       if (response?.accessToken) {
-        handleTokenRefresh(response.accessToken);
+        // Atualiza window E estado (renovação manual requer atualização do estado)
+        (window as any).__access_token = response.accessToken;
+        setUser(prev => prev ? { ...prev, accessToken: response.accessToken } : prev);
         setSessionExpired(false);
         console.log('[APP] ✅ Sessão renovada com sucesso');
       }
@@ -134,9 +130,9 @@ const AppContent = () => {
     (window as any).__access_token = user.accessToken;
     setSessionExpired(false);
 
-    // Inicia o loop de refresh proativo
+    // Inicia o loop de refresh proativo (background — sem re-renderização)
     if (stopRefreshLoopRef.current) stopRefreshLoopRef.current();
-    stopRefreshLoopRef.current = startTokenRefreshLoop(handleTokenRefresh, handleSessionExpired);
+    stopRefreshLoopRef.current = startTokenRefreshLoop(handleSessionExpired);
 
     loadDataFromSharePoint(user);
   };

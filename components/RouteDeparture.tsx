@@ -726,7 +726,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     const [todayY, todayM, todayD] = todayBrazil.split('-').map(Number);
     const today = new Date(todayY, todayM - 1, todayD);
     today.setHours(0, 0, 0, 0);
-    
+
     const [y, m, d] = routeDate.split('-').map(Number);
     const rDate = new Date(y, m - 1, d);
     rDate.setHours(0, 0, 0, 0);
@@ -750,7 +750,8 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     if (rDate < today) return { status: 'Atrasada', gap: '' };
 
     // Calcula atraso baseado no horário atual (Brasília) vs horário de início
-    const nowSec = getBrazilHours() * 3600 + getBrazilMinutes() * 60 + currentTime.getSeconds();
+    // Usa o currentTime que já está sincronizado com Brasília
+    const nowSec = currentTime.getHours() * 3600 + currentTime.getMinutes() * 60 + currentTime.getSeconds();
     const diffAtual = nowSec - startSec;
 
     if (diffAtual > toleranceSec) {
@@ -1335,6 +1336,11 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   };
 
   const updateCell = async (id: string, field: keyof RouteDeparture, value: string) => {
+    // Normalização automática da placa: remove espaços e hífens
+    if (field === 'placa') {
+      value = value.replace(/[\s-]/g, '').toUpperCase();
+    }
+
     if (id === 'ghost') {
         let updatedGhost = { ...ghostRow, [field]: value };
 
@@ -1435,6 +1441,11 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   };
 
   const handleUpdateHistoryCell = async (id: string, field: keyof RouteDeparture, value: string) => {
+    // Normalização automática da placa: remove espaços e hífens
+    if (field === 'placa') {
+      value = value.replace(/[\s-]/g, '').toUpperCase();
+    }
+
     setArchivedResults(prev => prev.map(r => r.id === id ? { ...r, [field]: value } : r));
     setIsSyncing(true);
     try {
@@ -3131,7 +3142,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                                                       <input
                                                           type="text"
                                                           value={r.placa}
-                                                          onChange={(e) => handleUpdateHistoryCell(r.id!, 'placa', e.target.value.toUpperCase())}
+                                                          onChange={(e) => handleUpdateHistoryCell(r.id!, 'placa', e.target.value)}
                                                           onBlur={() => { setEditingHistoryId(null); setEditingHistoryField(null); }}
                                                           onKeyDown={(e) => { if (e.key === 'Enter') { (e.target as HTMLInputElement).blur(); } }}
                                                           className="w-full bg-primary-100 dark:bg-primary-900/30 border-2 border-primary-500 px-2 py-1 font-mono font-bold outline-none uppercase"
