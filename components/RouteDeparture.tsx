@@ -1562,6 +1562,9 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     if (col === 'motivo') {
       return Array.from(new Set(archivedResults.map(r => r.motivo).filter(Boolean))).sort();
     }
+    if (col === 'semana') {
+      return Array.from(new Set(archivedResults.map(r => r.semana).filter(Boolean))).sort();
+    }
     return [];
   };
 
@@ -1640,6 +1643,13 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         }
       }
 
+      // Filtro por semana
+      if (historySelectedFilters['semana']?.length > 0) {
+        if (!historySelectedFilters['semana'].includes(r.semana || '')) {
+          return false;
+        }
+      }
+
       return true;
     });
   }, [archivedResults, historySelectedFilters]);
@@ -1710,6 +1720,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     const data = archivedResults.map(r => ({
       'Rota': r.rota,
       'Data': formatDateBR(r.data || ''),
+      'Semana': r.semana || '',
       'Início': r.inicio || '',
       'Motorista': r.motorista || '',
       'Placa': r.placa || '',
@@ -2957,6 +2968,52 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                                               )}
                                           </th>
                                           <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center">Data</th>
+                                          <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center relative group">
+                                              <div className="flex items-center justify-center gap-1">
+                                                  <span>Semana</span>
+                                                  <button
+                                                    onClick={() => setHistoryActiveFilterCol(historyActiveFilterCol === 'semana' ? null : 'semana')}
+                                                    className={`p-1 rounded transition-all opacity-0 group-hover:opacity-100 ${
+                                                      historyActiveFilterCol === 'semana' || historySelectedFilters['semana']?.length > 0
+                                                        ? 'opacity-100 bg-primary-600 text-white'
+                                                        : 'hover:bg-slate-300 dark:hover:bg-slate-600'
+                                                    }`}
+                                                  >
+                                                    <Filter size={10} />
+                                                  </button>
+                                              </div>
+                                              {historyActiveFilterCol === 'semana' && (
+                                                <div className="absolute top-full left-0 mt-1 w-40 bg-white dark:bg-slate-700 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-600 overflow-hidden z-[100] animate-in fade-in slide-in-from-top-2">
+                                                    <div className="p-2 border-b dark:border-slate-600 flex justify-between items-center">
+                                                        <span className="text-[9px] font-black uppercase text-slate-600 dark:text-slate-400 px-2">Semana</span>
+                                                        {historySelectedFilters['semana']?.length > 0 && (
+                                                            <button
+                                                                onClick={() => setHistorySelectedFilters(prev => ({ ...prev, semana: [] }))}
+                                                                className="text-[8px] font-bold text-primary-600 hover:text-primary-700 uppercase px-2"
+                                                            >
+                                                                Limpar
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                    <div className="max-h-48 overflow-y-auto p-2 space-y-1">
+                                                        {getHistoryColUniqueValues('semana').map(s => (
+                                                            <button
+                                                                key={s}
+                                                                onClick={() => toggleHistoryColFilter('semana', s)}
+                                                                className={`w-full text-left px-3 py-2 rounded-lg text-[10px] font-bold transition-all flex items-center justify-between ${
+                                                                    historySelectedFilters['semana']?.includes(s)
+                                                                        ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400'
+                                                                        : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-600'
+                                                                }`}
+                                                            >
+                                                                {s}
+                                                                {historySelectedFilters['semana']?.includes(s) && <CheckCircle2 size={12} />}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                              )}
+                                          </th>
                                           <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center">Início</th>
                                           <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-left relative group">
                                               <div className="flex items-center justify-between">
@@ -3232,6 +3289,26 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                                                           className="cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 rounded px-1"
                                                       >
                                                           {r.data}
+                                                      </div>
+                                                  )}
+                                              </td>
+                                              <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center font-mono">
+                                                  {editingHistoryId === r.id && editingHistoryField === 'semana' ? (
+                                                      <input
+                                                          type="text"
+                                                          value={r.semana || ''}
+                                                          onChange={(e) => handleUpdateHistoryCell(r.id!, 'semana', e.target.value)}
+                                                          onBlur={() => { setEditingHistoryId(null); setEditingHistoryField(null); }}
+                                                          onKeyDown={(e) => { if (e.key === 'Enter') { (e.target as HTMLInputElement).blur(); } }}
+                                                          className="w-full bg-primary-100 dark:bg-primary-900/30 border-2 border-primary-500 px-2 py-1 font-bold outline-none"
+                                                          autoFocus
+                                                      />
+                                                  ) : (
+                                                      <div
+                                                          onClick={() => { setEditingHistoryId(r.id!); setEditingHistoryField('semana'); }}
+                                                          className="cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 rounded px-1"
+                                                      >
+                                                          {r.semana || '---'}
                                                       </div>
                                                   )}
                                               </td>
