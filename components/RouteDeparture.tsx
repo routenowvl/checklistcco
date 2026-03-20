@@ -1825,11 +1825,10 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     return result;
   }, [routes, colFilters, selectedFilters, isSortByTimeEnabled, userConfigs]);
 
-  // Calcula quantas rotas estão ocultas pelos filtros
-  const hiddenRoutesCount = routes.length - filteredRoutes.length;
-
-  // Cálculo dos indicadores GERAL e INTERNO
-  const performanceIndicators = useMemo(() => {
+  // Cálculo dos indicadores GERAL e INTERNO - memoizado para evitar re-renderização desnecessária
+  const [performanceIndicators, setPerformanceIndicators] = useState({ geral: '0.00', interno: '0.00' });
+  
+  useEffect(() => {
     // Usa TODAS as rotas do usuário, ignorando filtros de coluna
     const myOps = new Set(userConfigs.map(c => c.operacao));
     const allUserRoutes = routes.filter(r => {
@@ -1838,7 +1837,10 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     });
 
     const total = allUserRoutes.length;
-    if (total === 0) return { geral: 0, interno: 0 };
+    if (total === 0) {
+      setPerformanceIndicators({ geral: '0.00', interno: '0.00' });
+      return;
+    }
 
     // GERAL: (OK + PREVISTO) / total * 100
     const okPrevistoCount = allUserRoutes.filter(r =>
@@ -1855,8 +1857,14 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     const rotasSemJustificativa = total - rotasComJustificativa;
     const interno = ((rotasSemJustificativa / total) * 100).toFixed(2);
 
-    return { geral, interno };
-  }, [routes, userConfigs]);
+    // Só atualiza se os valores mudaram (evita re-renderização desnecessária)
+    setPerformanceIndicators(prev => {
+      if (prev.geral === geral && prev.interno === interno) {
+        return prev; // Sem mudança, não re-renderiza
+      }
+      return { geral, interno };
+    });
+  }, [routes.length, userConfigs.length]); // Apenas quantidade importa para estabilidade
 
   const handleSearchArchive = async () => {
     setIsSearchingArchive(true);
@@ -1903,11 +1911,6 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
               <p className={`text-[9px] font-bold uppercase tracking-widest flex items-center gap-2 ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>
                 <ShieldCheck size={12} className="text-emerald-500"/> Operador: {currentUser.name}
               </p>
-              {hiddenRoutesCount > 0 && (
-                <span className="text-[8px] font-black uppercase tracking-widest bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded border border-amber-500/30">
-                  {hiddenRoutesCount} rota(s) oculta(s) pelos filtros
-                </span>
-              )}
             </div>
           </div>
           {/* Indicadores GERAL e INTERNO */}
