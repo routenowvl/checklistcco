@@ -1202,6 +1202,18 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
       return;
     }
 
+    // Verifica se há alguma rota com status "Previsto"
+    const rotasPrevistas = filteredRoutes.filter(r => r.statusOp === 'Previsto');
+    if (rotasPrevistas.length > 0) {
+      alert(
+        `⚠️ Atenção!\n\n` +
+        `Existem ${rotasPrevistas.length} rota(s) com status "Previsto":\n\n` +
+        rotasPrevistas.map(r => `• ${r.rota} (${r.operacao})`).join('\n') +
+        `\n\nPor favor, ajuste todas as rotas antes de arquivar.`
+      );
+      return;
+    }
+
     if (!confirm(`Arquivar ${filteredRoutes.length} itens no histórico e limpar status de envio?`)) return;
 
     const token = await getAccessToken();
