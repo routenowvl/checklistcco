@@ -200,3 +200,52 @@ export function getBrazilDateFromISO(isoString: string): string {
 export function isTodayBrazil(isoString: string): boolean {
   return getBrazilDateFromISO(isoString) === getBrazilDate();
 }
+
+/**
+ * Calcula o número da semana com base na data, usando a mesma lógica do Excel:
+ * =SE(C3="";"";MAIÚSCULA(TEXTO(C3;"mmm"))&" S"&(1+(DIA(C3)>7)+(DIA(C3)>15)+(DIA(C3)>22)))
+ *
+ * Resultado: "JAN S1", "FEV S3", "MAR S4", etc.
+ *
+ * @param dateString Data no formato YYYY-MM-DD ou DD/MM/YYYY
+ * @returns String formatada como "MMM S#" (ex: "MAR S3") ou string vazia se data inválida
+ */
+export function getWeekString(dateString: string): string {
+  if (!dateString || dateString.trim() === '') return '';
+
+  // Tenta converter a data (pode ser YYYY-MM-DD ou DD/MM/YYYY)
+  let date: Date | null = null;
+
+  if (dateString.includes('/')) {
+    // Formato DD/MM/YYYY
+    const [day, month, year] = dateString.split('/').map(Number);
+    date = new Date(Number(year), Number(month) - 1, Number(day));
+  } else if (dateString.includes('-')) {
+    // Formato YYYY-MM-DD
+    const [year, month, day] = dateString.split('-').map(Number);
+    date = new Date(Number(year), Number(month) - 1, Number(day));
+  } else {
+    // Tenta parse direto
+    date = new Date(dateString);
+  }
+
+  // Verifica se a data é válida
+  if (isNaN(date.getTime())) return '';
+
+  // Lógica do Excel:
+  // 1 + (DIA(C3)>7) + (DIA(C3)>15) + (DIA(C3)>22)
+  // Dia 1-7: 1 + 0 + 0 + 0 = 1 (S1)
+  // Dia 8-15: 1 + 1 + 0 + 0 = 2 (S2)
+  // Dia 16-22: 1 + 1 + 1 + 0 = 3 (S3)
+  // Dia 23-31: 1 + 1 + 1 + 1 = 4 (S4)
+  const day = date.getDate();
+  const weekNumber = 1 + (day > 7 ? 1 : 0) + (day > 15 ? 1 : 0) + (day > 22 ? 1 : 0);
+
+  // MAIÚSCULA(TEXTO(C3;"mmm")) - abreviação do mês em maiúsculas
+  const monthAbbr = date.toLocaleDateString('pt-BR', { month: 'short' }).toUpperCase();
+
+  // Remove o ponto final se existir (algumas locales adicionam)
+  const monthAbbrClean = monthAbbr.replace('.', '');
+
+  return `${monthAbbrClean} S${weekNumber}`;
+}

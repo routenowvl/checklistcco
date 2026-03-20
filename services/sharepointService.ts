@@ -3,7 +3,7 @@
 // Correct models: 'gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-2.5-flash-image', etc.
 
 import { SPTask, SPOperation, SPStatus, Task, OperationStatus, HistoryRecord, RouteDeparture, RouteOperationMapping, RouteConfig } from '../types';
-import { getBrazilDate, getBrazilISOString } from '../utils/dateUtils';
+import { getBrazilDate, getBrazilISOString, getWeekString } from '../utils/dateUtils';
 
 export interface DailyWarning {
   id: string;
@@ -662,11 +662,14 @@ export const SharePointService = {
 
       const result = (data.value || []).map((item: any) => {
         const f = item.fields;
+        const dataStr = f[resolveFieldName(mapping, 'DataOperacao')] ? f[resolveFieldName(mapping, 'DataOperacao')].split('T')[0] : "";
+        const semanaFromSharePoint = f[resolveFieldName(mapping, 'Semana')] || "";
+        
         return {
           id: String(item.id),
-          semana: f[resolveFieldName(mapping, 'Semana')] || "",
+          semana: semanaFromSharePoint || getWeekString(dataStr), // Calcula se não vier do SharePoint
           rota: f.Title || "",
-          data: f[resolveFieldName(mapping, 'DataOperacao')] ? f[resolveFieldName(mapping, 'DataOperacao')].split('T')[0] : "",
+          data: dataStr,
           inicio: f[resolveFieldName(mapping, 'HorarioInicio')] || "",
           motorista: f[resolveFieldName(mapping, 'Motorista')] || "",
           placa: f[resolveFieldName(mapping, 'Placa')] || "",
@@ -708,11 +711,14 @@ export const SharePointService = {
       
       const results = (data.value || []).map((item: any) => {
         const f = item.fields;
+        const dataStr = f[colData] ? f[colData].split('T')[0] : "";
+        const semanaFromSharePoint = f[resolveFieldName(mapping, 'Semana')] || "";
+        
         return {
           id: String(item.id),
-          semana: f[resolveFieldName(mapping, 'Semana')] || "",
+          semana: semanaFromSharePoint || getWeekString(dataStr), // Calcula se não vier do SharePoint
           rota: f.Title || "",
-          data: f[colData] ? f[colData].split('T')[0] : "",
+          data: dataStr,
           inicio: f[resolveFieldName(mapping, 'HorarioInicio')] || "",
           motorista: f[resolveFieldName(mapping, 'Motorista')] || "",
           placa: f[resolveFieldName(mapping, 'Placa')] || "",
@@ -741,7 +747,28 @@ export const SharePointService = {
     const siteId = await getResolvedSiteId(token);
     const list = await findListByIdOrName(siteId, 'Dados_Saida_de_rotas', token);
     const { mapping, internalNames, readOnly } = await getListColumnMapping(siteId, list.id, token, true);
-    const raw: any = { Title: departure.rota, Semana: departure.semana, DataOperacao: departure.data ? new Date(departure.data + 'T12:00:00Z').toISOString() : null, HorarioInicio: departure.inicio, Motorista: departure.motorista, Placa: departure.placa, HorarioSaida: departure.saida, MotivoAtraso: departure.motivo, Observacao: departure.observacao, StatusGeral: departure.statusGeral, Aviso: departure.aviso, Operacao: departure.operacao, StatusOp: departure.statusOp, TempGab: departure.tempo, ChecklistMotorista: departure.checklistMotorista || '' };
+    
+    // Calcula a semana com base na data, usando a mesma lógica do Excel
+    // Se departure.semana já existir, usa; caso contrário, calcula automaticamente
+    const semana = departure.semana || getWeekString(departure.data);
+    
+    const raw: any = { 
+        Title: departure.rota, 
+        Semana: semana, 
+        DataOperacao: departure.data ? new Date(departure.data + 'T12:00:00Z').toISOString() : null, 
+        HorarioInicio: departure.inicio, 
+        Motorista: departure.motorista, 
+        Placa: departure.placa, 
+        HorarioSaida: departure.saida, 
+        MotivoAtraso: departure.motivo, 
+        Observacao: departure.observacao, 
+        StatusGeral: departure.statusGeral, 
+        Aviso: departure.aviso, 
+        Operacao: departure.operacao, 
+        StatusOp: departure.statusOp, 
+        TempGab: departure.tempo, 
+        ChecklistMotorista: departure.checklistMotorista || '' 
+    };
 
     const fields: any = {};
     Object.keys(raw).forEach(k => {
@@ -753,7 +780,7 @@ export const SharePointService = {
 
     const isUpdate = departure.id && departure.id !== "" && departure.id !== "0" && !isNaN(Number(departure.id));
     let result: string;
-    
+
     if (isUpdate) {
       await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${departure.id}/fields`, token, { method: 'PATCH', body: JSON.stringify(fields) });
       result = departure.id;
@@ -761,7 +788,7 @@ export const SharePointService = {
       const res = await graphFetch(`/sites/${siteId}/lists/${list.id}/items`, token, { method: 'POST', body: JSON.stringify({ fields }) });
       result = String(res.id);
     }
-    
+
     // Invalida cache após atualização
     clearCache('departures');
     return result;
@@ -789,7 +816,27 @@ export const SharePointService = {
 
     for (const item of items) {
         try {
-            const raw: any = { Title: item.rota, Semana: item.semana, DataOperacao: item.data ? new Date(item.data + 'T12:00:00Z').toISOString() : null, HorarioInicio: item.inicio, Motorista: item.motorista, Placa: item.placa, HorarioSaida: item.saida, MotivoAtraso: item.motivo, Observacao: item.observacao, StatusGeral: item.statusGeral, Aviso: item.aviso, Operacao: item.operacao, StatusOp: item.statusOp, TempGab: item.tempo, ChecklistMotorista: item.checklistMotorista || '' };
+            // Calcula a semana com base na data, usando a mesma lógica do Excel
+            // Se item.semana já existir, usa; caso contrário, calcula automaticamente
+            const semana = item.semana || getWeekString(item.data);
+            
+            const raw: any = { 
+                Title: item.rota, 
+                Semana: semana, 
+                DataOperacao: item.data ? new Date(item.data + 'T12:00:00Z').toISOString() : null, 
+                HorarioInicio: item.inicio, 
+                Motorista: item.motorista, 
+                Placa: item.placa, 
+                HorarioSaida: item.saida, 
+                MotivoAtraso: item.motivo, 
+                Observacao: item.observacao, 
+                StatusGeral: item.statusGeral, 
+                Aviso: item.aviso, 
+                Operacao: item.operacao, 
+                StatusOp: item.statusOp, 
+                TempGab: item.tempo, 
+                ChecklistMotorista: item.checklistMotorista || '' 
+            };
             const histFields: any = {};
             Object.keys(raw).forEach(k => { const int = resolveFieldName(histMapping, k); if (histInternals.has(int)) histFields[int] = raw[k]; });
             const postRes = await graphFetch(`/sites/${siteId}/lists/${historyListId}/items`, token, { method: 'POST', body: JSON.stringify({ fields: histFields }) });
