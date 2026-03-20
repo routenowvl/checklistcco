@@ -4,7 +4,7 @@ import { RouteDeparture, User, RouteOperationMapping, RouteConfig } from '../typ
 import { SharePointService } from '../services/sharepointService';
 import { getValidToken } from '../services/tokenService';
 import * as XLSX from 'xlsx';
-import { getBrazilDate, getBrazilHours, getBrazilMinutes, toBrazilDate } from '../utils/dateUtils';
+import { getBrazilDate, getBrazilHours, getBrazilMinutes, toBrazilDate, getWeekString } from '../utils/dateUtils';
 import {
   Clock, X, Loader2, RefreshCw, ShieldCheck,
   CheckCircle2, ChevronDown,
@@ -110,6 +110,17 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   const [isHistoryFullscreen, setIsHistoryFullscreen] = useState(false);
   const [editingHistoryId, setEditingHistoryId] = useState<string | null>(null);
   const [editingHistoryField, setEditingHistoryField] = useState<keyof RouteDeparture | null>(null);
+
+  // Estados para modal de adicionar rota
+  const [isAddRouteModalOpen, setIsAddRouteModalOpen] = useState(false);
+  const [isAddingRoute, setIsAddingRoute] = useState(false);
+  const [newRouteData, setNewRouteData] = useState<{ rota: string; inicio: string; motorista: string; placa: string; operacao: string }>({
+    rota: '',
+    inicio: '',
+    motorista: '',
+    placa: '',
+    operacao: ''
+  });
   
   // Estados para filtros do histórico
   const [historyColFilters, setHistoryColFilters] = useState<Record<string, string[]>>({});
@@ -1254,6 +1265,57 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     }
   };
 
+  const handleAddRoute = async () => {
+    // Validação básica
+    if (!newRouteData.rota || !newRouteData.inicio || !newRouteData.motorista || !newRouteData.placa || !newRouteData.operacao) {
+      alert('Preencha todos os campos obrigatórios!');
+      return;
+    }
+
+    setIsAddingRoute(true);
+    const token = await getAccessToken();
+
+    try {
+      const config = userConfigs.find(c => c.operacao === newRouteData.operacao);
+      const { status, gap } = calculateStatusWithTolerance(newRouteData.inicio, '', config?.tolerancia || "00:00:00", getBrazilDate());
+
+      const newRoute: RouteDeparture = {
+        id: '',
+        semana: getWeekString(getBrazilDate()),
+        rota: newRouteData.rota,
+        data: getBrazilDate(),
+        inicio: newRouteData.inicio,
+        motorista: newRouteData.motorista,
+        placa: newRouteData.placa,
+        saida: '',
+        motivo: '',
+        observacao: '',
+        statusGeral: '',
+        aviso: 'NÃO',
+        operacao: newRouteData.operacao,
+        statusOp: status,
+        tempo: gap,
+        createdAt: new Date().toISOString()
+      };
+
+      const newId = await SharePointService.updateDeparture(token, newRoute);
+      
+      // Recarrega as rotas para mostrar a nova
+      await loadData(true);
+      
+      // Limpa o formulário e fecha o modal
+      setNewRouteData({ rota: '', inicio: '', motorista: '', placa: '', operacao: '' });
+      setIsAddRouteModalOpen(false);
+      
+      alert('Rota adicionada com sucesso!');
+    } catch (e: any) {
+      console.error('[ADD_ROUTE] Erro:', e.message);
+      alert(`Erro ao adicionar rota: ${e.message}`);
+    } finally {
+      setIsAddingRoute(false);
+    }
+  };
+
   const toggleSelection = (id: string) => {
     setSelectedIds(prev => {
       const next = new Set(prev);
@@ -1905,7 +1967,10 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
           <div className={`p-3 rounded-2xl shadow-lg ${isDarkMode ? 'bg-primary-600 text-white' : 'bg-primary-500 text-white'}`}><Clock size={20} /></div>
           <div>
             <h2 className={`text-xl font-black uppercase tracking-tight flex items-center gap-3 ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>
-              Controle de Saídas {isSyncing && <Loader2 size={16} className={`animate-spin ${isDarkMode ? 'text-primary-500' : 'text-primary-600'}`}/>}
+              Controle de Saídas 
+              <span className="inline-flex w-4 h-4">
+                {isSyncing && <Loader2 size={16} className={`animate-spin ${isDarkMode ? 'text-primary-500' : 'text-primary-600'}`}/>}
+              </span>
             </h2>
             <div className="flex items-center gap-2 mt-1">
               <p className={`text-[9px] font-bold uppercase tracking-widest flex items-center gap-2 ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>
@@ -1983,6 +2048,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
               </div>
             )}
           </div>
+          <button onClick={() => setIsAddRouteModalOpen(true)} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] tracking-wide transition-all shadow-sm ${isDarkMode ? 'bg-emerald-700 text-white hover:bg-emerald-600 border-emerald-600' : 'bg-emerald-600 text-white hover:bg-emerald-700 border-emerald-600'}`}><CheckCircle2 size={16} /> Adicionar Rota</button>
           <button onClick={() => setIsHistoryModalOpen(true)} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] tracking-wide transition-all shadow-sm ${isDarkMode ? 'bg-slate-800 text-slate-300 hover:bg-slate-700 border-slate-700' : 'bg-white text-slate-800 hover:bg-slate-50 hover:border-slate-500 border-slate-400'}`}><Database size={16} /> Histórico</button>
           <button onClick={loadData} className={`p-2 rounded-lg transition-all border shadow-sm ${isDarkMode ? 'text-slate-400 hover:text-white hover:bg-slate-800 border-slate-700 bg-slate-900' : 'text-slate-700 hover:text-slate-900 hover:bg-slate-50 hover:border-slate-500 border-slate-400 bg-white'}`}><RefreshCw size={18} /></button>
           <button onClick={handleArchiveAll} disabled={isSyncing || filteredRoutes.length === 0} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] tracking-wide transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed ${isDarkMode ? 'bg-slate-800 text-slate-300 hover:bg-slate-700 border-slate-700' : 'bg-white text-slate-800 hover:bg-slate-50 hover:border-slate-500 border-slate-400'}`}><Archive size={16} /> Arquivar</button>
@@ -2728,6 +2794,114 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                   <button onClick={() => { setIsMappingModalOpen(false); setGhostRow(prev => ({...prev, rota: ''})); }} className="w-full mt-6 py-4 text-[10px] font-black uppercase text-slate-400">Cancelar</button>
               </div>
           </div>
+      )}
+
+      {/* Modal de Adicionar Rota */}
+      {isAddRouteModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[200] flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-[2.5rem] shadow-2xl w-full max-w-lg">
+            <div className="bg-[#1e293b] p-6 flex justify-between items-center text-white">
+              <div className="flex items-center gap-3">
+                <CheckCircle2 size={24} />
+                <h3 className="font-black uppercase tracking-widest text-base">Adicionar Rota</h3>
+              </div>
+              <button onClick={() => setIsAddRouteModalOpen(false)} className="p-2 hover:bg-slate-700 rounded-lg transition-colors">
+                <X size={24} />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              {/* Operação */}
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">
+                  Operação *
+                </label>
+                <select
+                  value={newRouteData.operacao}
+                  onChange={e => setNewRouteData({ ...newRouteData, operacao: e.target.value })}
+                  className="w-full p-3 border dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-sm font-bold outline-none dark:text-white focus:border-primary-500 transition-colors"
+                >
+                  <option value="">Selecione a operação</option>
+                  {userConfigs.map(config => (
+                    <option key={config.operacao} value={config.operacao}>{config.operacao}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Rota */}
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">
+                  Rota *
+                </label>
+                <input
+                  type="text"
+                  value={newRouteData.rota}
+                  onChange={e => setNewRouteData({ ...newRouteData, rota: e.target.value })}
+                  placeholder="Ex: ROTA 01"
+                  className="w-full p-3 border dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-sm font-bold outline-none dark:text-white focus:border-primary-500 transition-colors"
+                />
+              </div>
+
+              {/* Início */}
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">
+                  Horário de Início *
+                </label>
+                <input
+                  type="time"
+                  value={newRouteData.inicio}
+                  onChange={e => setNewRouteData({ ...newRouteData, inicio: e.target.value })}
+                  className="w-full p-3 border dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-sm font-bold outline-none dark:text-white focus:border-primary-500 transition-colors"
+                />
+              </div>
+
+              {/* Motorista */}
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">
+                  Motorista *
+                </label>
+                <input
+                  type="text"
+                  value={newRouteData.motorista}
+                  onChange={e => setNewRouteData({ ...newRouteData, motorista: e.target.value })}
+                  placeholder="Nome do motorista"
+                  className="w-full p-3 border dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-sm font-bold outline-none dark:text-white focus:border-primary-500 transition-colors"
+                />
+              </div>
+
+              {/* Placa */}
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">
+                  Placa *
+                </label>
+                <input
+                  type="text"
+                  value={newRouteData.placa}
+                  onChange={e => setNewRouteData({ ...newRouteData, placa: e.target.value.toUpperCase() })}
+                  placeholder="Ex: ABC1D23"
+                  className="w-full p-3 border dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-sm font-bold outline-none dark:text-white focus:border-primary-500 transition-colors uppercase"
+                />
+              </div>
+
+              {/* Botões de ação */}
+              <div className="flex gap-3 pt-4">
+                <button
+                  onClick={() => setIsAddRouteModalOpen(false)}
+                  className="flex-1 py-3 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-black uppercase text-[11px] rounded-xl hover:bg-slate-300 dark:hover:bg-slate-700 transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={handleAddRoute}
+                  disabled={isAddingRoute}
+                  className="flex-1 py-3 bg-primary-600 text-white font-black uppercase text-[11px] rounded-xl hover:bg-primary-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                  {isAddingRoute ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
+                  {isAddingRoute ? 'Adicionando...' : 'Lançar Rota'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {isHistoryModalOpen && (
