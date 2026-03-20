@@ -172,7 +172,6 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     return new Set();
   });
   const [contextMenu, setContextMenu] = useState<{ visible: boolean; x: number; y: number; col: string | null }>({ visible: false, x: 0, y: 0, col: null });
-  const [isHiddenColsMenuOpen, setIsHiddenColsMenuOpen] = useState(false);
   const [checklistTooltip, setChecklistTooltip] = useState<{ routeId: string; content: string } | null>(null);
   const [copiedGeralStatus, setCopiedGeralStatus] = useState<string | null>(null);
   const [hoveredGeralCell, setHoveredGeralCell] = useState<string | null>(null);
@@ -190,7 +189,6 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   const resizingRef = useRef<{ col: string; startX: number; startWidth: number } | null>(null);
   const filterDropdownRef = useRef<HTMLDivElement>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
-  const hiddenColsMenuRef = useRef<HTMLDivElement>(null);
   const tooltipTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const getAccessToken = async (): Promise<string> => {
@@ -559,10 +557,6 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
       // Fechar menu de contexto ao clicar fora
       if (contextMenuRef.current && !contextMenuRef.current.contains(event.target as Node)) {
         setContextMenu(prev => ({ ...prev, visible: false }));
-      }
-      // Fechar menu de colunas ocultas ao clicar fora
-      if (hiddenColsMenuRef.current && !hiddenColsMenuRef.current.contains(event.target as Node)) {
-        setIsHiddenColsMenuOpen(false);
       }
       // Fechar tooltip do checklist
       if (checklistTooltip) {
@@ -2001,56 +1995,8 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
             {isDarkMode ? <Sun size={18} /> : <Moon size={18} />}
           </button>
           <button onClick={() => setIsSortByTimeEnabled(!isSortByTimeEnabled)} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] transition-all shadow-sm ${isSortByTimeEnabled ? 'bg-primary-600 text-white border-primary-600' : isDarkMode ? 'bg-slate-800 text-slate-300 border-slate-700' : 'bg-white text-slate-800 border-slate-400 hover:bg-slate-50 hover:border-slate-500'}`}><SortAsc size={16} /> Horário</button>
-          <div className="relative">
-            <button
-              onClick={() => setIsHiddenColsMenuOpen(!isHiddenColsMenuOpen)}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] transition-all relative shadow-sm ${hiddenColumns.size > 0 ? 'bg-amber-600 text-white border-amber-600' : isDarkMode ? 'bg-slate-800 text-slate-300 border-slate-700' : 'bg-white text-slate-800 border-slate-400 hover:bg-slate-50 hover:border-slate-500'}`}
-            >
-              <Settings2 size={16} /> Colunas
-              {hiddenColumns.size > 0 && (
-                <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[8px] font-black rounded-full flex items-center justify-center">
-                  {hiddenColumns.size}
-                </span>
-              )}
-            </button>
-            {isHiddenColsMenuOpen && (
-              <div
-                ref={hiddenColsMenuRef}
-                className="absolute right-0 top-full mt-2 z-[1000] bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-2xl py-2 min-w-[200px] animate-in fade-in zoom-in-95 duration-150"
-              >
-                <div className="px-3 py-2 border-b border-slate-100 dark:border-slate-700">
-                  <p className="text-[10px] font-black uppercase text-slate-400">Colunas Ocultas ({hiddenColumns.size})</p>
-                </div>
-                {hiddenColumns.size === 0 ? (
-                  <div className="px-4 py-3 text-[11px] text-slate-400 font-bold text-center">Todas as colunas visíveis</div>
-                ) : (
-                  Array.from(hiddenColumns).map(col => (
-                    <button
-                      key={col}
-                      onClick={() => toggleColumnVisibility(col)}
-                      className="w-full px-4 py-2 text-left text-[11px] font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors flex items-center justify-between"
-                    >
-                      <span className="uppercase">{col}</span>
-                      <Check size={14} className="text-green-500" />
-                    </button>
-                  ))
-                )}
-                {hiddenColumns.size > 0 && (
-                  <div className="border-t border-slate-100 dark:border-slate-700 mt-1 pt-1">
-                    <button
-                      onClick={resetColumnSettings}
-                      className="w-full px-4 py-2 text-left text-[11px] font-bold text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors flex items-center gap-2"
-                    >
-                      <RefreshCw size={14} /> Resetar Tudo
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-          <button onClick={() => setIsAddRouteModalOpen(true)} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] tracking-wide transition-all shadow-sm ${isDarkMode ? 'bg-emerald-700 text-white hover:bg-emerald-600 border-emerald-600' : 'bg-emerald-600 text-white hover:bg-emerald-700 border-emerald-600'}`}><CheckCircle2 size={16} /> Adicionar Rota</button>
+          <button onClick={() => setIsAddRouteModalOpen(true)} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] tracking-wide transition-all shadow-sm ${isDarkMode ? 'bg-slate-800 text-slate-300 hover:bg-slate-700 border-slate-700' : 'bg-white text-slate-800 hover:bg-slate-50 hover:border-slate-500 border-slate-400'}`}><CheckCircle2 size={16} /> Adicionar Rota</button>
           <button onClick={() => setIsHistoryModalOpen(true)} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] tracking-wide transition-all shadow-sm ${isDarkMode ? 'bg-slate-800 text-slate-300 hover:bg-slate-700 border-slate-700' : 'bg-white text-slate-800 hover:bg-slate-50 hover:border-slate-500 border-slate-400'}`}><Database size={16} /> Histórico</button>
-          <button onClick={loadData} className={`p-2 rounded-lg transition-all border shadow-sm ${isDarkMode ? 'text-slate-400 hover:text-white hover:bg-slate-800 border-slate-700 bg-slate-900' : 'text-slate-700 hover:text-slate-900 hover:bg-slate-50 hover:border-slate-500 border-slate-400 bg-white'}`}><RefreshCw size={18} /></button>
           <button onClick={handleArchiveAll} disabled={isSyncing || filteredRoutes.length === 0} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] tracking-wide transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed ${isDarkMode ? 'bg-slate-800 text-slate-300 hover:bg-slate-700 border-slate-700' : 'bg-white text-slate-800 hover:bg-slate-50 hover:border-slate-500 border-slate-400'}`}><Archive size={16} /> Arquivar</button>
         </div>
       </div>
