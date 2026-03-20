@@ -142,7 +142,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         console.log('[ROUTE_DEPARTURE] Ordenação por horário restaurada:', JSON.parse(saved));
         return JSON.parse(saved);
     }
-    return false;
+    return true; // Padrão: ativado ao abrir a tela
   });
   const [colWidths, setColWidths] = useState<Record<string, number>>(() => {
     const saved = sessionStorage.getItem('route_departure_col_widths');
@@ -1201,6 +1201,9 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
     const token = await getAccessToken();
     setIsSyncing(true);
+    
+    // Desmarca a opção HORÁRIO após arquivar
+    setIsSortByTimeEnabled(false);
 
     try {
       // Passo 1: Mover rotas para o histórico
