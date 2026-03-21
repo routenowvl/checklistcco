@@ -3,7 +3,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Task, OperationStatus, User } from '../types';
 import { SharePointService, DailyWarning } from '../services/sharepointService';
 import { getValidToken } from '../services/tokenService';
-import { getBrazilDate } from '../utils/dateUtils';
+import { getBrazilDate, getBrazilISOString } from '../utils/dateUtils';
 import {
   Maximize2, Minimize2, Loader2, Database,
   ShieldCheck, AlertCircle, RefreshCw, CheckCircle,
