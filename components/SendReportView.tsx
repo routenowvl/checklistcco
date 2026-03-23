@@ -47,12 +47,32 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
     try {
       console.log('[FETCH_ALL] Buscando dados completos...', forceRefresh ? '(force refresh)' : '');
+      console.log('[FETCH_ALL] Usuário logado:', currentUser.email);
+      
       const [depData, configs] = await Promise.all([
         SharePointService.getDepartures(token, forceRefresh),
         SharePointService.getRouteConfigs(token, currentUser.email, forceRefresh)
       ]);
 
-      setDepartures(depData);
+      console.log('[FETCH_ALL] Total de rotas brutas do SharePoint:', depData?.length || 0);
+      console.log('[FETCH_ALL] Configurações carregadas:', configs?.length || 0);
+      console.log('[FETCH_ALL] Operações do usuário:', configs?.map(c => c.operacao));
+
+      // FILTRA rotas APENAS das operações do usuário logado
+      const myOps = new Set((configs || []).map(c => c.operacao));
+      const filteredRoutes = (depData || []).filter(route => {
+        // Se não houver operações configuradas, retorna array vazio (segurança)
+        if (myOps.size === 0) {
+          console.warn('[FETCH_ALL] ⚠️ Nenhuma operação configurada para este usuário - retornando array vazio');
+          return false;
+        }
+        return myOps.has(route.operacao);
+      });
+
+      console.log('[FETCH_ALL] Rotas filtradas por usuário:', filteredRoutes.length);
+      console.log('[FETCH_ALL] Operações nas rotas filtradas:', Array.from(new Set(filteredRoutes.map(r => r.operacao))));
+
+      setDepartures(filteredRoutes);
       setUserConfigs(configs);
       setLastSync(new Date());
       console.log('[FETCH_ALL] Dados atualizados com sucesso');
@@ -115,11 +135,25 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       return;
     }
 
+    // VALIDAÇÃO DE SEGURANÇA: Verifica se a operação selecionada pertence ao usuário
+    const myOps = new Set(userConfigs.map(c => c.operacao));
+    if (!myOps.has(selectedOperacao)) {
+      console.error(`[SEND_DEPARTURES_BLOCKED] Usuário tentou enviar operação não pertencente: ${selectedOperacao}`);
+      setSendError(`Erro: Você não tem permissão para enviar esta operação.`);
+      setTimeout(() => setSendError(null), 5000);
+      return;
+    }
+
     setIsSending(true);
     setSendError(null);
 
     const selectedDepartures = departures.filter(d => d.operacao === selectedOperacao);
     const config = userConfigs.find(c => c.operacao === selectedOperacao);
+
+    console.log('[SEND_DEPARTURES] === ENVIANDO SAÍDAS ===');
+    console.log('[SEND_DEPARTURES] Operação:', selectedOperacao);
+    console.log('[SEND_DEPARTURES] Rotas encontradas:', selectedDepartures.length);
+    console.log('[SEND_DEPARTURES] Config:', config);
 
     if (selectedDepartures.length === 0) {
       setSendError("Nenhuma saída encontrada para esta operação.");
@@ -266,12 +300,28 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       return;
     }
 
+    // VALIDAÇÃO DE SEGURANÇA: Verifica se a operação selecionada pertence ao usuário
+    const myOps = new Set(userConfigs.map(c => c.operacao));
+    if (!myOps.has(selectedOperacaoNC)) {
+      console.error(`[SEND_NAO_COLETA_BLOCKED] Usuário tentou enviar operação não pertencente: ${selectedOperacaoNC}`);
+      setSendError(`Erro: Você não tem permissão para enviar esta operação.`);
+      setTimeout(() => setSendError(null), 5000);
+      return;
+    }
+
     setIsSending(true);
     setSendError(null);
 
     const selectedDepartures = departures.filter(d => d.operacao === selectedOperacaoNC);
     const config = userConfigs.find(c => c.operacao === selectedOperacaoNC);
+
+    console.log('[SEND_NAO_COLETA] === ENVIANDO NÃO COLETAS ===');
+    console.log('[SEND_NAO_COLETA] Operação:', selectedOperacaoNC);
+    console.log('[SEND_NAO_COLETA] Total de rotas:', selectedDepartures.length);
+
     const nonCollections = selectedDepartures.filter(d => d.statusGeral === 'NOK');
+
+    console.log('[SEND_NAO_COLETA] Não coletas encontradas:', nonCollections.length);
 
     if (nonCollections.length === 0) {
       setSendError("Nenhuma não coleta encontrada para esta operação.");
@@ -411,8 +461,26 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
   // Função para enviar resumo GERAL de todas as operações
   const handleSendSummary = async () => {
-    if (departures.length === 0) {
-      setSendError("Não há rotas para enviar.");
+    // FILTRA rotas APENAS das operações do usuário logado (validação de segurança)
+    const myOps = new Set(userConfigs.map(c => c.operacao));
+    
+    console.log('[RESUMO_GERAL] === INICIANDO ENVIO DE RESUMO ===');
+    console.log('[RESUMO_GERAL] Operações configuradas para este usuário:', userConfigs.map(c => c.operacao));
+    console.log('[RESUMO_GERAL] Total de rotas no estado departures:', departures.length);
+    
+    const userRoutes = departures.filter(r => {
+      const pertence = !r.operacao || myOps.has(r.operacao);
+      if (!pertence) {
+        console.log(`[RESUMO_GERAL] 🚫 Rota ${r.rota} da operação ${r.operacao} NÃO pertence a este usuário - será ignorada`);
+      }
+      return pertence;
+    });
+
+    console.log('[RESUMO_GERAL] ✅ Rotas filtradas para envio (apenas do usuário):', userRoutes.length);
+    console.log('[RESUMO_GERAL] Operações nas rotas filtradas:', Array.from(new Set(userRoutes.map(r => r.operacao))));
+
+    if (userRoutes.length === 0) {
+      setSendError("Não há rotas das suas operações para enviar.");
       setTimeout(() => setSendError(null), 3000);
       return;
     }
@@ -422,21 +490,28 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
     // Agrupa rotas por operação (apenas do usuário logado)
     const routesByOperation: Record<string, RouteDeparture[]> = {};
-    departures.forEach(r => {
+    userRoutes.forEach(r => {
       if (!routesByOperation[r.operacao]) {
         routesByOperation[r.operacao] = [];
       }
       routesByOperation[r.operacao].push(r);
     });
 
-    // Prepara payload com todas as operações
+    console.log('[RESUMO_GERAL] 📦 Operações sendo enviadas:', Object.keys(routesByOperation));
+    console.log('[RESUMO_GERAL] 📊 Total de rotas por operação:', 
+      Object.entries(routesByOperation).map(([op, rotas]) => `${op}: ${rotas.length}`)
+    );
+
+    // Prepara payload com todas as operações DO USUÁRIO
     const payload = {
       tipo: "RESUMO_GERAL",  // Tipo para resumo geral de todas as operações
       usuario: currentUser.email,
       dataEnvio: new Date().toISOString(),
-      totalRotas: departures.length,
+      totalRotas: userRoutes.length,
       operacoes: Object.keys(routesByOperation).length,
-      rotasPorOperacao: Object.entries(routesByOperation).map(([operacao, rotas]) => {
+      rotasPorOperacao: Object.entries(routesByOperation)
+        .filter(([operacao, _]) => myOps.has(operacao)) // FILTRO EXTRA DE SEGURANÇA
+        .map(([operacao, rotas]) => {
         const config = userConfigs.find(c => c.operacao === operacao);
         return {
           operacao: operacao,
@@ -462,6 +537,18 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
         };
       })
     };
+
+    // LOG FINAL DE CONFIRMAÇÃO ANTES DO ENVIO
+    console.log('[RESUMO_GERAL] ========================================');
+    console.log('[RESUMO_GERAL] 📋 RESUMO FINAL DO PAYLOAD:');
+    console.log('[RESUMO_GERAL]    Usuário:', currentUser.email);
+    console.log('[RESUMO_GERAL]    Total de rotas:', payload.totalRotas);
+    console.log('[RESUMO_GERAL]    Total de operações:', payload.operacoes);
+    console.log('[RESUMO_GERAL]    Operações sendo enviadas:');
+    payload.rotasPorOperacao.forEach((op: any) => {
+      console.log(`[RESUMO_GERAL]      - ${op.operacao}: ${op.totalRotas} rotas`);
+    });
+    console.log('[RESUMO_GERAL] ========================================');
 
     console.log('[RESUMO_GERAL] Enviando payload:', payload);
 

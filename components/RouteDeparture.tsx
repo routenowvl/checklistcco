@@ -1074,24 +1074,42 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     if (!isBackgroundRefresh) {
       setIsLoading(true);
     }
-    
+
     try {
       console.log('[LOAD_DATA] Buscando dados atualizados...', isBackgroundRefresh ? '(segundo plano)' : '(inicial)');
+      console.log('[LOAD_DATA] Usuário logado:', currentUser.email);
+      
       const [configs, mappings, spData] = await Promise.all([
         SharePointService.getRouteConfigs(token, currentUser.email, true), // force refresh
         SharePointService.getRouteOperationMappings(token),
         SharePointService.getDepartures(token, true) // force refresh
       ]);
+      
+      console.log('[LOAD_DATA] Configurações carregadas:', configs?.length || 0);
+      console.log('[LOAD_DATA] Operações do usuário:', configs?.map(c => c.operacao));
+      console.log('[LOAD_DATA] Total de rotas brutas do SharePoint:', spData?.length || 0);
+      
       setUserConfigs(configs || []);
       setRouteMappings(mappings || []);
+
+      // Filtra rotas APENAS das operações do usuário logado
+      const myOps = new Set((configs || []).map(c => c.operacao));
+      const filteredByUser = (spData || []).filter(route => {
+        // Se não houver operações configuradas, retorna todas (fallback)
+        if (myOps.size === 0) return true;
+        return myOps.has(route.operacao);
+      });
       
-      // Recalcula status e tempo para todas as rotas carregadas
-      const recalculatedRoutes = (spData || []).map(route => {
+      console.log('[LOAD_DATA] Rotas filtradas por usuário:', filteredByUser.length);
+      console.log('[LOAD_DATA] Operações nas rotas filtradas:', Array.from(new Set(filteredByUser.map(r => r.operacao))));
+
+      // Recalcula status e tempo para todas as rotas FILTRADAS
+      const recalculatedRoutes = filteredByUser.map(route => {
         const config = configs?.find(c => c.operacao === route.operacao);
         const { status, gap } = calculateStatusWithTolerance(route.inicio || '', route.saida || '', config?.tolerancia || "00:00:00", route.data || '');
         return { ...route, statusOp: status, tempo: gap };
       });
-      
+
       setRoutes(recalculatedRoutes);
       console.log('[LOAD_DATA] Dados carregados com sucesso');
 
@@ -1141,11 +1159,12 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   useEffect(() => {
     const refreshInterval = setInterval(() => {
       console.log('[POLLING_ROUTE_DEPARTURE] Atualização automática de dados (segundo plano)');
+      console.log('[POLLING_ROUTE_DEPARTURE] Usuário:', currentUser.email);
       loadData(true); // true = background refresh
     }, 10000);
 
     return () => clearInterval(refreshInterval);
-  }, []);
+  }, [currentUser]);
 
   // Persistir configurações da tabela no sessionStorage
   useEffect(() => {
@@ -1170,6 +1189,18 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
   const handleDeleteRoute = async (id: string) => {
     if (!confirm('Deseja excluir permanentemente esta rota do SharePoint?')) return;
+    
+    // VALIDAÇÃO CRÍTICA: Só permite excluir rotas que pertencem às operações do usuário logado
+    const routeToDelete = routes.find(r => r.id === id);
+    if (routeToDelete && routeToDelete.operacao) {
+        const myOps = new Set(userConfigs.map(c => c.operacao));
+        if (!myOps.has(routeToDelete.operacao)) {
+            console.error('[DELETE_BLOCKED] Usuário tentou excluir rota de operação não pertencente:', routeToDelete.operacao);
+            alert('⚠️ Erro: Você não tem permissão para excluir esta rota.');
+            return;
+        }
+    }
+    
     const token = await getAccessToken();
     setIsSyncing(true);
     try {
@@ -1182,12 +1213,31 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
   const handleDeleteSelected = async () => {
     if (selectedIds.size === 0) return;
-    if (!confirm(`Deseja excluir as ${selectedIds.size} rotas selecionadas do SharePoint?`)) return;
+    
+    // VALIDAÇÃO CRÍTICA: Filtra apenas rotas que pertencem às operações do usuário logado
+    const myOps = new Set(userConfigs.map(c => c.operacao));
+    const validIdsToDelete = Array.from(selectedIds).filter(id => {
+        const route = routes.find(r => r.id === id);
+        if (!route || !route.operacao) return false;
+        return myOps.has(route.operacao);
+    });
+    
+    const blockedCount = selectedIds.size - validIdsToDelete.length;
+    if (blockedCount > 0) {
+        alert(`⚠️ Você só pode excluir rotas das suas operações. ${blockedCount} rota(s) serão ignoradas.`);
+    }
+    
+    if (validIdsToDelete.length === 0) {
+        alert('⚠️ Nenhuma rota selecionada pertence às suas operações.');
+        return;
+    }
+    
+    if (!confirm(`Deseja excluir as ${validIdsToDelete.length} rotas selecionadas do SharePoint?`)) return;
+    
     const token = await getAccessToken();
     setIsSyncing(true);
     let success = 0;
-    const idsToProcess = Array.from(selectedIds) as string[];
-    for (const id of idsToProcess) {
+    for (const id of validIdsToDelete) {
         try { await SharePointService.deleteDeparture(token, id); success++; } catch (e) {}
     }
     setRoutes(prev => prev.filter(r => !selectedIds.has(r.id!)));
@@ -1197,13 +1247,23 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   };
 
   const handleArchiveAll = async () => {
-    if (filteredRoutes.length === 0) {
-      alert("Não há rotas para arquivar.");
+    // VALIDAÇÃO CRÍTICA: Filtra apenas rotas que pertencem às operações do usuário logado
+    const myOps = new Set(userConfigs.map(c => c.operacao));
+    const validFilteredRoutes = filteredRoutes.filter(r => !r.operacao || myOps.has(r.operacao));
+    
+    if (validFilteredRoutes.length === 0) {
+      alert("Não há rotas das suas operações para arquivar.");
       return;
     }
 
+    // Verifica se há alguma rota de operação não pertencente
+    const blockedCount = filteredRoutes.length - validFilteredRoutes.length;
+    if (blockedCount > 0) {
+        console.warn(`[ARCHIVE] ${blockedCount} rotas de outras operações serão ignoradas`);
+    }
+
     // Verifica se há alguma rota com status "Previsto"
-    const rotasPrevistas = filteredRoutes.filter(r => r.statusOp === 'Previsto');
+    const rotasPrevistas = validFilteredRoutes.filter(r => r.statusOp === 'Previsto');
     if (rotasPrevistas.length > 0) {
       alert(
         `⚠️ Atenção!\n\n` +
@@ -1214,23 +1274,23 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
       return;
     }
 
-    if (!confirm(`Arquivar ${filteredRoutes.length} itens no histórico e limpar status de envio?`)) return;
+    if (!confirm(`Arquivar ${validFilteredRoutes.length} itens no histórico e limpar status de envio?`)) return;
 
     const token = await getAccessToken();
     setIsSyncing(true);
-    
+
     // Desmarca a opção HORÁRIO após arquivar
     setIsSortByTimeEnabled(false);
 
     try {
       // Passo 1: Mover rotas para o histórico
-      console.log(`[ARCHIVE] Movendo ${filteredRoutes.length} itens para o histórico...`);
-      const archiveResult = await SharePointService.moveDeparturesToHistory(token, filteredRoutes as RouteDeparture[]);
+      console.log(`[ARCHIVE] Movendo ${validFilteredRoutes.length} itens para o histórico...`);
+      const archiveResult = await SharePointService.moveDeparturesToHistory(token, validFilteredRoutes as RouteDeparture[]);
       console.log(`[ARCHIVE] Sucesso: ${archiveResult.success}, Falhas: ${archiveResult.failed}`);
 
       // Passo 2: Limpar status de envio (OK, ATUALIZAR) na lista CONFIG_OPERACAO_SAIDA_DE_ROTAS
       console.log('[ARCHIVE] Limpando status de envio nas configurações...');
-      const opsToClear = Array.from(new Set(filteredRoutes.map(r => r.operacao)));
+      const opsToClear = Array.from(new Set(validFilteredRoutes.map(r => r.operacao)));
       let clearCount = 0;
 
       for (const operacao of opsToClear) {
@@ -1252,7 +1312,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
       // Passo 3: Recarregar dados com force refresh
       await loadData(true);
-      
+
       // Passo 4: Forçar refresh extra nas configs para garantir que o status "Previsto" apareça
       try {
         const refreshedConfigs = await SharePointService.getRouteConfigs(token, currentUser.email, true);
@@ -1276,6 +1336,14 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     if (!newRouteData.rota || !newRouteData.inicio || !newRouteData.motorista || !newRouteData.placa || !newRouteData.operacao) {
       alert('Preencha todos os campos obrigatórios!');
       return;
+    }
+
+    // VALIDAÇÃO CRÍTICA: Só permite adicionar rotas nas operações do usuário logado
+    const myOps = new Set(userConfigs.map(c => c.operacao));
+    if (!myOps.has(newRouteData.operacao)) {
+        console.error('[ADD_ROUTE_BLOCKED] Usuário tentou adicionar rota em operação não pertencente:', newRouteData.operacao);
+        alert('⚠️ Erro: Você não tem permissão para adicionar rotas desta operação.');
+        return;
     }
 
     setIsAddingRoute(true);
@@ -1305,14 +1373,17 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
       };
 
       const newId = await SharePointService.updateDeparture(token, newRoute);
-      
+
       // Recarrega as rotas para mostrar a nova
       await loadData(true);
-      
+
       // Limpa o formulário e fecha o modal
       setNewRouteData({ rota: '', inicio: '', motorista: '', placa: '', operacao: '' });
       setIsAddRouteModalOpen(false);
       
+      // DESABILITA o filtro por horário para não misturar a nova rota na ordenação
+      setIsSortByTimeEnabled(false);
+
       alert('Rota adicionada com sucesso!');
     } catch (e: any) {
       console.error('[ADD_ROUTE] Erro:', e.message);
@@ -1332,6 +1403,16 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   };
 
   const handleBulkCreateSave = async (operacao: string) => {
+    // VALIDAÇÃO CRÍTICA: Só permite criar rotas em massa nas operações do usuário logado
+    const myOps = new Set(userConfigs.map(c => c.operacao));
+    if (!myOps.has(operacao)) {
+        console.error('[BULK_CREATE_BLOCKED] Usuário tentou criar rotas em massa em operação não pertencente:', operacao);
+        alert('⚠️ Erro: Você não tem permissão para adicionar rotas desta operação.');
+        setIsBulkMappingModalOpen(false);
+        setPendingBulkRoutes([]);
+        return;
+    }
+
     const token = await getAccessToken();
     const total = pendingBulkRoutes.length;
     setIsBulkMappingModalOpen(false);
@@ -1349,6 +1430,9 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     setBulkStatus(null);
     setPendingBulkRoutes([]);
     setGhostRow({ id: 'ghost', rota: '', data: getBrazilDate(), inicio: '', saida: '', motorista: '', placa: '', statusGeral: '', aviso: 'NÃO', operacao: '', statusOp: 'Previsto', tempo: '' });
+    
+    // DESABILITA o filtro por horário para não misturar as novas rotas na ordenação
+    setIsSortByTimeEnabled(false);
   };
 
   const handleMultilinePaste = async (field: keyof RouteDeparture, startRowIndex: number, value: string) => {
@@ -1356,17 +1440,33 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     if (lines.length <= 1) return;
     const token = await getAccessToken();
     setIsSyncing(true);
-    
+
     // Usa routes diretamente em vez de filteredRoutes para evitar problemas de sincronização
     const targetRoutes = routes.slice(startRowIndex, startRowIndex + lines.length);
-    
+
     if (targetRoutes.length === 0) {
         setIsSyncing(false);
         return;
     }
+
+    // VALIDAÇÃO CRÍTICA: Filtra apenas rotas que pertencem às operações do usuário logado
+    const myOps = new Set(userConfigs.map(c => c.operacao));
+    const validTargetRoutes = targetRoutes.filter(r => !r.operacao || myOps.has(r.operacao));
     
+    const blockedCount = targetRoutes.length - validTargetRoutes.length;
+    if (blockedCount > 0) {
+        console.warn(`[PASTE] ${blockedCount} rotas de outras operações serão ignoradas`);
+        alert(`⚠️ Você só pode editar rotas das suas operações. ${blockedCount} rota(s) serão ignoradas.`);
+    }
+
+    if (validTargetRoutes.length === 0) {
+        alert('⚠️ Nenhuma rota selecionada pertence às suas operações.');
+        setIsSyncing(false);
+        return;
+    }
+
     // Prepara todas as atualizações
-    const updatePromises = targetRoutes.map(async (route, i) => {
+    const updatePromises = validTargetRoutes.map(async (route, i) => {
         let finalValue = lines[i];
         if (field === 'inicio' || field === 'saida') {
             finalValue = formatTimeInput(finalValue);
@@ -1376,19 +1476,19 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         const { status, gap } = calculateStatusWithTolerance(updatedRoute.inicio, updatedRoute.saida, config?.tolerancia || "00:00:00", updatedRoute.data);
         updatedRoute.statusOp = status;
         updatedRoute.tempo = gap;
-        
-        try { 
-            await SharePointService.updateDeparture(token, updatedRoute); 
+
+        try {
+            await SharePointService.updateDeparture(token, updatedRoute);
             return { id: route.id, updatedRoute };
-        } catch (err) { 
+        } catch (err) {
             console.error('[PASTE] Error updating route:', route.rota, err);
             return null;
         }
     });
-    
+
     // Executa todas em paralelo
     const results = await Promise.all(updatePromises);
-    
+
     // Atualiza o estado com todos os resultados de uma vez
     setRoutes(prev => {
         const newRoutes = [...prev];
@@ -1402,7 +1502,10 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         });
         return newRoutes;
     });
-    
+
+    // DESABILITA o filtro por horário para não misturar as rotas atualizadas na ordenação
+    setIsSortByTimeEnabled(false);
+
     setIsSyncing(false);
   };
 
@@ -1449,8 +1552,18 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
             return;
         }
 
-        // Para outros campos da ghost row
+        // Para outros campos da ghost row - VALIDA se a operação pertence ao usuário antes de salvar
         if (field !== 'rota' && updatedGhost.rota) {
+            // VALIDAÇÃO CRÍTICA: Só permite salvar se a operação estiver nas configurações do usuário logado
+            const myOps = new Set(userConfigs.map(c => c.operacao));
+            if (updatedGhost.operacao && !myOps.has(updatedGhost.operacao)) {
+                console.error('[UPDATE_BLOCKED] Usuário tentou salvar rota com operação não pertencente:', updatedGhost.operacao);
+                alert('⚠️ Erro: Você não tem permissão para adicionar rotas desta operação.');
+                // Reseta a ghost row para evitar dados inconsistentes
+                setGhostRow({ id: 'ghost', rota: '', data: getBrazilDate(), inicio: '', saida: '', motorista: '', placa: '', statusGeral: '', aviso: 'NÃO', operacao: '', statusOp: 'Previsto', tempo: '' });
+                return;
+            }
+
             setIsSyncing(true);
             try {
                 const config = userConfigs.find(c => c.operacao === updatedGhost.operacao);
@@ -1462,6 +1575,9 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                 // Limpa filtros após criar nova rota para garantir que ela seja visível
                 setColFilters({});
                 setSelectedFilters({});
+                
+                // DESABILITA o filtro por horário para não misturar a nova rota na ordenação
+                setIsSortByTimeEnabled(false);
 
                 setGhostRow({ id: 'ghost', rota: '', data: getBrazilDate(), inicio: '', saida: '', motorista: '', placa: '', statusGeral: '', aviso: 'NÃO', operacao: '', statusOp: 'Previsto', tempo: '' });
             } catch (e) {} finally { setIsSyncing(false); }
@@ -1473,6 +1589,14 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
     const route = routes.find(r => r.id === id);
     if (!route) return;
+
+    // VALIDAÇÃO CRÍTICA: Só permite editar rotas que pertencem às operações do usuário logado
+    const myOps = new Set(userConfigs.map(c => c.operacao));
+    if (route.operacao && !myOps.has(route.operacao)) {
+        console.error('[UPDATE_BLOCKED] Usuário tentou editar rota de operação não pertencente:', route.operacao);
+        alert('⚠️ Erro: Você não tem permissão para editar esta rota.');
+        return;
+    }
 
     let updatedRoute = { ...route, [field]: value };
 
@@ -1517,12 +1641,20 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
       value = value.replace(/[\s-]/g, '').toUpperCase();
     }
 
+    // VALIDAÇÃO CRÍTICA: Só permite editar rotas que pertencem às operações do usuário logado
+    const route = archivedResults.find(r => r.id === id);
+    if (!route) return;
+
+    const myOps = new Set(userConfigs.map(c => c.operacao));
+    if (route.operacao && !myOps.has(route.operacao)) {
+        console.error('[HISTORY_UPDATE_BLOCKED] Usuário tentou editar rota de operação não pertencente:', route.operacao);
+        alert('⚠️ Erro: Você não tem permissão para editar esta rota do histórico.');
+        return;
+    }
+
     setArchivedResults(prev => prev.map(r => r.id === id ? { ...r, [field]: value } : r));
     setIsSyncing(true);
     try {
-        const route = archivedResults.find(r => r.id === id);
-        if (!route) return;
-
         const updatedRoute = { ...route, [field]: value };
 
         // Recalcula status baseado nos horários
