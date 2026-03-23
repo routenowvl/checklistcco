@@ -1596,63 +1596,99 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Aplica filtros aos resultados do histórico
+  // Aplica filtros aos resultados do histórico e ordena por data/hora (da mais antiga para a mais recente)
   const filteredArchivedResults = useMemo(() => {
-    if (!hasHistoryActiveColFilters) return archivedResults;
+    let result = archivedResults;
 
-    return archivedResults.filter(r => {
-      // Filtro por operação
-      if (historySelectedFilters['operacao']?.length > 0) {
-        if (!historySelectedFilters['operacao'].includes(r.operacao)) {
-          return false;
+    // Aplica os filtros selecionados
+    if (hasHistoryActiveColFilters) {
+      result = result.filter(r => {
+        // Filtro por operação
+        if (historySelectedFilters['operacao']?.length > 0) {
+          if (!historySelectedFilters['operacao'].includes(r.operacao)) {
+            return false;
+          }
         }
+
+        // Filtro por motorista
+        if (historySelectedFilters['motorista']?.length > 0) {
+          if (!historySelectedFilters['motorista'].includes(r.motorista || '')) {
+            return false;
+          }
+        }
+
+        // Filtro por rota
+        if (historySelectedFilters['rota']?.length > 0) {
+          if (!historySelectedFilters['rota'].includes(r.rota)) {
+            return false;
+          }
+        }
+
+        // Filtro por status
+        if (historySelectedFilters['status']?.length > 0) {
+          if (!historySelectedFilters['status'].includes(r.statusOp || '')) {
+            return false;
+          }
+        }
+
+        // Filtro por placa
+        if (historySelectedFilters['placa']?.length > 0) {
+          if (!historySelectedFilters['placa'].includes(r.placa || '')) {
+            return false;
+          }
+        }
+
+        // Filtro por motivo
+        if (historySelectedFilters['motivo']?.length > 0) {
+          if (!historySelectedFilters['motivo'].includes(r.motivo || '')) {
+            return false;
+          }
+        }
+
+        // Filtro por semana (vigência)
+        if (historySelectedFilters['semana']?.length > 0) {
+          if (!historySelectedFilters['semana'].includes(r.semana || '')) {
+            return false;
+          }
+        }
+
+        return true;
+      });
+    }
+
+    // Ordena por data e hora de início (da mais antiga para a mais recente)
+    return [...result].sort((a, b) => {
+      // Converte data DD/MM/AAAA para formato comparável
+      const parseDate = (dateStr: string) => {
+        if (!dateStr) return 0;
+        const match = dateStr.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+        if (match) {
+          const [, day, month, year] = match;
+          return new Date(Number(year), Number(month) - 1, Number(day)).getTime();
+        }
+        return 0;
+      };
+
+      // Converte hora HH:MM:SS para segundos do dia
+      const parseTime = (timeStr: string) => {
+        if (!timeStr) return 0;
+        const parts = timeStr.split(':');
+        return Number(parts[0] || 0) * 3600 + Number(parts[1] || 0) * 60 + Number(parts[2] || 0);
+      };
+
+      // Compora primeiro por data
+      const dateA = parseDate(a.data);
+      const dateB = parseDate(b.data);
+      if (dateA !== dateB) {
+        return dateA - dateB;
       }
 
-      // Filtro por motorista
-      if (historySelectedFilters['motorista']?.length > 0) {
-        if (!historySelectedFilters['motorista'].includes(r.motorista || '')) {
-          return false;
-        }
-      }
-
-      // Filtro por rota
-      if (historySelectedFilters['rota']?.length > 0) {
-        if (!historySelectedFilters['rota'].includes(r.rota)) {
-          return false;
-        }
-      }
-
-      // Filtro por status
-      if (historySelectedFilters['status']?.length > 0) {
-        if (!historySelectedFilters['status'].includes(r.statusOp || '')) {
-          return false;
-        }
-      }
-
-      // Filtro por placa
-      if (historySelectedFilters['placa']?.length > 0) {
-        if (!historySelectedFilters['placa'].includes(r.placa || '')) {
-          return false;
-        }
-      }
-
-      // Filtro por motivo
-      if (historySelectedFilters['motivo']?.length > 0) {
-        if (!historySelectedFilters['motivo'].includes(r.motivo || '')) {
-          return false;
-        }
-      }
-
-      // Filtro por semana
-      if (historySelectedFilters['semana']?.length > 0) {
-        if (!historySelectedFilters['semana'].includes(r.semana || '')) {
-          return false;
-        }
-      }
-
-      return true;
+      // Se mesma data, compara por horário de início
+      const timeA = parseTime(a.inicio || '');
+      const timeB = parseTime(b.inicio || '');
+      return timeA - timeB;
     });
-  }, [archivedResults, historySelectedFilters]);
+  }, [archivedResults, historySelectedFilters, hasHistoryActiveColFilters]);
 
   // Converte data YYYY-MM-DD para DD/MM/AAAA (parse manual para evitar fuso)
   const formatDateToBR = (dateString: string) => {
