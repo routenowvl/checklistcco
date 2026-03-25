@@ -23,6 +23,24 @@ const columnMappingCache: Record<string, { mapping: Record<string, string>, read
 const dataCache: Record<string, { data: any, timestamp: number }> = {};
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutos
 
+// Debounce para evento token-expired (evita disparos múltiplos)
+let lastTokenEventTime = 0;
+const TOKEN_EVENT_DEBOUNCE_MS = 10000; // 10 segundos
+
+/**
+ * Dispara evento token-expired com debounce para evitar popups repetidos
+ */
+const dispatchTokenExpired = () => {
+  const now = Date.now();
+  if (now - lastTokenEventTime < TOKEN_EVENT_DEBOUNCE_MS) {
+    console.warn('[TOKEN_EVENT] Ignorado (debounce)');
+    return;
+  }
+  lastTokenEventTime = now;
+  console.log('[TOKEN_EVENT] Disparando evento token-expired');
+  window.dispatchEvent(new CustomEvent('token-expired'));
+};
+
 /**
  * Delay para backoff exponencial
  */
@@ -119,7 +137,7 @@ async function graphFetch(
       // Verifica se é erro de token expirado ou inválido
       if (res.status === 401 || errDetail.includes('expired') || errDetail.includes('invalid')) {
         console.error('[SHAREPOINT_API_FAILURE] Token expirado ou inválido. Status:', res.status);
-        window.dispatchEvent(new CustomEvent('token-expired'));
+        dispatchTokenExpired();
       }
 
       console.error(
@@ -974,5 +992,192 @@ export const SharePointService = {
   /**
    * Limpa o cache de dados (útil após operações de escrita)
    */
-  clearCache
+  clearCache,
+
+  /**
+   * Verifica se há uma trava ativa para envio de resumo de uma operação
+   * @returns null se não houver trava, ou objeto com info da trava
+   */
+  async checkSendLock(token: string, operacao: string): Promise<{ locked: boolean; user?: string; timestamp?: string; expired?: boolean } | null> {
+    try {
+      const siteId = await getResolvedSiteId(token);
+      const list = await findListByIdOrName(siteId, 'CONFIG_OPERACAO_SAIDA_DE_ROTAS', token);
+      const { mapping } = await getListColumnMapping(siteId, list.id, token);
+
+      const operacaoField = resolveFieldName(mapping, 'OPERACAO');
+      const filter = `fields/${operacaoField} eq '${operacao}'`;
+      const existing = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}&$top=1`, token);
+
+      if (!existing.value || existing.value.length === 0) {
+        return { locked: false };
+      }
+
+      const item = existing.value[0];
+      const f = item.fields;
+      
+      const lockField = resolveFieldName(mapping, 'LockEnvio');
+      const lockUserField = resolveFieldName(mapping, 'LockUser');
+      const lockTimestampField = resolveFieldName(mapping, 'LockTimestamp');
+
+      const lockStatus = f[lockField] || '';
+      const lockUser = f[lockUserField] || '';
+      const lockTimestamp = f[lockTimestampField] || '';
+
+      // Se não tem trava, retorna false
+      if (!lockStatus || lockStatus.toLowerCase() !== 'true') {
+        return { locked: false };
+      }
+
+      // Verifica se a trava expirou (timeout de 2 minutos)
+      if (lockTimestamp) {
+        let lockDate: Date | null = null;
+        if (lockTimestamp.includes('T')) {
+          lockDate = new Date(lockTimestamp);
+        } else if (lockTimestamp.includes('/')) {
+          const [data, hora] = lockTimestamp.split(' ');
+          const [dia, mes, ano] = data.split('/');
+          const [h, m, s] = hora ? hora.split(':') : ['00', '00', '00'];
+          lockDate = new Date(Number(ano), Number(mes) - 1, Number(dia), Number(h), Number(m), Number(s));
+        }
+
+        if (lockDate && !isNaN(lockDate.getTime())) {
+          const now = new Date();
+          const diffMs = now.getTime() - lockDate.getTime();
+          const timeoutMs = 2 * 60 * 1000; // 2 minutos de timeout
+
+          if (diffMs > timeoutMs) {
+            console.log(`[LOCK_CHECK] Trava expirada para ${operacao} (usuário: ${lockUser}, tempo: ${Math.floor(diffMs / 1000)}s)`);
+            return { locked: false, user: lockUser, timestamp: lockTimestamp, expired: true };
+          }
+        }
+      }
+
+      console.log(`[LOCK_CHECK] Trava ativa para ${operacao} por ${lockUser} em ${lockTimestamp}`);
+      return { locked: true, user: lockUser, timestamp: lockTimestamp, expired: false };
+    } catch (e: any) {
+      console.error('[LOCK_CHECK] Erro ao verificar trava:', e.message);
+      return { locked: false };
+    }
+  },
+
+  /**
+   * Adquire trava para envio de resumo
+   * @returns true se conseguiu adquirir, false se outra pessoa já tem a trava
+   */
+  async acquireSendLock(token: string, operacao: string, userEmail: string): Promise<{ success: boolean; message?: string }> {
+    try {
+      const siteId = await getResolvedSiteId(token);
+      const list = await findListByIdOrName(siteId, 'CONFIG_OPERACAO_SAIDA_DE_ROTAS', token);
+      const { mapping, internalNames } = await getListColumnMapping(siteId, list.id, token);
+
+      const operacaoField = resolveFieldName(mapping, 'OPERACAO');
+      const filter = `fields/${operacaoField} eq '${operacao}'`;
+      const existing = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}&$top=1`, token);
+
+      if (!existing.value || existing.value.length === 0) {
+        return { success: false, message: 'Operação não encontrada' };
+      }
+
+      const itemId = existing.value[0].id;
+      const lockField = resolveFieldName(mapping, 'LockEnvio');
+      const lockUserField = resolveFieldName(mapping, 'LockUser');
+      const lockTimestampField = resolveFieldName(mapping, 'LockTimestamp');
+
+      // Verifica estado atual da trava
+      const f = existing.value[0].fields;
+      const currentLock = f[lockField] || '';
+      const currentLockUser = f[lockUserField] || '';
+      const currentLockTimestamp = f[lockTimestampField] || '';
+
+      // Verifica se a trava está ativa e não é do usuário atual
+      if (currentLock && currentLock.toLowerCase() === 'true' && currentLockUser.toLowerCase() !== userEmail.toLowerCase()) {
+        // Verifica se não expirou
+        if (currentLockTimestamp) {
+          let lockDate: Date | null = null;
+          if (currentLockTimestamp.includes('T')) {
+            lockDate = new Date(currentLockTimestamp);
+          } else if (currentLockTimestamp.includes('/')) {
+            const [data, hora] = currentLockTimestamp.split(' ');
+            const [dia, mes, ano] = data.split('/');
+            const [h, m, s] = hora ? hora.split(':') : ['00', '00', '00'];
+            lockDate = new Date(Number(ano), Number(mes) - 1, Number(dia), Number(h), Number(m), Number(s));
+          }
+
+          if (lockDate && !isNaN(lockDate.getTime())) {
+            const now = new Date();
+            const diffMs = now.getTime() - lockDate.getTime();
+            const timeoutMs = 2 * 60 * 1000; // 2 minutos
+
+            if (diffMs <= timeoutMs) {
+              return { 
+                success: false, 
+                message: `Outro usuário (${currentLockUser}) está enviando os dados. Aguarde alguns segundos e tente novamente.`
+              };
+            }
+          }
+        }
+      }
+
+      // Adquire a trava
+      const now = new Date();
+      const timestamp = now.toISOString();
+      
+      const fields: any = {
+        [lockField]: 'true',
+        [lockUserField]: userEmail,
+        [lockTimestampField]: timestamp
+      };
+
+      await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${itemId}/fields`, token, {
+        method: 'PATCH',
+        body: JSON.stringify(fields)
+      });
+
+      console.log(`[LOCK_ACQUIRE] Trava adquirida por ${userEmail} para ${operacao} em ${timestamp}`);
+      return { success: true };
+    } catch (e: any) {
+      console.error('[LOCK_ACQUIRE] Erro ao adquirir trava:', e.message);
+      return { success: false, message: `Erro ao adquirir trava: ${e.message}` };
+    }
+  },
+
+  /**
+   * Libera trava de envio
+   */
+  async releaseSendLock(token: string, operacao: string): Promise<void> {
+    try {
+      const siteId = await getResolvedSiteId(token);
+      const list = await findListByIdOrName(siteId, 'CONFIG_OPERACAO_SAIDA_DE_ROTAS', token);
+      const { mapping, internalNames } = await getListColumnMapping(siteId, list.id, token);
+
+      const operacaoField = resolveFieldName(mapping, 'OPERACAO');
+      const filter = `fields/${operacaoField} eq '${operacao}'`;
+      const existing = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}&$top=1`, token);
+
+      if (!existing.value || existing.value.length === 0) {
+        console.warn(`[LOCK_RELEASE] Operação ${operacao} não encontrada`);
+        return;
+      }
+
+      const itemId = existing.value[0].id;
+      const lockField = resolveFieldName(mapping, 'LockEnvio');
+      const lockUserField = resolveFieldName(mapping, 'LockUser');
+      const lockTimestampField = resolveFieldName(mapping, 'LockTimestamp');
+
+      const fields: any = {
+        [lockField]: '',
+        [lockUserField]: '',
+        [lockTimestampField]: ''
+      };
+
+      await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${itemId}/fields`, token, {
+        method: 'PATCH',
+        body: JSON.stringify(fields)
+      });
+
+      console.log(`[LOCK_RELEASE] Trava liberada para ${operacao}`);
+    } catch (e: any) {
+      console.error('[LOCK_RELEASE] Erro ao liberar trava:', e.message);
+    }
+  }
 };

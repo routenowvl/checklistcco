@@ -144,6 +144,33 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       return;
     }
 
+    // VERIFICA TRAVA PARA EVITAR ENVIO DUPLICADO
+    const token = await getValidToken() || currentUser.accessToken;
+    if (!token) {
+      setSendError("Erro de autenticação. Tente novamente.");
+      return;
+    }
+
+    // Verifica se já há envio em andamento para esta operação
+    const lockResult = await SharePointService.checkSendLock(token, selectedOperacao);
+    if (lockResult && lockResult.locked && !lockResult.expired) {
+      const errorMsg = `⚠️ Já existe envio em andamento para ${selectedOperacao} por ${lockResult.user}. Aguarde alguns segundos e tente novamente.`;
+      setSendError(errorMsg);
+      console.warn('[SEND_DEPARTURES] Envio bloqueado por trava:', lockResult.user);
+      setTimeout(() => setSendError(null), 8000);
+      return;
+    }
+
+    // Adquire trava
+    const acquireResult = await SharePointService.acquireSendLock(token, selectedOperacao, currentUser.email);
+    if (!acquireResult.success) {
+      setSendError(`⚠️ Não foi possível adquirir trava para ${selectedOperacao}: ${acquireResult.message}. Tente novamente.`);
+      setTimeout(() => setSendError(null), 8000);
+      return;
+    }
+
+    console.log(`[SEND_DEPARTURES] ✅ Trava adquirida para ${selectedOperacao}`);
+
     setIsSending(true);
     setSendError(null);
 
@@ -289,6 +316,13 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       setTimeout(() => setSendError(null), 5000);
     } finally {
       setIsSending(false);
+
+      // Libera trava após o envio (sucesso ou erro)
+      const token = await getValidToken() || currentUser.accessToken;
+      if (token && selectedOperacao) {
+        await SharePointService.releaseSendLock(token, selectedOperacao);
+        console.log(`[SEND_DEPARTURES] 🔓 Trava liberada para ${selectedOperacao}`);
+      }
     }
   };
 
@@ -308,6 +342,33 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       setTimeout(() => setSendError(null), 5000);
       return;
     }
+
+    // VERIFICA TRAVA PARA EVITAR ENVIO DUPLICADO
+    const token = await getValidToken() || currentUser.accessToken;
+    if (!token) {
+      setSendError("Erro de autenticação. Tente novamente.");
+      return;
+    }
+
+    // Verifica se já há envio em andamento para esta operação
+    const lockResult = await SharePointService.checkSendLock(token, selectedOperacaoNC);
+    if (lockResult && lockResult.locked && !lockResult.expired) {
+      const errorMsg = `⚠️ Já existe envio em andamento para ${selectedOperacaoNC} por ${lockResult.user}. Aguarde alguns segundos e tente novamente.`;
+      setSendError(errorMsg);
+      console.warn('[SEND_NAO_COLETA] Envio bloqueado por trava:', lockResult.user);
+      setTimeout(() => setSendError(null), 8000);
+      return;
+    }
+
+    // Adquire trava
+    const acquireResult = await SharePointService.acquireSendLock(token, selectedOperacaoNC, currentUser.email);
+    if (!acquireResult.success) {
+      setSendError(`⚠️ Não foi possível adquirir trava para ${selectedOperacaoNC}: ${acquireResult.message}. Tente novamente.`);
+      setTimeout(() => setSendError(null), 8000);
+      return;
+    }
+
+    console.log(`[SEND_NAO_COLETA] ✅ Trava adquirida para ${selectedOperacaoNC}`);
 
     setIsSending(true);
     setSendError(null);
@@ -456,6 +517,13 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       setTimeout(() => setSendError(null), 5000);
     } finally {
       setIsSending(false);
+
+      // Libera trava após o envio (sucesso ou erro)
+      const token = await getValidToken() || currentUser.accessToken;
+      if (token && selectedOperacaoNC) {
+        await SharePointService.releaseSendLock(token, selectedOperacaoNC);
+        console.log(`[SEND_NAO_COLETA] 🔓 Trava liberada para ${selectedOperacaoNC}`);
+      }
     }
   };
 
@@ -463,11 +531,11 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
   const handleSendSummary = async () => {
     // FILTRA rotas APENAS das operações do usuário logado (validação de segurança)
     const myOps = new Set(userConfigs.map(c => c.operacao));
-    
+
     console.log('[RESUMO_GERAL] === INICIANDO ENVIO DE RESUMO ===');
     console.log('[RESUMO_GERAL] Operações configuradas para este usuário:', userConfigs.map(c => c.operacao));
     console.log('[RESUMO_GERAL] Total de rotas no estado departures:', departures.length);
-    
+
     const userRoutes = departures.filter(r => {
       const pertence = !r.operacao || myOps.has(r.operacao);
       if (!pertence) {
@@ -865,7 +933,11 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
             disabled={isSendingSummary || departures.length === 0}
             className="flex items-center gap-2 px-4 py-2 bg-emerald-700 text-white rounded-lg hover:bg-emerald-600 font-bold border border-emerald-600 uppercase text-[10px] tracking-wide transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <Send size={16} /> Enviar Resumo
+            {isSendingSummary ? (
+              <><Loader2 size={16} className="animate-spin" /> Enviando...</>
+            ) : (
+              <><Send size={16} /> Enviar Resumo</>
+            )}
           </button>
           <button
             onClick={() => {

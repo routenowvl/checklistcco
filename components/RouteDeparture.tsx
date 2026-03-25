@@ -1065,8 +1065,14 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
       token = await getAccessToken();
     } catch (e: any) {
       console.error('[RouteDeparture] Erro ao obter token:', e.message);
-      // Dispara o evento para o App.tsx exibir o modal de renovação de sessão
-      window.dispatchEvent(new CustomEvent('token-expired'));
+      // Dispara o evento para o App.tsx exibir o modal de renovação de sessão (com debounce)
+      const now = Date.now();
+      if (now - (window as any).__lastTokenEventTime > 10000) {
+        (window as any).__lastTokenEventTime = now;
+        window.dispatchEvent(new CustomEvent('token-expired'));
+      } else {
+        console.warn('[RouteDeparture] token-expired ignorado (debounce)');
+      }
       return;
     }
 
@@ -1335,6 +1341,13 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     // Validação básica
     if (!newRouteData.rota || !newRouteData.inicio || !newRouteData.motorista || !newRouteData.placa || !newRouteData.operacao) {
       alert('Preencha todos os campos obrigatórios!');
+      return;
+    }
+
+    // Validação do formato do horário (HH:MM:SS)
+    const timeRegex = /^([01]\d|2[0-3]):([0-5]\d):([0-5]\d)$/;
+    if (!timeRegex.test(newRouteData.inicio)) {
+      alert('⚠️ Horário de início deve estar no formato HH:MM:SS (ex: 08:30:00)');
       return;
     }
 
@@ -1884,11 +1897,11 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         }
     };
 
-    // Prepara os dados formatados
+    // Prepara os dados formatados (na mesma ordem da tabela: SEMANA, DATA, ROTA)
     const data = archivedResults.map(r => ({
-      'Rota': r.rota,
-      'Data': formatDateBR(r.data || ''),
       'Semana': r.semana || '',
+      'Data': formatDateBR(r.data || ''),
+      'Rota': r.rota,
       'Início': r.inicio || '',
       'Motorista': r.motorista || '',
       'Placa': r.placa || '',
@@ -1904,10 +1917,11 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.json_to_sheet(data);
 
-    // Configura largura das colunas
+    // Configura largura das colunas (na ordem: Semana, Data, Rota, ...)
     const colWidths = [
-        { wch: 25 }, // Rota
+        { wch: 10 }, // Semana
         { wch: 12 }, // Data
+        { wch: 25 }, // Rota
         { wch: 10 }, // Início
         { wch: 25 }, // Motorista
         { wch: 12 }, // Placa
@@ -2741,7 +2755,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                               type="text"
                               key={`${route.id}-inicio`}
                               value={route.inicio || ''}
-                              placeholder="--:--:--"
+                              placeholder="HH:MM:SS"
                               onChange={(e) => {
                                   const masked = applyTimeMask(e.target.value);
                                   updateCell(route.id!, 'inicio', masked);
@@ -2789,7 +2803,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                               type="text"
                               key={`${route.id}-saida`}
                               value={route.saida || ''}
-                              placeholder="--:--:--"
+                              placeholder="HH:MM:SS"
                               onChange={(e) => {
                                   const val = e.target.value;
                                   if (val === '-') {
@@ -2984,10 +2998,26 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                   Horário de Início *
                 </label>
                 <input
-                  type="time"
+                  type="text"
                   value={newRouteData.inicio}
-                  onChange={e => setNewRouteData({ ...newRouteData, inicio: e.target.value })}
-                  className="w-full p-3 border dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-sm font-bold outline-none dark:text-white focus:border-primary-500 transition-colors"
+                  onChange={e => {
+                    let value = e.target.value.replace(/\D/g, ''); // Remove não dígitos
+                    if (value.length > 6) value = value.slice(0, 6); // Limita a 6 dígitos (HHMMSS)
+                    
+                    // Aplica máscara HH:MM:SS
+                    if (value.length >= 6) {
+                      value = `${value.slice(0, 2)}:${value.slice(2, 4)}:${value.slice(4, 6)}`;
+                    } else if (value.length >= 4) {
+                      value = `${value.slice(0, 2)}:${value.slice(2, 4)}:${value.slice(4)}`;
+                    } else if (value.length >= 2) {
+                      value = `${value.slice(0, 2)}:${value.slice(2)}`;
+                    }
+                    
+                    setNewRouteData({ ...newRouteData, inicio: value });
+                  }}
+                  placeholder="HH:MM:SS"
+                  maxLength={8}
+                  className="w-full p-3 border dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-sm font-bold outline-none dark:text-white focus:border-primary-500 transition-colors font-mono"
                 />
               </div>
 
@@ -3083,59 +3113,51 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                           </button>
                       )}
                   </div>
+                  {/* Cards de Desempenho (GERAL e INTERNO) */}
+                  {archivedResults.length > 0 && (
+                      <div className="px-6 py-4 bg-slate-100 dark:bg-slate-800/50 border-b dark:border-slate-800 flex items-center gap-4 shrink-0">
+                          <div className="flex items-center gap-2">
+                              <Database size={18} className="text-slate-400" />
+                              <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">Desempenho do Período</span>
+                          </div>
+                          <div className="flex items-center gap-3 ml-auto">
+                              <div className={`flex items-center gap-3 px-5 py-2 rounded-xl min-w-[130px] ${isDarkMode ? 'bg-emerald-900/30 border border-emerald-700/50' : 'bg-emerald-100 border border-emerald-300'}`}>
+                                <div className="text-center flex-1">
+                                  <p className={`text-[8px] font-black uppercase tracking-wider mb-0.5 ${isDarkMode ? 'text-emerald-400' : 'text-emerald-700'}`}>Geral</p>
+                                  <p className={`text-xl font-black leading-none ${isDarkMode ? 'text-emerald-400' : 'text-emerald-700'}`}>{
+                                    (() => {
+                                      const total = archivedResults.length;
+                                      const okPrevistoCount = archivedResults.filter(r => r.statusOp === 'OK' || r.statusOp === 'Previsto').length;
+                                      return total > 0 ? ((okPrevistoCount / total) * 100).toFixed(2) : '0.00';
+                                    })()
+                                  }%</p>
+                                </div>
+                                <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full shrink-0"></div>
+                              </div>
+                              <div className={`flex items-center gap-3 px-5 py-2 rounded-xl min-w-[130px] ${isDarkMode ? 'bg-blue-900/30 border border-blue-700/50' : 'bg-blue-100 border border-blue-300'}`}>
+                                <div className="text-center flex-1">
+                                  <p className={`text-[8px] font-black uppercase tracking-wider mb-0.5 ${isDarkMode ? 'text-blue-400' : 'text-blue-700'}`}>Interno</p>
+                                  <p className={`text-xl font-black leading-none ${isDarkMode ? 'text-blue-400' : 'text-blue-700'}`}>{
+                                    (() => {
+                                      const total = archivedResults.length;
+                                      const justificativas = ['Manutenção', 'Mão de obra', 'Logística'];
+                                      const rotasComJustificativa = archivedResults.filter(r => justificativas.includes(r.motivo)).length;
+                                      const rotasSemJustificativa = total - rotasComJustificativa;
+                                      return total > 0 ? ((rotasSemJustificativa / total) * 100).toFixed(2) : '0.00';
+                                    })()
+                                  }%</p>
+                                </div>
+                                <div className="w-1.5 h-1.5 bg-blue-500 rounded-full shrink-0"></div>
+                              </div>
+                          </div>
+                      </div>
+                  )}
                   <div className="flex-1 overflow-auto bg-slate-50 dark:bg-slate-950 p-4">
                       {archivedResults.length > 0 ? (
                           <div className="bg-white dark:bg-slate-900 rounded-2xl border dark:border-slate-800 overflow-hidden">
                               <table className="w-full border-collapse text-[10px]">
                                   <thead className="sticky top-0 bg-slate-200 dark:bg-slate-800 text-slate-600 font-black uppercase z-10">
                                       <tr>
-                                          <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-left relative group">
-                                              <div className="flex items-center justify-between">
-                                                  <span>Rota</span>
-                                                  <button
-                                                    onClick={() => setHistoryActiveFilterCol(historyActiveFilterCol === 'rota' ? null : 'rota')}
-                                                    className={`p-1 rounded transition-all opacity-0 group-hover:opacity-100 ${
-                                                      historyActiveFilterCol === 'rota' || historySelectedFilters['rota']?.length > 0
-                                                        ? 'opacity-100 bg-primary-600 text-white'
-                                                        : 'hover:bg-slate-300 dark:hover:bg-slate-600'
-                                                    }`}
-                                                  >
-                                                    <Filter size={10} />
-                                                  </button>
-                                              </div>
-                                              {historyActiveFilterCol === 'rota' && (
-                                                <div className="absolute top-full left-0 mt-1 w-56 bg-white dark:bg-slate-700 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-600 overflow-hidden z-[100] animate-in fade-in slide-in-from-top-2">
-                                                    <div className="p-2 border-b dark:border-slate-600 flex justify-between items-center">
-                                                        <span className="text-[9px] font-black uppercase text-slate-600 dark:text-slate-400 px-2">Rota</span>
-                                                        {historySelectedFilters['rota']?.length > 0 && (
-                                                            <button
-                                                                onClick={() => setHistorySelectedFilters(prev => ({ ...prev, rota: [] }))}
-                                                                className="text-[8px] font-bold text-primary-600 hover:text-primary-700 uppercase px-2"
-                                                            >
-                                                                Limpar
-                                                            </button>
-                                                        )}
-                                                    </div>
-                                                    <div className="max-h-48 overflow-y-auto p-2 space-y-1">
-                                                        {getHistoryColUniqueValues('rota').map(r => (
-                                                            <button
-                                                                key={r}
-                                                                onClick={() => toggleHistoryColFilter('rota', r)}
-                                                                className={`w-full text-left px-3 py-2 rounded-lg text-[10px] font-bold transition-all flex items-center justify-between ${
-                                                                    historySelectedFilters['rota']?.includes(r)
-                                                                        ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400'
-                                                                        : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-600'
-                                                                }`}
-                                                            >
-                                                                {r}
-                                                                {historySelectedFilters['rota']?.includes(r) && <CheckCircle2 size={12} />}
-                                                            </button>
-                                                        ))}
-                                                    </div>
-                                                </div>
-                                              )}
-                                          </th>
-                                          <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center">Data</th>
                                           <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center relative group">
                                               <div className="flex items-center justify-center gap-1">
                                                   <span>Semana</span>
@@ -3176,6 +3198,53 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                                                             >
                                                                 {s}
                                                                 {historySelectedFilters['semana']?.includes(s) && <CheckCircle2 size={12} />}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                              )}
+                                          </th>
+                                          <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center">Data</th>
+                                          <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-left relative group">
+                                              <div className="flex items-center justify-between">
+                                                  <span>Rota</span>
+                                                  <button
+                                                    onClick={() => setHistoryActiveFilterCol(historyActiveFilterCol === 'rota' ? null : 'rota')}
+                                                    className={`p-1 rounded transition-all opacity-0 group-hover:opacity-100 ${
+                                                      historyActiveFilterCol === 'rota' || historySelectedFilters['rota']?.length > 0
+                                                        ? 'opacity-100 bg-primary-600 text-white'
+                                                        : 'hover:bg-slate-300 dark:hover:bg-slate-600'
+                                                    }`}
+                                                  >
+                                                    <Filter size={10} />
+                                                  </button>
+                                              </div>
+                                              {historyActiveFilterCol === 'rota' && (
+                                                <div className="absolute top-full left-0 mt-1 w-56 bg-white dark:bg-slate-700 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-600 overflow-hidden z-[100] animate-in fade-in slide-in-from-top-2">
+                                                    <div className="p-2 border-b dark:border-slate-600 flex justify-between items-center">
+                                                        <span className="text-[9px] font-black uppercase text-slate-600 dark:text-slate-400 px-2">Rota</span>
+                                                        {historySelectedFilters['rota']?.length > 0 && (
+                                                            <button
+                                                                onClick={() => setHistorySelectedFilters(prev => ({ ...prev, rota: [] }))}
+                                                                className="text-[8px] font-bold text-primary-600 hover:text-primary-700 uppercase px-2"
+                                                            >
+                                                                Limpar
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                    <div className="max-h-48 overflow-y-auto p-2 space-y-1">
+                                                        {getHistoryColUniqueValues('rota').map(r => (
+                                                            <button
+                                                                key={r}
+                                                                onClick={() => toggleHistoryColFilter('rota', r)}
+                                                                className={`w-full text-left px-3 py-2 rounded-lg text-[10px] font-bold transition-all flex items-center justify-between ${
+                                                                    historySelectedFilters['rota']?.includes(r)
+                                                                        ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400'
+                                                                        : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-600'
+                                                                }`}
+                                                            >
+                                                                {r}
+                                                                {historySelectedFilters['rota']?.includes(r) && <CheckCircle2 size={12} />}
                                                             </button>
                                                         ))}
                                                     </div>
@@ -3421,12 +3490,12 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                                   <tbody>
                                       {filteredArchivedResults.map((r, i) => (
                                           <tr key={i} className="hover:bg-slate-50 dark:hover:bg-slate-800 border-b border-slate-200 dark:border-slate-800 group">
-                                              <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}">
-                                                  {editingHistoryId === r.id && editingHistoryField === 'rota' ? (
+                                              <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center font-mono">
+                                                  {editingHistoryId === r.id && editingHistoryField === 'semana' ? (
                                                       <input
                                                           type="text"
-                                                          value={r.rota}
-                                                          onChange={(e) => handleUpdateHistoryCell(r.id!, 'rota', e.target.value)}
+                                                          value={r.semana || ''}
+                                                          onChange={(e) => handleUpdateHistoryCell(r.id!, 'semana', e.target.value)}
                                                           onBlur={() => { setEditingHistoryId(null); setEditingHistoryField(null); }}
                                                           onKeyDown={(e) => { if (e.key === 'Enter') { (e.target as HTMLInputElement).blur(); } }}
                                                           className="w-full bg-primary-100 dark:bg-primary-900/30 border-2 border-primary-500 px-2 py-1 font-bold outline-none"
@@ -3434,10 +3503,10 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                                                       />
                                                   ) : (
                                                       <div
-                                                          onClick={() => { setEditingHistoryId(r.id!); setEditingHistoryField('rota'); }}
-                                                          className="font-bold text-primary-700 dark:text-primary-400 cursor-pointer hover:bg-primary-50 dark:hover:bg-primary-900/20 rounded px-1"
+                                                          onClick={() => { setEditingHistoryId(r.id!); setEditingHistoryField('semana'); }}
+                                                          className="cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 rounded px-1"
                                                       >
-                                                          {r.rota}
+                                                          {r.semana || '---'}
                                                       </div>
                                                   )}
                                               </td>
@@ -3456,16 +3525,21 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                                                           onClick={() => { setEditingHistoryId(r.id!); setEditingHistoryField('data'); }}
                                                           className="cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 rounded px-1"
                                                       >
-                                                          {r.data}
+                                                          {(() => {
+                                                            if (!r.data) return '';
+                                                            // Converte de AAAA-MM-DD para DD/MM/AAAA
+                                                            const [ano, mes, dia] = r.data.split('-');
+                                                            return `${dia}/${mes}/${ano}`;
+                                                          })()}
                                                       </div>
                                                   )}
                                               </td>
-                                              <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center font-mono">
-                                                  {editingHistoryId === r.id && editingHistoryField === 'semana' ? (
+                                              <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}">
+                                                  {editingHistoryId === r.id && editingHistoryField === 'rota' ? (
                                                       <input
                                                           type="text"
-                                                          value={r.semana || ''}
-                                                          onChange={(e) => handleUpdateHistoryCell(r.id!, 'semana', e.target.value)}
+                                                          value={r.rota}
+                                                          onChange={(e) => handleUpdateHistoryCell(r.id!, 'rota', e.target.value)}
                                                           onBlur={() => { setEditingHistoryId(null); setEditingHistoryField(null); }}
                                                           onKeyDown={(e) => { if (e.key === 'Enter') { (e.target as HTMLInputElement).blur(); } }}
                                                           className="w-full bg-primary-100 dark:bg-primary-900/30 border-2 border-primary-500 px-2 py-1 font-bold outline-none"
@@ -3473,10 +3547,10 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                                                       />
                                                   ) : (
                                                       <div
-                                                          onClick={() => { setEditingHistoryId(r.id!); setEditingHistoryField('semana'); }}
-                                                          className="cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 rounded px-1"
+                                                          onClick={() => { setEditingHistoryId(r.id!); setEditingHistoryField('rota'); }}
+                                                          className="font-bold text-primary-700 dark:text-primary-400 cursor-pointer hover:bg-primary-50 dark:hover:bg-primary-900/20 rounded px-1"
                                                       >
-                                                          {r.semana || '---'}
+                                                          {r.rota}
                                                       </div>
                                                   )}
                                               </td>

@@ -70,6 +70,7 @@ const AppContent = () => {
   // Estado do modal de sessão expirada
   const [sessionExpired, setSessionExpired] = useState(false);
   const [isRenewing, setIsRenewing] = useState(false);
+  const lastTokenErrorRef = useRef<number>(0);
 
   // Ref para a função de cleanup do loop de refresh
   const stopRefreshLoopRef = useRef<(() => void) | null>(null);
@@ -78,6 +79,20 @@ const AppContent = () => {
 
   // Chamado quando o loop detecta que a sessão não pode ser renovada silenciosamente
   const handleSessionExpired = () => {
+    // Debounce: só exibe modal se não houve erro nos últimos 10 segundos
+    const now = Date.now();
+    if (now - lastTokenErrorRef.current < 10000) {
+      console.warn('[APP] Sessão expirada ignorada (debounce)');
+      return;
+    }
+    
+    // Só exibe se já não estiver exibindo
+    if (sessionExpired) {
+      console.warn('[APP] Sessão expirada ignorada (modal já aberto)');
+      return;
+    }
+
+    lastTokenErrorRef.current = now;
     console.warn('[APP] Sessão expirada — exibindo modal de renovação');
     setSessionExpired(true);
   };
@@ -114,6 +129,7 @@ const AppContent = () => {
         (window as any).__access_token = response.accessToken;
         setUser(prev => prev ? { ...prev, accessToken: response.accessToken } : prev);
         setSessionExpired(false);
+        lastTokenErrorRef.current = 0; // Reset debounce após renovação bem-sucedida
         console.log('[APP] ✅ Sessão renovada com sucesso');
       }
     } catch (err: any) {
@@ -129,6 +145,7 @@ const AppContent = () => {
     setUser(user);
     (window as any).__access_token = user.accessToken;
     setSessionExpired(false);
+    lastTokenErrorRef.current = Date.now(); // Previne modal imediato após login
 
     // Inicia o loop de refresh proativo (background — sem re-renderização)
     if (stopRefreshLoopRef.current) stopRefreshLoopRef.current();
@@ -230,12 +247,20 @@ const AppContent = () => {
     return () => clearInterval(interval);
   }, [currentUser, tasks]);
 
-  // Escuta o evento token-expired disparado pelo sharepointService
+  // Escuta o evento token-expired disparado pelo sharepointService (com debounce)
   useEffect(() => {
-    const onTokenExpired = () => handleSessionExpired();
+    const onTokenExpired = () => {
+      // Debounce: ignora eventos repetidos dentro de 10 segundos
+      const now = Date.now();
+      if (now - lastTokenErrorRef.current < 10000) {
+        console.warn('[EVENT_LISTENER] token-expired ignorado (debounce)');
+        return;
+      }
+      handleSessionExpired();
+    };
     window.addEventListener('token-expired', onTokenExpired);
     return () => window.removeEventListener('token-expired', onTokenExpired);
-  }, []);
+  }, [sessionExpired]);
 
   const handleLogout = async () => {
     // Para o loop de refresh antes de deslogar
