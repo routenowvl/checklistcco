@@ -725,9 +725,19 @@ export const SharePointService = {
       }
 
       console.log(`[ARCHIVE_QUERY] URL: /sites/${siteId}/lists/${historyListId}/items Filter: ${filter}`);
-      const data = await graphFetch(`/sites/${siteId}/lists/${historyListId}/items?expand=fields&$filter=${filter}&$top=999`, token);
       
-      const results = (data.value || []).map((item: any) => {
+      // Busca todos os itens com paginação (SharePoint retorna max 100 por página)
+      let allItems: any[] = [];
+      let nextUrl: string | null = `/sites/${siteId}/lists/${historyListId}/items?expand=fields&$filter=${filter}&$top=100`;
+      
+      while (nextUrl) {
+        const data = await graphFetch(nextUrl, token);
+        allItems = allItems.concat(data.value || []);
+        nextUrl = data['@odata.nextLink'] || null;
+        console.log(`[ARCHIVE_QUERY] Página carregada. Total acumulado: ${allItems.length}`);
+      }
+
+      const results = allItems.map((item: any) => {
         const f = item.fields;
         const dataStr = f[colData] ? f[colData].split('T')[0] : "";
         const semanaFromSharePoint = f[resolveFieldName(mapping, 'Semana')] || "";

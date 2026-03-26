@@ -1803,14 +1803,24 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
     // Ordena por data e hora de início (da mais antiga para a mais recente)
     return [...result].sort((a, b) => {
-      // Converte data DD/MM/AAAA para formato comparável
+      // Converte data (pode vir em YYYY-MM-DD ou DD/MM/AAAA) para timestamp
       const parseDate = (dateStr: string) => {
         if (!dateStr) return 0;
-        const match = dateStr.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-        if (match) {
-          const [, day, month, year] = match;
+        
+        // Tenta formato YYYY-MM-DD (vem do SharePoint)
+        const matchISO = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (matchISO) {
+          const [, year, month, day] = matchISO;
           return new Date(Number(year), Number(month) - 1, Number(day)).getTime();
         }
+        
+        // Tenta formato DD/MM/AAAA
+        const matchBR = dateStr.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+        if (matchBR) {
+          const [, day, month, year] = matchBR;
+          return new Date(Number(year), Number(month) - 1, Number(day)).getTime();
+        }
+        
         return 0;
       };
 
@@ -1821,7 +1831,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         return Number(parts[0] || 0) * 3600 + Number(parts[1] || 0) * 60 + Number(parts[2] || 0);
       };
 
-      // Compora primeiro por data
+      // Compara primeiro por data
       const dateA = parseDate(a.data);
       const dateB = parseDate(b.data);
       if (dateA !== dateB) {
