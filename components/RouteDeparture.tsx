@@ -202,10 +202,34 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   };
 
   // Verifica se todas as rotas de uma operação estão com statusGeral = 'OK'
+  // e se não há rotas pendentes de sair no dia (coluna SAÍDA vazia)
   const checkOperationAllOK = (operacao: string): boolean => {
     const operationRoutes = routes.filter(r => r.operacao === operacao);
     if (operationRoutes.length === 0) return false;
 
+    // Verifica se há alguma rota prevista para hoje que ainda não saiu (saida vazia/nula)
+    const today = getBrazilDate();
+    const hasPendingRoute = operationRoutes.some(r => {
+      // Considera apenas rotas do dia atual
+      const routeDate = r.data || '';
+      if (routeDate !== today) return false;
+
+      // Verifica se a coluna saida está vazia (nula, undefined, string vazia, ou apenas espaços)
+      // IMPORTANTE: "00:00:00" é um horário válido (meia-noite) e NÃO é considerado vazio
+      // Se tiver "-" na coluna saida, considera como rota que já saiu (não é pendente)
+      const saidaVazia = !r.saida || r.saida.trim() === '';
+
+      // Se saida está vazia e a rota é de hoje, é uma rota pendente
+      return saidaVazia;
+    });
+
+    // Se há rota pendente de sair hoje, não considera como OK
+    if (hasPendingRoute) {
+      console.log(`[checkOperationAllOK] ${operacao} tem rota pendente de sair hoje - não pode ser OK`);
+      return false;
+    }
+
+    // Verifica se todas as rotas estão com statusGeral = 'OK'
     return operationRoutes.every(r => r.statusGeral === 'OK');
   };
 
@@ -308,7 +332,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     if (config?.ultimoEnvioSaida && config.ultimoEnvioSaida.trim() !== '') {
       try {
         let envioDate: Date | null = null;
-        
+
         // Tenta converter o ultimoEnvioSaida para Date
         if (config.ultimoEnvioSaida.includes('T')) {
           envioDate = new Date(config.ultimoEnvioSaida);
@@ -318,12 +342,12 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
           const [h, m, s] = hora ? hora.split(':') : ['00', '00', '00'];
           envioDate = new Date(Number(ano), Number(mes) - 1, Number(dia), Number(h), Number(m), Number(s));
         }
-        
+
         if (envioDate && !isNaN(envioDate.getTime())) {
           // Verifica se o envio foi HOJE no fuso de Brasília
           const envioDateBrazil = envioDate.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
           const todayBrazil = getBrazilDate();
-          
+
           if (envioDateBrazil === todayBrazil) {
             console.log(`[WEBHOOK] ⚠️ Já enviado hoje para ${operacao} (SharePoint: ${config.ultimoEnvioSaida}), ignorando envio duplicado`);
             cleanupSendState(operacao);
@@ -335,6 +359,24 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         // Em caso de erro, continua com o envio por segurança
       }
     }
+
+    // VERIFICA SE HÁ ROTAS PENDENTES DE SAIR NO DIA (saida vazia)
+    // Se houver, o status deve ser "Atualizar" em vez de "OK"
+    const hasPendingRoute = operationRoutes.some(r => {
+      const routeDate = r.data || '';
+      if (routeDate !== today) return false;
+      
+      // Verifica se a coluna saida está vazia (nula, undefined, string vazia, ou apenas espaços)
+      // IMPORTANTE: "00:00:00" é um horário válido (meia-noite) e NÃO é considerado vazio
+      // Se tiver "-" na coluna saida, considera como rota que já saiu (não é pendente)
+      const saidaVazia = !r.saida || r.saida.trim() === '';
+      
+      return saidaVazia;
+    });
+
+    // Determina o status baseado na verificação de rotas pendentes
+    const statusDeterminado = hasPendingRoute ? 'Atualizar' : 'OK';
+    console.log(`[WEBHOOK_AUTO] Status determinado para ${operacao}: ${statusDeterminado} (hasPendingRoute: ${hasPendingRoute})`);
 
     // Marca como enviado para evitar duplicidade
     sentTodayRef.current.add(sentKey);
@@ -410,23 +452,33 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
           console.warn(`[WEBHOOK_AUTO] ⚠️ Webhook não retornou dataEnvioEmail/horarioEnvioEmail`);
         }
 
-        // Atualiza Status se o webhook retornar
+        // Atualiza Status baseado no retorno do webhook OU no status determinado localmente
         const statusRetorno = responseData[0]?.status || responseData.status;
+        
+        // Usa o status do webhook se disponível, senão usa o status determinado localmente
+        let statusFinal = '';
+        
         if (statusRetorno) {
-          const statusFormatado = statusRetorno.toLowerCase() === "atualizar" ? "Atualizar" : 
-                                  statusRetorno.toLowerCase() === "ok" ? "OK" : statusRetorno;
-          console.log(`[WEBHOOK_AUTO] Atualizando Status: ${statusFormatado}`);
-          await SharePointService.updateStatusOperacao(token, operacao, statusFormatado);
-          
-          // Atualiza estado local IMEDIATAMENTE
-          setUserConfigs(prev => prev.map(c =>
-            c.operacao === operacao
-              ? { ...c, Status: statusFormatado }
-              : c
-          ));
+          // Webhook retornou status - usa o retorno (pode ser "OK" ou "Atualizar")
+          statusFinal = statusRetorno.toLowerCase() === "atualizar" ? "Atualizar" :
+                        statusRetorno.toLowerCase() === "ok" ? "OK" : statusRetorno;
+          console.log(`[WEBHOOK_AUTO] Status retornado pelo webhook: ${statusFinal}`);
         } else {
-          console.warn(`[WEBHOOK_AUTO] ⚠️ Webhook não retornou campo status`);
+          // Webhook não retornou status - usa o status determinado localmente
+          statusFinal = statusDeterminado;
+          console.log(`[WEBHOOK_AUTO] Webhook não retornou status - usando status determinado localmente: ${statusFinal}`);
         }
+        
+        // Atualiza o status no SharePoint
+        console.log(`[WEBHOOK_AUTO] Atualizando Status: ${statusFinal}`);
+        await SharePointService.updateStatusOperacao(token, operacao, statusFinal);
+
+        // Atualiza estado local IMEDIATAMENTE
+        setUserConfigs(prev => prev.map(c =>
+          c.operacao === operacao
+            ? { ...c, Status: statusFinal }
+            : c
+        ));
 
         console.log(`[WEBHOOK_AUTO] ✅ Status de ${operacao} enviado com sucesso!`);
         
@@ -3123,12 +3175,17 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                           </button>
                       )}
                   </div>
-                  {/* Cards de Desempenho (GERAL e INTERNO) */}
-                  {archivedResults.length > 0 && (
+                  {/* Cards de Desempenho (FILTRADO) - Atualizam conforme filtros aplicados */}
+                  {filteredArchivedResults.length > 0 && (
                       <div className="px-6 py-4 bg-slate-100 dark:bg-slate-800/50 border-b dark:border-slate-800 flex items-center gap-4 shrink-0">
                           <div className="flex items-center gap-2">
                               <Database size={18} className="text-slate-400" />
                               <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">Desempenho do Período</span>
+                              {hasHistoryActiveColFilters && (
+                                  <span className="text-[8px] font-bold text-amber-600 dark:text-amber-400 bg-amber-100 dark:bg-amber-900/30 px-2 py-0.5 rounded-full border border-amber-300 dark:border-amber-700">
+                                      FILTRADO ({filteredArchivedResults.length} de {archivedResults.length})
+                                  </span>
+                              )}
                           </div>
                           <div className="flex items-center gap-3 ml-auto">
                               <div className={`flex items-center gap-3 px-5 py-2 rounded-xl min-w-[130px] ${isDarkMode ? 'bg-emerald-900/30 border border-emerald-700/50' : 'bg-emerald-100 border border-emerald-300'}`}>
@@ -3136,8 +3193,8 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                                   <p className={`text-[8px] font-black uppercase tracking-wider mb-0.5 ${isDarkMode ? 'text-emerald-400' : 'text-emerald-700'}`}>Geral</p>
                                   <p className={`text-xl font-black leading-none ${isDarkMode ? 'text-emerald-400' : 'text-emerald-700'}`}>{
                                     (() => {
-                                      const total = archivedResults.length;
-                                      const okPrevistoCount = archivedResults.filter(r => r.statusOp === 'OK' || r.statusOp === 'Previsto').length;
+                                      const total = filteredArchivedResults.length;
+                                      const okPrevistoCount = filteredArchivedResults.filter(r => r.statusOp === 'OK' || r.statusOp === 'Previsto').length;
                                       return total > 0 ? ((okPrevistoCount / total) * 100).toFixed(2) : '0.00';
                                     })()
                                   }%</p>
@@ -3149,9 +3206,9 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                                   <p className={`text-[8px] font-black uppercase tracking-wider mb-0.5 ${isDarkMode ? 'text-blue-400' : 'text-blue-700'}`}>Interno</p>
                                   <p className={`text-xl font-black leading-none ${isDarkMode ? 'text-blue-400' : 'text-blue-700'}`}>{
                                     (() => {
-                                      const total = archivedResults.length;
+                                      const total = filteredArchivedResults.length;
                                       const justificativas = ['Manutenção', 'Mão de obra', 'Logística'];
-                                      const rotasComJustificativa = archivedResults.filter(r => justificativas.includes(r.motivo)).length;
+                                      const rotasComJustificativa = filteredArchivedResults.filter(r => justificativas.includes(r.motivo)).length;
                                       const rotasSemJustificativa = total - rotasComJustificativa;
                                       return total > 0 ? ((rotasSemJustificativa / total) * 100).toFixed(2) : '0.00';
                                     })()

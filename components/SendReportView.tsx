@@ -189,6 +189,25 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       return;
     }
 
+    // VERIFICA SE HÁ ROTAS PENDENTES DE SAIR NO DIA (saida vazia)
+    // Se houver, o status deve ser "Atualizar" em vez de "OK"
+    const today = getBrazilDate();
+    const hasPendingRoute = selectedDepartures.some(d => {
+      const routeDate = d.data || '';
+      if (routeDate !== today) return false;
+      
+      // Verifica se a coluna saida está vazia (nula, undefined, string vazia, ou apenas espaços)
+      // IMPORTANTE: "00:00:00" é um horário válido (meia-noite) e NÃO é considerado vazio
+      // Se tiver "-" na coluna saida, considera como rota que já saiu (não é pendente)
+      const saidaVazia = !d.saida || d.saida.trim() === '';
+      
+      return saidaVazia;
+    });
+
+    // Determina o status baseado na verificação de rotas pendentes
+    const statusDeterminado = hasPendingRoute ? 'Atualizar' : 'OK';
+    console.log(`[SEND_DEPARTURES] Status determinado para ${selectedOperacao}: ${statusDeterminado} (hasPendingRoute: ${hasPendingRoute})`);
+
     const payload = {
       tipo: "SAIDA",  // Tipo para envio de uma única filial/operação
       operacao: selectedOperacao,
@@ -282,26 +301,35 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
           console.warn('[WEBHOOK] Campo de data/hora de envio não encontrado na resposta');
         }
 
-        // Processa e salva o status retornado pelo webhook
+        // Processa e salva o status retornado pelo webhook OU o status determinado localmente
         const webhookStatus = responseData[0]?.status || responseData.status;
+        
+        // Usa o status do webhook se disponível, senão usa o status determinado localmente
+        let statusFinal = '';
+        
         if (webhookStatus) {
-          const token = await getValidToken() || currentUser.accessToken;
-          if (token) {
-            try {
-              console.log('[STATUS_WEBHOOK] Status retornado:', webhookStatus);
-              // Normaliza o status: "atualizar" → "Atualizar", "ok" → "OK"
-              const normalizedStatus = webhookStatus.toLowerCase() === 'atualizar' ? 'Atualizar' : 
-                                       webhookStatus.toLowerCase() === 'ok' ? 'OK' : webhookStatus;
-              
-              await SharePointService.updateStatusOperacao(
-                token,
-                selectedOperacao,
-                normalizedStatus
-              );
-              console.log('[STATUS_WEBHOOK] ✅ Status atualizado no SharePoint:', normalizedStatus);
-            } catch (err: any) {
-              console.error('Erro ao atualizar Status:', err.message);
-            }
+          // Webhook retornou status - usa o retorno
+          statusFinal = webhookStatus.toLowerCase() === 'atualizar' ? 'Atualizar' :
+                        webhookStatus.toLowerCase() === 'ok' ? 'OK' : webhookStatus;
+          console.log('[STATUS_WEBHOOK] Status retornado pelo webhook:', statusFinal);
+        } else {
+          // Webhook não retornou status - usa o status determinado localmente
+          statusFinal = statusDeterminado;
+          console.log('[STATUS_WEBHOOK] Webhook não retornou status - usando status determinado localmente:', statusFinal);
+        }
+        
+        const token = await getValidToken() || currentUser.accessToken;
+        if (token) {
+          try {
+            console.log('[STATUS] Atualizando Status no SharePoint:', statusFinal);
+            await SharePointService.updateStatusOperacao(
+              token,
+              selectedOperacao,
+              statusFinal
+            );
+            console.log('[STATUS] ✅ Status atualizado no SharePoint:', statusFinal);
+          } catch (err: any) {
+            console.error('Erro ao atualizar Status:', err.message);
           }
         }
 
@@ -390,6 +418,25 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       setIsSending(false);
       return;
     }
+
+    // VERIFICA SE HÁ ROTAS PENDENTES DE SAIR NO DIA (saida vazia)
+    // Se houver, o status deve ser "Atualizar" em vez de "OK"
+    const today = getBrazilDate();
+    const hasPendingRoute = nonCollections.some(d => {
+      const routeDate = d.data || '';
+      if (routeDate !== today) return false;
+      
+      // Verifica se a coluna saida está vazia (nula, undefined, string vazia, ou apenas espaços)
+      // IMPORTANTE: "00:00:00" é um horário válido (meia-noite) e NÃO é considerado vazio
+      // Se tiver "-" na coluna saida, considera como rota que já saiu (não é pendente)
+      const saidaVazia = !d.saida || d.saida.trim() === '';
+      
+      return saidaVazia;
+    });
+
+    // Determina o status baseado na verificação de rotas pendentes
+    const statusDeterminado = hasPendingRoute ? 'Atualizar' : 'OK';
+    console.log(`[SEND_NAO_COLETA] Status determinado para ${selectedOperacaoNC}: ${statusDeterminado} (hasPendingRoute: ${hasPendingRoute})`);
 
     const payload = {
       tipo: "NAO_COLETA",  // Tipo para envio de não coletas de uma única filial/operação
@@ -484,25 +531,35 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
           console.warn('[WEBHOOK] Campo de data/hora de envio não encontrado na resposta');
         }
 
-        // Processa e salva o status retornado pelo webhook
+        // Processa e salva o status retornado pelo webhook OU o status determinado localmente
         const webhookStatus = responseData[0]?.status || responseData.status;
+        
+        // Usa o status do webhook se disponível, senão usa o status determinado localmente
+        let statusFinal = '';
+        
         if (webhookStatus) {
-          const token = await getValidToken() || currentUser.accessToken;
-          if (token) {
-            try {
-              console.log('[STATUS_WEBHOOK_NAO_COLETAS] Status retornado:', webhookStatus);
-              const normalizedStatus = webhookStatus.toLowerCase() === 'atualizar' ? 'Atualizar' : 
-                                       webhookStatus.toLowerCase() === 'ok' ? 'OK' : webhookStatus;
-              
-              await SharePointService.updateStatusOperacao(
-                token,
-                selectedOperacaoNC,
-                normalizedStatus
-              );
-              console.log('[STATUS_WEBHOOK_NAO_COLETAS] ✅ Status atualizado no SharePoint:', normalizedStatus);
-            } catch (err: any) {
-              console.error('Erro ao atualizar Status:', err.message);
-            }
+          // Webhook retornou status - usa o retorno
+          statusFinal = webhookStatus.toLowerCase() === 'atualizar' ? 'Atualizar' :
+                        webhookStatus.toLowerCase() === 'ok' ? 'OK' : webhookStatus;
+          console.log('[STATUS_WEBHOOK_NAO_COLETAS] Status retornado pelo webhook:', statusFinal);
+        } else {
+          // Webhook não retornou status - usa o status determinado localmente
+          statusFinal = statusDeterminado;
+          console.log('[STATUS_WEBHOOK_NAO_COLETAS] Webhook não retornou status - usando status determinado localmente:', statusFinal);
+        }
+        
+        const token = await getValidToken() || currentUser.accessToken;
+        if (token) {
+          try {
+            console.log('[STATUS_NAO_COLETAS] Atualizando Status no SharePoint:', statusFinal);
+            await SharePointService.updateStatusOperacao(
+              token,
+              selectedOperacaoNC,
+              statusFinal
+            );
+            console.log('[STATUS_NAO_COLETAS] ✅ Status atualizado no SharePoint:', statusFinal);
+          } catch (err: any) {
+            console.error('Erro ao atualizar Status:', err.message);
           }
         }
 
