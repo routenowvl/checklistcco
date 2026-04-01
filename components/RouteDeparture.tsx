@@ -69,33 +69,24 @@ const FilterDropdown = ({ col, routes, colFilters, setColFilters, selectedFilter
     );
 };
 
-// Componente de Input de Emails com Pills
+// Componente de Input de Emails com Pills (altura automática baseada no conteúdo)
 interface EmailInputProps {
   label: string;
   value: string;
   onChange: (value: string) => void;
   onRemoveEmail: (email: string) => void;
   placeholder?: string;
-  height?: number;
-  onHeightChange?: (height: number) => void;
-  minHeight?: number;
-  maxHeight?: number;
 }
 
-const EmailInput: React.FC<EmailInputProps> = ({ 
-  label, 
-  value, 
-  onChange, 
-  onRemoveEmail, 
+const EmailInput: React.FC<EmailInputProps> = ({
+  label,
+  value,
+  onChange,
+  onRemoveEmail,
   placeholder = "Cole emails em massa...",
-  height = 120,
-  onHeightChange,
-  minHeight = 80,
-  maxHeight = 300
 }) => {
   const emails = value ? value.split(';').map(e => e.trim()).filter(e => e.length > 0) : [];
-  const isResizingRef = useRef(false);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     e.preventDefault();
@@ -119,29 +110,6 @@ const EmailInput: React.FC<EmailInputProps> = ({
     }
   };
 
-  const handleMouseDown = (e: React.MouseEvent) => {
-    e.preventDefault();
-    isResizingRef.current = true;
-    const startY = e.clientY;
-    const startHeight = height;
-
-    const handleMouseMove = (moveEvent: MouseEvent) => {
-      if (!isResizingRef.current) return;
-      const deltaY = moveEvent.clientY - startY;
-      const newHeight = Math.max(minHeight, Math.min(maxHeight, startHeight + deltaY));
-      onHeightChange?.(newHeight);
-    };
-
-    const handleMouseUp = () => {
-      isResizingRef.current = false;
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-    };
-
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
-  };
-
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
@@ -150,16 +118,11 @@ const EmailInput: React.FC<EmailInputProps> = ({
           {emails.length} email(s)
         </span>
       </div>
-      <div 
-        ref={containerRef}
-        className="w-full border border-slate-200 dark:border-slate-700 rounded-2xl bg-white dark:bg-slate-900 shadow-sm focus-within:ring-2 focus-within:ring-blue-500 transition-all overflow-hidden"
-        style={{ height: `${height}px` }}
+      <div
+        className="w-full border border-slate-200 dark:border-slate-700 rounded-2xl bg-white dark:bg-slate-900 shadow-sm focus-within:ring-2 focus-within:ring-blue-500 transition-all"
       >
-        {/* Pills container com scroll */}
-        <div 
-          className="p-3 overflow-y-auto scrollbar-thin"
-          style={{ maxHeight: `${height - 50}px` }}
-        >
+        {/* Pills container */}
+        <div className="p-3 min-h-[60px] max-h-[200px] overflow-y-auto scrollbar-thin">
           <div className="flex flex-wrap gap-2">
             {emails.map((email, index) => (
               <span
@@ -178,23 +141,11 @@ const EmailInput: React.FC<EmailInputProps> = ({
             ))}
           </div>
         </div>
-        
-        {/* Divider e resize handle */}
-        <div 
-          className="h-3 cursor-ns-resize hover:bg-blue-50 dark:hover:bg-slate-800 transition-colors flex items-center justify-center border-t border-slate-100 dark:border-slate-800"
-          onMouseDown={handleMouseDown}
-          title="Arraste para redimensionar"
-        >
-          <div className="flex gap-1">
-            <div className="w-1 h-1 rounded-full bg-slate-300 dark:bg-slate-600"></div>
-            <div className="w-1 h-1 rounded-full bg-slate-300 dark:bg-slate-600"></div>
-            <div className="w-1 h-1 rounded-full bg-slate-300 dark:bg-slate-600"></div>
-          </div>
-        </div>
-        
-        {/* Input area fixo no fundo */}
-        <div className="p-2 border-t border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50">
+
+        {/* Input area */}
+        <div className="p-2 border-t border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50 rounded-b-2xl">
           <textarea
+            ref={textareaRef}
             onPaste={handlePaste}
             onKeyDown={handleKeyDown}
             onChange={(e) => {
@@ -213,9 +164,6 @@ const EmailInput: React.FC<EmailInputProps> = ({
           />
         </div>
       </div>
-      <p className="text-[9px] text-slate-500 dark:text-slate-400 font-bold uppercase">
-        Pressione Enter, Vírgula ou Espaço para adicionar • Ctrl+V para colar em massa • Arraste para redimensionar
-      </p>
     </div>
   );
 };
@@ -260,9 +208,6 @@ const RouteDepartureView: React.FC<{
   const [configEnvio, setConfigEnvio] = useState<string>('');
   const [configCopia, setConfigCopia] = useState<string>('');
   const [isSavingConfig, setIsSavingConfig] = useState(false);
-  const [envioHeight, setEnvioHeight] = useState(140);
-  const [copiaHeight, setCopiaHeight] = useState(140);
-  const TOTAL_HEIGHT = 320; // Altura total fixa para os dois campos
 
   // Funções auxiliares para manipular emails
   const parseEmails = (text: string): string[] => {
@@ -287,20 +232,6 @@ const RouteDepartureView: React.FC<{
     const emails = parseEmails(currentText);
     const filtered = emails.filter(e => e !== emailToRemove);
     return formatEmails(filtered);
-  };
-
-  // Função para redimensionar campo de Envio (ajusta Cópia automaticamente)
-  const handleEnvioHeightChange = (newHeight: number) => {
-    setEnvioHeight(newHeight);
-    const remainingHeight = TOTAL_HEIGHT - newHeight;
-    setCopiaHeight(Math.max(80, Math.min(300, remainingHeight)));
-  };
-
-  // Função para redimensionar campo de Cópia (ajusta Envio automaticamente)
-  const handleCopiaHeightChange = (newHeight: number) => {
-    setCopiaHeight(newHeight);
-    const remainingHeight = TOTAL_HEIGHT - newHeight;
-    setEnvioHeight(Math.max(80, Math.min(300, remainingHeight)));
   };
 
   // Estado para o popup de edição do checklist (GERAL)
@@ -4406,16 +4337,14 @@ const RouteDepartureView: React.FC<{
                   </select>
                 </div>
 
-                {/* Container com altura fixa para os dois campos */}
-                <div className="space-y-3" style={{ height: `${TOTAL_HEIGHT}px` }}>
+                {/* Campos de Email */}
+                <div className="space-y-4">
                   {/* Campo Envio com Pills */}
                   <EmailInput
                     label="Emails para Envio (Principal)"
                     value={configEnvio}
                     onChange={setConfigEnvio}
                     onRemoveEmail={(email) => setConfigEnvio(removeEmail(configEnvio, email))}
-                    height={envioHeight}
-                    onHeightChange={handleEnvioHeightChange}
                     placeholder="Cole emails em massa..."
                   />
 
@@ -4425,8 +4354,6 @@ const RouteDepartureView: React.FC<{
                     value={configCopia}
                     onChange={setConfigCopia}
                     onRemoveEmail={(email) => setConfigCopia(removeEmail(configCopia, email))}
-                    height={copiaHeight}
-                    onHeightChange={handleCopiaHeightChange}
                     placeholder="Cole emails em massa..."
                   />
                 </div>
