@@ -2640,7 +2640,7 @@ const RouteDepartureView: React.FC<{
               </p>
             </div>
           </div>
-          {/* Indicadores GERAL e INTERNO */}
+          {/* Indicadores GERAL, INTERNO e MINHAS ROTAS */}
           <div className="flex items-center gap-3 ml-8">
             <div className={`flex items-center gap-3 px-6 py-3 rounded-2xl min-w-[140px] ${isDarkMode ? 'bg-emerald-900/30 border border-emerald-700/50' : 'bg-emerald-100 border border-emerald-300'}`}>
               <div className="text-center flex-1">
@@ -2655,6 +2655,13 @@ const RouteDepartureView: React.FC<{
                 <p className={`text-2xl font-black leading-none ${isDarkMode ? 'text-blue-400' : 'text-blue-700'}`}>{performanceIndicators.interno}%</p>
               </div>
               <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse shrink-0"></div>
+            </div>
+            <div className={`flex items-center gap-3 px-6 py-3 rounded-2xl min-w-[140px] ${isDarkMode ? 'bg-purple-900/30 border border-purple-700/50' : 'bg-purple-100 border border-purple-300'}`}>
+              <div className="text-center flex-1">
+                <p className={`text-[9px] font-black uppercase tracking-wider mb-1 ${isDarkMode ? 'text-purple-400' : 'text-purple-700'}`}>Total Rotas</p>
+                <p className={`text-2xl font-black leading-none ${isDarkMode ? 'text-purple-400' : 'text-purple-700'}`}>{routes.length}</p>
+              </div>
+              <div className="w-2 h-2 bg-purple-500 rounded-full animate-pulse shrink-0"></div>
             </div>
           </div>
         </div>
