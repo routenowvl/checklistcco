@@ -547,6 +547,52 @@ export const SharePointService = {
   },
 
   /**
+   * Atualiza os campos Envio e Copia na lista CONFIG_OPERACAO_SAIDA_DE_ROTAS
+   */
+  async updateRouteConfigEmails(token: string, operacao: string, envio: string, copia: string): Promise<void> {
+    try {
+      const siteId = await getResolvedSiteId(token);
+      const list = await findListByIdOrName(siteId, 'CONFIG_OPERACAO_SAIDA_DE_ROTAS', token);
+      const { mapping, internalNames, readOnly } = await getListColumnMapping(siteId, list.id, token);
+
+      // Busca o item da operação específica
+      const operacaoField = resolveFieldName(mapping, 'OPERACAO');
+      const filter = `fields/${operacaoField} eq '${operacao}'`;
+      const existing = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}&$top=1`, token);
+
+      if (existing.value && existing.value.length > 0) {
+        const itemId = existing.value[0].id;
+        const envioField = resolveFieldName(mapping, 'Envio');
+        const copiaField = resolveFieldName(mapping, 'Copia');
+
+        const fields: any = {
+          [envioField]: envio,
+          [copiaField]: copia
+        };
+
+        console.log(`[SHAREPOINT] Enviando PATCH para item ${itemId}:`);
+        console.log(`  - ${envioField} = ${envio}`);
+        console.log(`  - ${copiaField} = ${copia}`);
+
+        await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${itemId}/fields`, token, {
+          method: 'PATCH',
+          body: JSON.stringify(fields)
+        });
+
+        console.log(`[SHAREPOINT] ✅ Emails atualizados para ${operacao}:`);
+        console.log(`  - Envio: ${envio}`);
+        console.log(`  - Copia: ${copia}`);
+      } else {
+        console.warn(`[SHAREPOINT] Operação "${operacao}" não encontrada na lista CONFIG_OPERACAO_SAIDA_DE_ROTAS`);
+        throw new Error(`Operação "${operacao}" não encontrada no SharePoint`);
+      }
+    } catch (error: any) {
+      console.error('[SHAREPOINT] ❌ Erro ao atualizar emails:', error.message);
+      throw error;
+    }
+  },
+
+  /**
    * Atualiza o campo UltimoEnvioResumoSaida na lista CONFIG_OPERACAO_SAIDA_DE_ROTAS
    */
   async updateUltimoEnvioResumoSaida(token: string, operacao: string, dataHoraEnvio: string): Promise<void> {

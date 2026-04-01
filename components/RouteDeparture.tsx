@@ -69,7 +69,162 @@ const FilterDropdown = ({ col, routes, colFilters, setColFilters, selectedFilter
     );
 };
 
-const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
+// Componente de Input de Emails com Pills
+interface EmailInputProps {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  onRemoveEmail: (email: string) => void;
+  placeholder?: string;
+  height?: number;
+  onHeightChange?: (height: number) => void;
+  minHeight?: number;
+  maxHeight?: number;
+}
+
+const EmailInput: React.FC<EmailInputProps> = ({ 
+  label, 
+  value, 
+  onChange, 
+  onRemoveEmail, 
+  placeholder = "Cole emails em massa...",
+  height = 120,
+  onHeightChange,
+  minHeight = 80,
+  maxHeight = 300
+}) => {
+  const emails = value ? value.split(';').map(e => e.trim()).filter(e => e.length > 0) : [];
+  const isResizingRef = useRef(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    e.preventDefault();
+    const pastedText = e.clipboardData.getData('text');
+    const newEmails = pastedText.split(/[;\s,\n]+/).map(e => e.trim()).filter(e => e.length > 0);
+    const existing = emails;
+    const combined = [...existing, ...newEmails.filter(e => !existing.includes(e))];
+    onChange(combined.join(';'));
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Adiciona email ao pressionar Enter, Espaço ou Vírgula
+    if (e.key === 'Enter' || e.key === ',' || e.key === ' ') {
+      e.preventDefault();
+      const input = e.currentTarget;
+      const currentText = input.value.trim();
+      if (currentText && !emails.includes(currentText)) {
+        onChange([...emails, currentText].join(';'));
+        input.value = '';
+      }
+    }
+  };
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    isResizingRef.current = true;
+    const startY = e.clientY;
+    const startHeight = height;
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      if (!isResizingRef.current) return;
+      const deltaY = moveEvent.clientY - startY;
+      const newHeight = Math.max(minHeight, Math.min(maxHeight, startHeight + deltaY));
+      onHeightChange?.(newHeight);
+    };
+
+    const handleMouseUp = () => {
+      isResizingRef.current = false;
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  };
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <label className="text-[10px] font-black uppercase text-slate-400">{label}</label>
+        <span className="text-[9px] font-bold text-slate-500 dark:text-slate-400">
+          {emails.length} email(s)
+        </span>
+      </div>
+      <div 
+        ref={containerRef}
+        className="w-full border border-slate-200 dark:border-slate-700 rounded-2xl bg-white dark:bg-slate-900 shadow-sm focus-within:ring-2 focus-within:ring-blue-500 transition-all overflow-hidden"
+        style={{ height: `${height}px` }}
+      >
+        {/* Pills container com scroll */}
+        <div 
+          className="p-3 overflow-y-auto scrollbar-thin"
+          style={{ maxHeight: `${height - 50}px` }}
+        >
+          <div className="flex flex-wrap gap-2">
+            {emails.map((email, index) => (
+              <span
+                key={index}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 rounded-full text-[10px] font-bold uppercase tracking-wide border border-blue-200 dark:border-blue-800 flex-shrink-0"
+              >
+                {email}
+                <button
+                  onClick={() => onRemoveEmail(email)}
+                  className="hover:bg-blue-200 dark:hover:bg-blue-800 rounded-full p-0.5 transition-colors"
+                  title="Remover email"
+                >
+                  <X size={12} />
+                </button>
+              </span>
+            ))}
+          </div>
+        </div>
+        
+        {/* Divider e resize handle */}
+        <div 
+          className="h-3 cursor-ns-resize hover:bg-blue-50 dark:hover:bg-slate-800 transition-colors flex items-center justify-center border-t border-slate-100 dark:border-slate-800"
+          onMouseDown={handleMouseDown}
+          title="Arraste para redimensionar"
+        >
+          <div className="flex gap-1">
+            <div className="w-1 h-1 rounded-full bg-slate-300 dark:bg-slate-600"></div>
+            <div className="w-1 h-1 rounded-full bg-slate-300 dark:bg-slate-600"></div>
+            <div className="w-1 h-1 rounded-full bg-slate-300 dark:bg-slate-600"></div>
+          </div>
+        </div>
+        
+        {/* Input area fixo no fundo */}
+        <div className="p-2 border-t border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50">
+          <textarea
+            onPaste={handlePaste}
+            onKeyDown={handleKeyDown}
+            onChange={(e) => {
+              const newVal = e.target.value.trim();
+              if (newVal === '' || newVal.endsWith(';')) {
+                const newEmail = newVal.replace(/;/g, '').trim();
+                if (newEmail && !emails.includes(newEmail)) {
+                  onChange([...emails, newEmail].join(';'));
+                }
+                e.target.value = '';
+              }
+            }}
+            placeholder={placeholder}
+            rows={1}
+            className="w-full bg-transparent outline-none text-[11px] font-bold text-slate-700 dark:text-slate-300 placeholder-slate-400 resize-none"
+          />
+        </div>
+      </div>
+      <p className="text-[9px] text-slate-500 dark:text-slate-400 font-bold uppercase">
+        Pressione Enter, Vírgula ou Espaço para adicionar • Ctrl+V para colar em massa • Arraste para redimensionar
+      </p>
+    </div>
+  );
+};
+
+const RouteDepartureView: React.FC<{
+  currentUser: User;
+  isConfigModalOpen?: boolean;
+  setIsConfigModalOpen?: (open: boolean) => void;
+}> = ({ currentUser, isConfigModalOpen = false, setIsConfigModalOpen = () => {} }) => {
   const [routes, setRoutes] = useState<RouteDeparture[]>([]);
   const [userConfigs, setUserConfigs] = useState<RouteConfig[]>([]);
   const [routeMappings, setRouteMappings] = useState<RouteOperationMapping[]>([]);
@@ -98,6 +253,55 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   // Estado para o popup de edição de horários
   const [isTimeEditModalOpen, setIsTimeEditModalOpen] = useState(false);
   const [timeEditData, setTimeEditData] = useState<{ routeId: string; template: string; startTime: string; endTime: string } | null>(null);
+
+  // Estado para o modal de configuração de emails
+  const [isEmailConfigModalOpen, setIsEmailConfigModalOpen] = useState(false);
+  const [selectedOperacaoConfig, setSelectedOperacaoConfig] = useState<string>('');
+  const [configEnvio, setConfigEnvio] = useState<string>('');
+  const [configCopia, setConfigCopia] = useState<string>('');
+  const [isSavingConfig, setIsSavingConfig] = useState(false);
+  const [envioHeight, setEnvioHeight] = useState(140);
+  const [copiaHeight, setCopiaHeight] = useState(140);
+  const TOTAL_HEIGHT = 320; // Altura total fixa para os dois campos
+
+  // Funções auxiliares para manipular emails
+  const parseEmails = (text: string): string[] => {
+    if (!text || text.trim() === '') return [];
+    // Separa por ;, vírgula, espaço ou newline, e filtra vazios
+    return text.split(/[;\s,\n]+/).map(e => e.trim()).filter(e => e.length > 0);
+  };
+
+  const formatEmails = (emails: string[]): string => {
+    return emails.join(';');
+  };
+
+  const addEmails = (currentText: string, newText: string): string => {
+    const existing = parseEmails(currentText);
+    const newEmails = parseEmails(newText);
+    // Adiciona apenas emails que ainda não existem
+    const combined = [...existing, ...newEmails.filter(e => !existing.includes(e))];
+    return formatEmails(combined);
+  };
+
+  const removeEmail = (currentText: string, emailToRemove: string): string => {
+    const emails = parseEmails(currentText);
+    const filtered = emails.filter(e => e !== emailToRemove);
+    return formatEmails(filtered);
+  };
+
+  // Função para redimensionar campo de Envio (ajusta Cópia automaticamente)
+  const handleEnvioHeightChange = (newHeight: number) => {
+    setEnvioHeight(newHeight);
+    const remainingHeight = TOTAL_HEIGHT - newHeight;
+    setCopiaHeight(Math.max(80, Math.min(300, remainingHeight)));
+  };
+
+  // Função para redimensionar campo de Cópia (ajusta Envio automaticamente)
+  const handleCopiaHeightChange = (newHeight: number) => {
+    setCopiaHeight(newHeight);
+    const remainingHeight = TOTAL_HEIGHT - newHeight;
+    setEnvioHeight(Math.max(80, Math.min(300, remainingHeight)));
+  };
 
   // Estado para o popup de edição do checklist (GERAL)
   const [isChecklistEditModalOpen, setIsChecklistEditModalOpen] = useState(false);
@@ -573,6 +777,73 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     };
   }, []);
 
+  // Sincroniza com modal de configuração vindo do App.tsx
+  useEffect(() => {
+    if (isConfigModalOpen && userConfigs.length > 0) {
+      setIsEmailConfigModalOpen(true);
+      // Seleciona a primeira operação por padrão
+      if (!selectedOperacaoConfig) {
+        setSelectedOperacaoConfig(userConfigs[0].operacao);
+        const firstConfig = userConfigs[0];
+        setConfigEnvio(firstConfig.Envio || '');
+        setConfigCopia(firstConfig.Copia || '');
+      }
+    }
+  }, [isConfigModalOpen, userConfigs]);
+
+  // Carrega dados da configuração quando seleciona operação (apenas uma vez)
+  useEffect(() => {
+    if (selectedOperacaoConfig && userConfigs.length > 0) {
+      const config = userConfigs.find(c => c.operacao === selectedOperacaoConfig);
+      if (config) {
+        console.log(`[EMAIL_CONFIG] Carregando dados iniciais para ${selectedOperacaoConfig}:`);
+        console.log(`  Envio: ${config.Envio || '(vazio)'}`);
+        console.log(`  Copia: ${config.Copia || '(vazio)'}`);
+        setConfigEnvio(config.Envio || '');
+        setConfigCopia(config.Copia || '');
+      }
+    }
+  }, [selectedOperacaoConfig]); // Remove userConfigs das dependências para não recarregar no polling
+
+  // Função para salvar configuração de emails
+  const handleSaveEmailConfig = async () => {
+    if (!selectedOperacaoConfig) {
+      alert('Selecione uma operação para configurar.');
+      return;
+    }
+
+    setIsSavingConfig(true);
+    try {
+      const token = await getValidToken() || currentUser.accessToken;
+      if (!token) {
+        alert('Erro de autenticação. Tente novamente.');
+        return;
+      }
+
+      console.log(`[EMAIL_CONFIG] Salvando configuração para ${selectedOperacaoConfig}`);
+      console.log(`[EMAIL_CONFIG] Envio: ${configEnvio}`);
+      console.log(`[EMAIL_CONFIG] Copia: ${configCopia}`);
+
+      await SharePointService.updateRouteConfigEmails(token, selectedOperacaoConfig, configEnvio, configCopia);
+
+      // Atualiza estado local
+      setUserConfigs(prev => prev.map(c => 
+        c.operacao === selectedOperacaoConfig 
+          ? { ...c, Envio: configEnvio, Copia: configCopia }
+          : c
+      ));
+
+      alert('Configuração salva com sucesso!');
+      setIsEmailConfigModalOpen(false);
+      setIsConfigModalOpen(false);
+    } catch (error: any) {
+      console.error('[EMAIL_CONFIG] Erro ao salvar configuração:', error);
+      alert(`Erro ao salvar: ${error.message}`);
+    } finally {
+      setIsSavingConfig(false);
+    }
+  };
+
   // Cleanup automático de locks expirados (timeout de 30 segundos)
   useEffect(() => {
     const LOCK_TIMEOUT = 30 * 1000; // 30 segundos
@@ -886,7 +1157,8 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     const toleranceSec = timeToSeconds(toleranceStr);
     const startSec = timeToSeconds(inicio);
 
-    if (saida && saida !== '00:00:00' && saida !== '') {
+    // IMPORTANTE: "00:00:00" é horário válido (meia-noite), deve ser considerado no cálculo
+    if (saida && saida !== '') {
         const endSec = timeToSeconds(saida);
         const diff = endSec - startSec;
         const gapFormatted = secondsToTime(diff);
@@ -2198,7 +2470,8 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     }
 
     // Atrasada sem saída (amarelo) — prioridade sobre GERAL
-    if (status === 'Atrasada' && (!route.saida || route.saida === '00:00:00' || route.saida === '')) {
+    // IMPORTANTE: "00:00:00" é horário válido (meia-noite), não considera como vazio
+    if (status === 'Atrasada' && (!route.saida || route.saida === '')) {
       return isDarkMode ? "bg-yellow-500/30 text-yellow-100 font-bold border-l-[12px] border-yellow-500 shadow-lg" : "bg-amber-300 text-amber-950 font-bold border-l-[12px] border-amber-600 shadow-sm";
     }
 
@@ -2437,7 +2710,8 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
               const rowStyle = getRowStyle(route);
               const isSelected = selectedIds.has(route.id!);
               const isDelayed = route.statusOp === 'Atrasada' || route.statusOp === 'Adiantada';
-              const isDelayedFilled = isDelayed && (route.saida !== '' && route.saida !== '00:00:00');
+              // IMPORTANTE: "00:00:00" é horário válido (meia-noite), considera como preenchido
+              const isDelayedFilled = isDelayed && route.saida !== '';
               const isGhost = route.id === 'ghost';
               const inputClass = `w-full bg-transparent outline-none border-none px-3 py-2 text-[11px] font-semibold uppercase transition-all ${isDelayedFilled ? (isDarkMode ? 'text-white placeholder-white/50' : 'text-slate-900 placeholder-slate-700') : isDarkMode ? 'text-slate-200 placeholder-slate-500' : 'text-slate-900 placeholder-slate-400'}`;
 
@@ -2872,7 +3146,8 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
               const rowStyle = getRowStyle(route);
               const isSelected = selectedIds.has(route.id!);
               const isDelayed = route.statusOp === 'Atrasada' || route.statusOp === 'Adiantada';
-              const isDelayedFilled = isDelayed && (route.saida !== '' && route.saida !== '00:00:00');
+              // IMPORTANTE: "00:00:00" é horário válido (meia-noite), considera como preenchido
+              const isDelayedFilled = isDelayed && route.saida !== '';
               const inputClass = `w-full bg-transparent outline-none border-none px-3 py-2 text-[11px] font-semibold uppercase transition-all ${isDelayedFilled ? (isDarkMode ? 'text-white placeholder-white/50' : 'text-slate-900 placeholder-slate-700') : isDarkMode ? 'text-slate-200 placeholder-slate-500' : 'text-slate-900 placeholder-slate-400'}`;
 
               return (
@@ -4075,6 +4350,101 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                 className="flex-1 py-3 bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-300 rounded-xl font-black uppercase text-[10px] hover:bg-slate-200 dark:hover:bg-slate-700 transition-all flex items-center justify-center gap-2"
               >
                 <X size={16} /> Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Configuração de Emails */}
+      {isEmailConfigModalOpen && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[110] flex items-center justify-center p-4 animate-in zoom-in duration-300">
+          <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] shadow-2xl w-full max-w-2xl overflow-hidden border border-blue-500/30 flex flex-col max-h-[90vh]">
+            <div className="bg-blue-600 text-white p-6 flex justify-between items-center shrink-0">
+              <div className="flex items-center gap-4">
+                <Settings2 size={32} className="animate-spin-slow" />
+                <div>
+                  <h3 className="text-xl font-black uppercase tracking-tight">Configurar Emails de Envio</h3>
+                  <p className="text-xs text-blue-200 font-bold uppercase tracking-widest">Selecione a operação e edite os emails</p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setIsEmailConfigModalOpen(false);
+                  setIsConfigModalOpen(false);
+                }}
+                className="hover:bg-white/10 p-2 rounded-full transition-all"
+              >
+                <X size={24} />
+              </button>
+            </div>
+
+            <div className="p-6 bg-slate-50 dark:bg-slate-950 overflow-y-auto flex-1 scrollbar-thin">
+              <div className="space-y-4">
+                {/* Seleção de Operação */}
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase text-slate-400">Operação</label>
+                  <select
+                    value={selectedOperacaoConfig}
+                    onChange={(e) => setSelectedOperacaoConfig(e.target.value)}
+                    className="w-full p-4 border border-slate-200 dark:border-slate-700 rounded-2xl bg-white dark:bg-slate-900 text-sm font-bold outline-none dark:text-white shadow-sm focus:ring-2 focus:ring-blue-500"
+                  >
+                    {userConfigs.map(config => (
+                      <option key={config.operacao} value={config.operacao}>
+                        {config.nomeExibicao}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Container com altura fixa para os dois campos */}
+                <div className="space-y-3" style={{ height: `${TOTAL_HEIGHT}px` }}>
+                  {/* Campo Envio com Pills */}
+                  <EmailInput
+                    label="Emails para Envio (Principal)"
+                    value={configEnvio}
+                    onChange={setConfigEnvio}
+                    onRemoveEmail={(email) => setConfigEnvio(removeEmail(configEnvio, email))}
+                    height={envioHeight}
+                    onHeightChange={handleEnvioHeightChange}
+                    placeholder="Cole emails em massa..."
+                  />
+
+                  {/* Campo Cópia com Pills */}
+                  <EmailInput
+                    label="Emails para Cópia"
+                    value={configCopia}
+                    onChange={setConfigCopia}
+                    onRemoveEmail={(email) => setConfigCopia(removeEmail(configCopia, email))}
+                    height={copiaHeight}
+                    onHeightChange={handleCopiaHeightChange}
+                    placeholder="Cole emails em massa..."
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6 bg-white dark:bg-slate-900 border-t dark:border-slate-800 shrink-0 flex gap-4">
+              <button
+                onClick={handleSaveEmailConfig}
+                disabled={isSavingConfig}
+                className="flex-1 py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-black uppercase text-[11px] tracking-widest flex items-center justify-center gap-3 transition-all disabled:opacity-60 shadow-lg shadow-blue-500/20"
+              >
+                {isSavingConfig ? (
+                  <><Loader2 size={18} className="animate-spin" /> Salvando...</>
+                ) : (
+                  <><Check size={18} /> Salvar Configuração</>
+                )}
+              </button>
+              <button
+                onClick={() => {
+                  setIsEmailConfigModalOpen(false);
+                  setIsConfigModalOpen(false);
+                }}
+                disabled={isSavingConfig}
+                className="flex-1 py-4 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-2xl font-black uppercase text-[11px] tracking-widest flex items-center justify-center gap-3 transition-all disabled:opacity-60 border border-slate-200 dark:border-slate-700"
+              >
+                <X size={18} /> Cancelar
               </button>
             </div>
           </div>

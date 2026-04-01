@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { HashRouter as Router, Routes, Route, useNavigate } from 'react-router-dom';
-import { CheckSquare, History, Truck, LogOut, ChevronLeft, ChevronRight, Loader2, Search, LayoutDashboard, TowerControl, RefreshCw, AlertTriangle } from 'lucide-react';
+import { HashRouter as Router, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
+import { CheckSquare, History, Truck, LogOut, ChevronLeft, ChevronRight, Loader2, Search, LayoutDashboard, TowerControl, RefreshCw, AlertTriangle, Settings2 } from 'lucide-react';
 import TaskManager from './components/TaskManager';
 import HistoryViewer from './components/HistoryViewer';
 import RouteDepartureView from './components/RouteDeparture';
@@ -66,6 +66,8 @@ const AppContent = () => {
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [collapsed, setCollapsed] = useState(true);
   const [collapsedCategories, setCollapsedCategories] = useState<string[]>([]);
+  const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
+  const [currentRoute, setCurrentRoute] = useState<string>('');
 
   // Estado do modal de sessão expirada
   const [sessionExpired, setSessionExpired] = useState(false);
@@ -76,6 +78,12 @@ const AppContent = () => {
   const stopRefreshLoopRef = useRef<(() => void) | null>(null);
 
   const navigate = useNavigate();
+  const location = useLocation();
+
+  // Atualiza currentRoute quando a localização muda
+  useEffect(() => {
+    setCurrentRoute(location.pathname);
+  }, [location]);
 
   // Chamado quando o loop detecta que a sessão não pode ser renovada silenciosamente
   const handleSessionExpired = () => {
@@ -312,7 +320,17 @@ const AppContent = () => {
           <SidebarLink to="/explorer" icon={Search} label="Explorador" active={window.location.hash === '#/explorer'} collapsed={collapsed} />
         </nav>
         <div className="mt-auto space-y-2 border-t pt-4 dark:border-slate-800">
-           <button onClick={() => setCollapsed(!collapsed)} className="p-2 w-full flex justify-center text-slate-500 hover:bg-slate-100 rounded-lg">
+           {/* Botão de Configurações - aparece apenas na tela Saídas */}
+           {currentRoute === '/departures' && (
+             <button
+               onClick={() => setIsConfigModalOpen(true)}
+               className="p-2 w-full flex justify-center text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors"
+               title="Configurar Emails de Envio"
+             >
+               <Settings2 size={20} />
+             </button>
+           )}
+           <button onClick={() => setCollapsed(!collapsed)} className="p-2 w-full flex justify-center text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg">
              {collapsed ? <ChevronRight size={20}/> : <ChevronLeft size={20}/>}
            </button>
         </div>
@@ -340,7 +358,13 @@ const AppContent = () => {
                 teamMembers={teamMembers}
               />
             } />
-            <Route path="/departures" element={<RouteDepartureView currentUser={currentUser} />} />
+            <Route path="/departures" element={
+              <RouteDepartureView 
+                currentUser={currentUser} 
+                isConfigModalOpen={isConfigModalOpen}
+                setIsConfigModalOpen={setIsConfigModalOpen}
+              /> 
+            } />
             <Route path="/resumo" element={<SendReportView currentUser={currentUser} />} />
             <Route path="/history" element={<HistoryViewer currentUser={currentUser} />} />
             <Route path="/explorer" element={<SharePointExplorer currentUser={currentUser} />} />
