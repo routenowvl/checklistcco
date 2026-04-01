@@ -15,8 +15,8 @@ export default defineConfig(({ mode }) => {
           registerType: 'autoUpdate',
           includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
           manifest: {
-            name: 'Checklist CCO - VIA Group',
-            short_name: 'CCO',
+            name: 'Checklist Web',
+            short_name: 'Checklist',
             description: 'Gestão de Operações em Tempo Real',
             theme_color: '#020617',
             background_color: '#020617',
