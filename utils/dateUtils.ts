@@ -249,3 +249,29 @@ export function getWeekString(dateString: string): string {
 
   return `${monthAbbrClean} S${weekNumber}`;
 }
+
+/**
+ * Obtém a data para nova rota no Controle de Saídas com base no horário atual (Brasília).
+ * Regra:
+ * - 21:00h às 23:59h: Retorna data de amanhã (D+1)
+ * - 00:00h às 20:59h: Retorna data de hoje (D)
+ *
+ * @returns Data no formato YYYY-MM-DD
+ */
+export function getRouteDateForCurrentTime(): string {
+  const now = new Date();
+  const hours = getBrazilHours();
+  
+  // Se for 21:00h ou mais, usa amanhã (D+1)
+  if (hours >= 21) {
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    return tomorrow.toLocaleDateString('pt-BR', { timeZone: BRAZIL_TIMEZONE })
+      .split('/')
+      .reverse()
+      .join('-');
+  }
+  
+  // Caso contrário, usa hoje (D)
+  return getBrazilDate();
+}

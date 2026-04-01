@@ -4,7 +4,7 @@ import { RouteDeparture, User, RouteOperationMapping, RouteConfig } from '../typ
 import { SharePointService } from '../services/sharepointService';
 import { getValidToken } from '../services/tokenService';
 import * as XLSX from 'xlsx';
-import { getBrazilDate, getBrazilHours, getBrazilMinutes, toBrazilDate, getWeekString } from '../utils/dateUtils';
+import { getBrazilDate, getBrazilHours, getBrazilMinutes, toBrazilDate, getWeekString, getRouteDateForCurrentTime } from '../utils/dateUtils';
 import {
   Clock, X, Loader2, RefreshCw, ShieldCheck,
   CheckCircle2, ChevronDown,
@@ -240,7 +240,7 @@ const RouteDepartureView: React.FC<{
   });
 
   const [ghostRow, setGhostRow] = useState<Partial<RouteDeparture>>({
-    id: 'ghost', rota: '', data: getBrazilDate(), inicio: '', saida: '', motorista: '', placa: '', statusGeral: '', aviso: 'NÃO', operacao: '', statusOp: 'Previsto', tempo: '', semana: ''
+    id: 'ghost', rota: '', data: getRouteDateForCurrentTime(), inicio: '', saida: '', motorista: '', placa: '', statusGeral: '', aviso: 'NÃO', operacao: '', statusOp: 'Previsto', tempo: '', semana: ''
   });
 
   // Armazena os últimos checklists de motorista por operação
@@ -1783,13 +1783,15 @@ const RouteDepartureView: React.FC<{
 
     try {
       const config = userConfigs.find(c => c.operacao === newRouteData.operacao);
-      const { status, gap } = calculateStatusWithTolerance(newRouteData.inicio, '', config?.tolerancia || "00:00:00", getBrazilDate());
+      // Usa a data correta baseada no horário atual (D+1 após 21:00h)
+      const routeDate = getRouteDateForCurrentTime();
+      const { status, gap } = calculateStatusWithTolerance(newRouteData.inicio, '', config?.tolerancia || "00:00:00", routeDate);
 
       const newRoute: RouteDeparture = {
         id: '',
-        semana: getWeekString(getBrazilDate()),
+        semana: getWeekString(routeDate),
         rota: newRouteData.rota,
-        data: getBrazilDate(),
+        data: routeDate,
         inicio: newRouteData.inicio,
         motorista: newRouteData.motorista,
         placa: newRouteData.placa,
@@ -1812,7 +1814,7 @@ const RouteDepartureView: React.FC<{
       // Limpa o formulário e fecha o modal
       setNewRouteData({ rota: '', inicio: '', motorista: '', placa: '', operacao: '' });
       setIsAddRouteModalOpen(false);
-      
+
       // DESABILITA o filtro por horário para não misturar a nova rota na ordenação
       setIsSortByTimeEnabled(false);
 
@@ -1861,8 +1863,8 @@ const RouteDepartureView: React.FC<{
     setRoutes(prev => [...prev, ...newRoutes]);
     setBulkStatus(null);
     setPendingBulkRoutes([]);
-    setGhostRow({ id: 'ghost', rota: '', data: getBrazilDate(), inicio: '', saida: '', motorista: '', placa: '', statusGeral: '', aviso: 'NÃO', operacao: '', statusOp: 'Previsto', tempo: '' });
-    
+    setGhostRow({ id: 'ghost', rota: '', data: getRouteDateForCurrentTime(), inicio: '', saida: '', motorista: '', placa: '', statusGeral: '', aviso: 'NÃO', operacao: '', statusOp: 'Previsto', tempo: '' });
+
     // DESABILITA o filtro por horário para não misturar as novas rotas na ordenação
     setIsSortByTimeEnabled(false);
   };
@@ -2008,7 +2010,7 @@ const RouteDepartureView: React.FC<{
                 console.error('[UPDATE_BLOCKED] Usuário tentou salvar rota com operação não pertencente:', updatedGhost.operacao);
                 alert('⚠️ Erro: Você não tem permissão para adicionar rotas desta operação.');
                 // Reseta a ghost row para evitar dados inconsistentes
-                setGhostRow({ id: 'ghost', rota: '', data: getBrazilDate(), inicio: '', saida: '', motorista: '', placa: '', statusGeral: '', aviso: 'NÃO', operacao: '', statusOp: 'Previsto', tempo: '' });
+                setGhostRow({ id: 'ghost', rota: '', data: getRouteDateForCurrentTime(), inicio: '', saida: '', motorista: '', placa: '', statusGeral: '', aviso: 'NÃO', operacao: '', statusOp: 'Previsto', tempo: '' });
                 return;
             }
 
@@ -2023,11 +2025,11 @@ const RouteDepartureView: React.FC<{
                 // Limpa filtros após criar nova rota para garantir que ela seja visível
                 setColFilters({});
                 setSelectedFilters({});
-                
+
                 // DESABILITA o filtro por horário para não misturar a nova rota na ordenação
                 setIsSortByTimeEnabled(false);
 
-                setGhostRow({ id: 'ghost', rota: '', data: getBrazilDate(), inicio: '', saida: '', motorista: '', placa: '', statusGeral: '', aviso: 'NÃO', operacao: '', statusOp: 'Previsto', tempo: '' });
+                setGhostRow({ id: 'ghost', rota: '', data: getRouteDateForCurrentTime(), inicio: '', saida: '', motorista: '', placa: '', statusGeral: '', aviso: 'NÃO', operacao: '', statusOp: 'Previsto', tempo: '' });
             } catch (e) {} finally { setIsSyncing(false); }
         } else {
             setGhostRow(updatedGhost);
