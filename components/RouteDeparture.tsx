@@ -201,6 +201,73 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     throw new Error('Sessão expirada. Por favor, renove sua sessão.');
   };
 
+  // Sistema de Lock Temporário para Edição de Linhas
+  const LOCK_TIMEOUT = 30 * 1000; // 30 segundos
+
+  /**
+   * Tenta adquirir lock para editar uma linha
+   * Retorna true se conseguiu, false se outra pessoa está editando
+   */
+  const tryAcquireLock = (routeId: string): boolean => {
+    const route = routes.find(r => r.id === routeId);
+    if (!route) return false;
+
+    const now = Date.now();
+    
+    // Verifica se já tem lock válido de outro usuário
+    if (route.editingUser && route.lockExpiresAt && now < route.lockExpiresAt) {
+      if (route.editingUser !== currentUser.email) {
+        console.warn(`[LOCK_BLOCKED] Linha ${routeId} está sendo editada por ${route.editingUser}`);
+        return false;
+      }
+    }
+
+    // Adquire o lock (ou renova se já era do usuário atual)
+    setRoutes(prev => prev.map(r => {
+      if (r.id === routeId) {
+        return {
+          ...r,
+          editingUser: currentUser.email,
+          lockExpiresAt: now + LOCK_TIMEOUT
+        };
+      }
+      return r;
+    }));
+
+    return true;
+  };
+
+  /**
+   * Libera o lock de uma linha
+   */
+  const releaseLock = (routeId: string) => {
+    setRoutes(prev => prev.map(r => {
+      if (r.id === routeId && r.editingUser === currentUser.email) {
+        return { ...r, editingUser: undefined, lockExpiresAt: undefined };
+      }
+      return r;
+    }));
+  };
+
+  /**
+   * Libera todos os locks do usuário atual (ao sair da tela ou desmontar)
+   */
+  const releaseAllLocks = () => {
+    setRoutes(prev => prev.map(r => {
+      if (r.editingUser === currentUser.email) {
+        return { ...r, editingUser: undefined, lockExpiresAt: undefined };
+      }
+      return r;
+    }));
+  };
+
+  // Libera locks ao desmontar o componente
+  useEffect(() => {
+    return () => {
+      releaseAllLocks();
+    };
+  }, [currentUser.email]);
+
   // Verifica se todas as rotas de uma operação estão com statusGeral = 'OK'
   // e se não há rotas pendentes de sair no dia (coluna SAÍDA vazia)
   const checkOperationAllOK = (operacao: string): boolean => {
@@ -504,6 +571,34 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     return () => {
       Object.values(countdownTimersRef.current).forEach(timer => clearInterval(timer));
     };
+  }, []);
+
+  // Cleanup automático de locks expirados (timeout de 30 segundos)
+  useEffect(() => {
+    const LOCK_TIMEOUT = 30 * 1000; // 30 segundos
+    
+    const cleanupExpiredLocks = () => {
+      const now = Date.now();
+      let hasChanges = false;
+      
+      setRoutes(prev => {
+        const updated = prev.map(route => {
+          // Se tem lock e expirou, remove
+          if (route.lockExpiresAt && now > route.lockExpiresAt && route.editingUser) {
+            console.log(`[LOCK_CLEANUP] Lock expirado para ${route.id} (era de ${route.editingUser})`);
+            hasChanges = true;
+            return { ...route, editingUser: undefined, lockExpiresAt: undefined };
+          }
+          return route;
+        });
+        return hasChanges ? updated : prev;
+      });
+    };
+
+    // Verifica a cada 5 segundos
+    const interval = setInterval(cleanupExpiredLocks, 5000);
+    
+    return () => clearInterval(interval);
   }, []);
 
   // Verifica mudanças nas rotas para disparar o popup
@@ -1506,32 +1601,48 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     const token = await getAccessToken();
     setIsSyncing(true);
 
-    // Usa routes diretamente em vez de filteredRoutes para evitar problemas de sincronização
-    const targetRoutes = routes.slice(startRowIndex, startRowIndex + lines.length);
+    // CORREÇÃO CRÍTICA DO BUG:
+    // O startRowIndex vem do filteredRoutes.map(), então devemos usar filteredRoutes
+    // para identificar as linhas afetadas, NÃO routes (que contém todas as rotas)
+    const targetRoutes = filteredRoutes.slice(startRowIndex, startRowIndex + lines.length);
 
     if (targetRoutes.length === 0) {
         setIsSyncing(false);
         return;
     }
 
-    // VALIDAÇÃO CRÍTICA: Filtra apenas rotas que pertencem às operações do usuário logado
+    // VALIDAÇÃO CRÍTICA: Verifica TODAS as linhas afetadas antes de aplicar o paste
+    // Se houver QUALQUER linha de outra operação, REJEITA o paste inteiro
     const myOps = new Set(userConfigs.map(c => c.operacao));
-    const validTargetRoutes = targetRoutes.filter(r => !r.operacao || myOps.has(r.operacao));
-    
-    const blockedCount = targetRoutes.length - validTargetRoutes.length;
-    if (blockedCount > 0) {
-        console.warn(`[PASTE] ${blockedCount} rotas de outras operações serão ignoradas`);
-        alert(`⚠️ Você só pode editar rotas das suas operações. ${blockedCount} rota(s) serão ignoradas.`);
-    }
+    const invalidRoutes = targetRoutes.filter(r => r.operacao && !myOps.has(r.operacao));
 
-    if (validTargetRoutes.length === 0) {
-        alert('⚠️ Nenhuma rota selecionada pertence às suas operações.');
+    if (invalidRoutes.length > 0) {
+        // REJEITA O PASTE INTEIRO - não aplica em nenhuma linha
+        console.error(`[PASTE_BLOCKED] ${invalidRoutes.length} linhas são de outras operações. Paste rejeitado.`);
+        alert(`❌ Paste bloqueado: ${invalidRoutes.length} linha(s) pertencem a outras operações.\n\nIsso previne edição acidental de dados de outros usuários.`);
         setIsSyncing(false);
         return;
     }
 
-    // Prepara todas as atualizações
-    const updatePromises = validTargetRoutes.map(async (route, i) => {
+    // VALIDAÇÃO CRÍTICA 2: Verifica se alguma linha está com lock de outro usuário
+    const now = Date.now();
+    const lockedRoutes = targetRoutes.filter(r =>
+      r.editingUser &&
+      r.lockExpiresAt &&
+      now < r.lockExpiresAt &&
+      r.editingUser !== currentUser.email
+    );
+
+    if (lockedRoutes.length > 0) {
+        console.error(`[PASTE_BLOCKED] ${lockedRoutes.length} linhas estão sendo editadas por outros usuários.`);
+        const lockedBy = lockedRoutes.map(r => `${r.rota} (${r.editingUser})`).join(', ');
+        alert(`🔒 Paste bloqueado: ${lockedRoutes.length} linha(s) estão sendo editadas por outros usuários.\n\nLinhas bloqueadas: ${lockedBy}`);
+        setIsSyncing(false);
+        return;
+    }
+
+    // Todas as linhas são válidas, prossegue com o paste
+    const updatePromises = targetRoutes.map(async (route, i) => {
         let finalValue = lines[i];
         if (field === 'inicio' || field === 'saida') {
             finalValue = formatTimeInput(finalValue);
@@ -1655,12 +1766,28 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     const route = routes.find(r => r.id === id);
     if (!route) return;
 
-    // VALIDAÇÃO CRÍTICA: Só permite editar rotas que pertencem às operações do usuário logado
+    // VALIDAÇÃO CRÍTICA 1: Só permite editar rotas que pertencem às operações do usuário logado
     const myOps = new Set(userConfigs.map(c => c.operacao));
     if (route.operacao && !myOps.has(route.operacao)) {
         console.error('[UPDATE_BLOCKED] Usuário tentou editar rota de operação não pertencente:', route.operacao);
         alert('⚠️ Erro: Você não tem permissão para editar esta rota.');
         return;
+    }
+
+    // VALIDAÇÃO CRÍTICA 2: Verifica se outra pessoa está editando esta linha (lock temporário)
+    const now = Date.now();
+    if (route.editingUser && route.lockExpiresAt && now < route.lockExpiresAt) {
+      if (route.editingUser !== currentUser.email) {
+        console.warn(`[UPDATE_BLOCKED] Linha ${id} está sendo editada por ${route.editingUser} (lock até ${new Date(route.lockExpiresAt).toLocaleTimeString()})`);
+        alert(`🔒 Esta linha está sendo editada por ${route.editingUser}.\n\nAguarde alguns segundos e tente novamente.`);
+        return;
+      }
+    }
+
+    // Tenta adquirir o lock para esta edição
+    if (!tryAcquireLock(id)) {
+      console.error('[UPDATE_BLOCKED] Não foi possível adquirir lock para', id);
+      return;
     }
 
     let updatedRoute = { ...route, [field]: value };
@@ -1696,6 +1823,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     } catch (e) {
         console.error('[UPDATE] Error:', e);
     } finally {
+        releaseLock(id);
         setIsSyncing(false);
     }
   };
