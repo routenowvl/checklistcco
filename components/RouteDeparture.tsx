@@ -343,15 +343,15 @@ const RouteDepartureView: React.FC<{
     throw new Error('Sessão expirada. Por favor, renove sua sessão.');
   };
 
-  // Analisa histórico dos últimos 30 dias e identifica rotas com problemas
+  // Analisa histórico dos últimos 7 dias e identifica rotas com problemas
   const analyzeRouteHistory = async (token: string) => {
     try {
-      console.log('[ROUTE_ALERT] Analisando histórico dos últimos 30 dias...');
+      console.log('[ROUTE_ALERT] Analisando histórico dos últimos 7 dias...');
 
-      // Calcula data de 30 dias atrás
-      const thirtyDaysAgo = new Date();
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-      const startDate = thirtyDaysAgo.toISOString().split('T')[0];
+      // Calcula data de 7 dias atrás
+      const sevenDaysAgo = new Date();
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+      const startDate = sevenDaysAgo.toISOString().split('T')[0];
       const endDate = getBrazilDate();
 
       // Busca histórico no SharePoint
@@ -1563,7 +1563,7 @@ const RouteDepartureView: React.FC<{
       setRoutes(recalculatedRoutes);
       console.log('[LOAD_DATA] Dados carregados com sucesso');
 
-      // Analisa histórico dos últimos 30 dias para alertas (apenas no carregamento inicial)
+      // Analisa histórico dos últimos 7 dias para alertas (apenas no carregamento inicial)
       if (!isBackgroundRefresh) {
         analyzeRouteHistory(token);
       }
@@ -2874,7 +2874,7 @@ const RouteDepartureView: React.FC<{
                                             setSelectedRouteAlert({ rota: route.rota, history: routeAlerts[route.rota].history });
                                           }}
                                           className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 bg-red-500 hover:bg-red-600 text-white text-[9px] font-black rounded-full cursor-pointer transition-colors z-10"
-                                          title={`${routeAlerts[route.rota].count} ocorrência(s) de atraso/adiantamento nos últimos 30 dias. Clique para ver histórico.`}
+                                          title={`${routeAlerts[route.rota].count} ocorrência(s) de atraso/adiantamento nos últimos 7 dias. Clique para ver histórico.`}
                                         >
                                           {routeAlerts[route.rota].count}
                                         </span>
@@ -4394,7 +4394,7 @@ const RouteDepartureView: React.FC<{
                   <div className="p-6 max-h-[60vh] overflow-y-auto scrollbar-thin">
                       <div className="mb-4 p-4 bg-red-50 dark:bg-red-900/20 rounded-2xl border border-red-200 dark:border-red-800">
                           <p className="text-[11px] font-black uppercase text-red-700 dark:text-red-400 text-center">
-                              ⚠️ {selectedRouteAlert.history.length} ocorrência(s) de atraso/adiantamento nos últimos 30 dias
+                              ⚠️ {selectedRouteAlert.history.length} ocorrência(s) de atraso/adiantamento nos últimos 7 dias
                           </p>
                       </div>
                       <div className="space-y-3">
