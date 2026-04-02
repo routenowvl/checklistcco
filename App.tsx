@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { HashRouter as Router, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
-import { CheckSquare, History, Truck, LogOut, ChevronLeft, ChevronRight, Loader2, Search, LayoutDashboard, TowerControl, RefreshCw, AlertTriangle, Settings2 } from 'lucide-react';
+import { CheckSquare, History, Truck, LogOut, ChevronLeft, ChevronRight, Loader2, TowerControl, RefreshCw, AlertTriangle, Settings2, Milk } from 'lucide-react';
 import TaskManager from './components/TaskManager';
 import HistoryViewer from './components/HistoryViewer';
 import RouteDepartureView from './components/RouteDeparture';
-import SharePointExplorer from './components/SharePointExplorer';
+import NonCollectionsView from './components/NonCollectionsView';
 import SendReportView from './components/SendReportView';
 import Login from './components/Login';
+import LoadingScreen from './components/LoadingScreen';
 import PWAInstallPrompt from './components/PWAInstallPrompt';
 import { SharePointService } from './services/sharepointService';
 import { logout as msalLogout } from './services/authService';
@@ -62,7 +63,6 @@ const AppContent = () => {
   const [locations, setLocations] = useState<string[]>([]);
   const [teamMembers, setTeamMembers] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [syncMessage, setSyncMessage] = useState("Iniciando...");
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [collapsed, setCollapsed] = useState(true);
   const [collapsedCategories, setCollapsedCategories] = useState<string[]>([]);
@@ -174,16 +174,13 @@ const AppContent = () => {
     setIsLoading(true);
 
     try {
-      setSyncMessage("Carregando Definições...");
       const spTasks = await SharePointService.getTasks(token);
       const spOps = await SharePointService.getOperations(token, user.email);
       const spMembers = await SharePointService.getTeamMembers(token);
       setTeamMembers(spMembers);
 
-      setSyncMessage("Sincronizando Matriz 1:1...");
       await SharePointService.ensureMatrix(token, spTasks, spOps);
 
-      setSyncMessage("Recuperando Status...");
       const today = getBrazilDate();
       const spStatus = await SharePointService.getStatusByDate(token, today);
 
@@ -213,7 +210,6 @@ const AppContent = () => {
       setTasks(matrixTasks.filter(t => t.active !== false));
     } catch (err: any) {
       console.error("[APP] Erro ao carregar SharePoint:", err.message);
-      setSyncMessage("Erro na sincronização");
     } finally {
       setIsLoading(false);
     }
@@ -315,9 +311,9 @@ const AppContent = () => {
         <nav className="flex-1 space-y-2">
           <SidebarLink to="/" icon={CheckSquare} label="Checklist" active={window.location.hash === '#/'} collapsed={collapsed} />
           <SidebarLink to="/departures" icon={Truck} label="Saídas" active={window.location.hash === '#/departures'} collapsed={collapsed} />
+          <SidebarLink to="/nao-coletas" icon={Milk} label="Não Coletas" active={window.location.hash === '#/nao-coletas'} collapsed={collapsed} />
           <SidebarLink to="/resumo" icon={TowerControl} label="Resumo" active={window.location.hash === '#/resumo'} collapsed={collapsed} />
           <SidebarLink to="/history" icon={History} label="Histórico" active={window.location.hash === '#/history'} collapsed={collapsed} />
-          <SidebarLink to="/explorer" icon={Search} label="Explorador" active={window.location.hash === '#/explorer'} collapsed={collapsed} />
         </nav>
         <div className="mt-auto space-y-2 border-t pt-4 dark:border-slate-800">
            {/* Botão de Configurações - aparece apenas na tela Saídas */}
@@ -336,12 +332,9 @@ const AppContent = () => {
         </div>
       </aside>
 
-      <main className="flex-1 overflow-hidden p-4">
+      <main className="flex-1 overflow-hidden p-0">
         {isLoading ? (
-          <div className="h-full flex items-center justify-center flex-col gap-4 text-blue-600">
-             <Loader2 size={40} className="animate-spin" />
-             <p className="font-bold animate-pulse text-sm uppercase tracking-widest">{syncMessage}</p>
-          </div>
+          <LoadingScreen />
         ) : (
           <Routes>
             <Route path="/" element={
@@ -359,15 +352,15 @@ const AppContent = () => {
               />
             } />
             <Route path="/departures" element={
-              <RouteDepartureView 
-                currentUser={currentUser} 
+              <RouteDepartureView
+                currentUser={currentUser}
                 isConfigModalOpen={isConfigModalOpen}
                 setIsConfigModalOpen={setIsConfigModalOpen}
-              /> 
+              />
             } />
+            <Route path="/nao-coletas" element={<NonCollectionsView currentUser={currentUser} />} />
             <Route path="/resumo" element={<SendReportView currentUser={currentUser} />} />
             <Route path="/history" element={<HistoryViewer currentUser={currentUser} />} />
-            <Route path="/explorer" element={<SharePointExplorer currentUser={currentUser} />} />
           </Routes>
         )}
       </main>

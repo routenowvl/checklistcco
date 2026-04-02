@@ -1067,7 +1067,8 @@ const RouteDepartureView: React.FC<{
 
   const calculateStatusWithTolerance = (inicio: string, saida: string, toleranceStr: string = "00:00:00", routeDate: string): { status: string, gap: string } => {
     // Se não tem horário de início, retorna Previsto
-    if (!inicio || inicio === '' || inicio === '00:00:00') return { status: 'Previsto', gap: '' };
+    // NOTA: "00:00:00" é horário válido (meia-noite) e NÃO deve ser tratado como vazio
+    if (!inicio || inicio === '') return { status: 'Previsto', gap: '' };
     if (!routeDate) return { status: 'Previsto', gap: '' };
 
     // Se saida for "-", considera rota não saída (atrasada)
@@ -1701,6 +1702,9 @@ const RouteDepartureView: React.FC<{
       return;
     }
 
+    // NORMALIZAÇÃO DA PLACA: Remove espaços, hífens e converte para maiúsculo
+    const cleanPlaca = newRouteData.placa.replace(/[\s-]/g, '').toUpperCase();
+
     // VALIDAÇÃO CRÍTICA: Só permite adicionar rotas nas operações do usuário logado
     const myOps = new Set(userConfigs.map(c => c.operacao));
     if (!myOps.has(newRouteData.operacao)) {
@@ -1725,7 +1729,7 @@ const RouteDepartureView: React.FC<{
         data: routeDate,
         inicio: newRouteData.inicio,
         motorista: newRouteData.motorista,
-        placa: newRouteData.placa,
+        placa: cleanPlaca,
         saida: '',
         motivo: '',
         observacao: '',
@@ -1851,6 +1855,10 @@ const RouteDepartureView: React.FC<{
         let finalValue = lines[i];
         if (field === 'inicio' || field === 'saida') {
             finalValue = formatTimeInput(finalValue);
+        }
+        // NORMALIZAÇÃO DA PLACA: Remove espaços, hífens e converte para maiúsculo
+        if (field === 'placa') {
+            finalValue = finalValue.replace(/[\s-]/g, '').toUpperCase();
         }
         const updatedRoute: RouteDeparture = { ...route, [field]: finalValue };
         const config = userConfigs.find(c => c.operacao === updatedRoute.operacao);
@@ -3194,8 +3202,12 @@ const RouteDepartureView: React.FC<{
                           <input
                               type="text"
                               value={route.placa}
-                              onChange={(e) => updateCell(route.id!, 'placa', e.target.value)}
-                              className={`${inputClass} font-mono text-center`}
+                              onChange={(e) => {
+                                // Normalização: remove espaços, hífens e converte para maiúsculo
+                                const cleanValue = e.target.value.replace(/[\s-]/g, '').toUpperCase();
+                                updateCell(route.id!, 'placa', cleanValue);
+                              }}
+                              className={`${inputClass} font-mono text-center uppercase`}
                           />
                         </td>
                       );
@@ -3448,7 +3460,11 @@ const RouteDepartureView: React.FC<{
                 <input
                   type="text"
                   value={newRouteData.placa}
-                  onChange={e => setNewRouteData({ ...newRouteData, placa: e.target.value.toUpperCase() })}
+                  onChange={e => {
+                    // Normalização: remove espaços, hífens e converte para maiúsculo
+                    const cleanValue = e.target.value.replace(/[\s-]/g, '').toUpperCase();
+                    setNewRouteData({ ...newRouteData, placa: cleanValue });
+                  }}
                   placeholder="Ex: ABC1D23"
                   className="w-full p-3 border dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-sm font-bold outline-none dark:text-white focus:border-primary-500 transition-colors uppercase"
                 />
@@ -4009,7 +4025,11 @@ const RouteDepartureView: React.FC<{
                                                       <input
                                                           type="text"
                                                           value={r.placa}
-                                                          onChange={(e) => handleUpdateHistoryCell(r.id!, 'placa', e.target.value)}
+                                                          onChange={(e) => {
+                                                            // Normalização: remove espaços, hífens e converte para maiúsculo
+                                                            const cleanValue = e.target.value.replace(/[\s-]/g, '').toUpperCase();
+                                                            handleUpdateHistoryCell(r.id!, 'placa', cleanValue);
+                                                          }}
                                                           onBlur={() => { setEditingHistoryId(null); setEditingHistoryField(null); }}
                                                           onKeyDown={(e) => { if (e.key === 'Enter') { (e.target as HTMLInputElement).blur(); } }}
                                                           className="w-full bg-primary-100 dark:bg-primary-900/30 border-2 border-primary-500 px-2 py-1 font-mono font-bold outline-none uppercase"
