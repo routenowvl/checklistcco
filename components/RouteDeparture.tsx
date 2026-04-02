@@ -191,6 +191,9 @@ const RouteDepartureView: React.FC<{
     id: 'ghost', rota: '', data: getRouteDateForCurrentTime(), inicio: '', saida: '', motorista: '', placa: '', statusGeral: '', aviso: 'NÃO', operacao: '', statusOp: 'Previsto', tempo: '', semana: ''
   });
 
+  // Controla qual célula da coluna SAÍDA está sendo editada (para mostrar valor completo com data)
+  const [editingSaidaCell, setEditingSaidaCell] = useState<string | null>(null);
+
   // Armazena os últimos checklists de motorista por operação
   const [lastMotoristaChecklist, setLastMotoristaChecklist] = useState<Record<string, { data: string, porcentagem: string }>>({});
 
@@ -3010,12 +3013,17 @@ const RouteDepartureView: React.FC<{
                     }
 
                     if (col.id === 'saida') {
-                      // Extrai apenas o horário para exibição (data fica oculta internamente)
+                      // Verifica se esta célula está sendo editada
+                      const isEditing = editingSaidaCell === route.id;
+                      
+                      // Extrai apenas o horário para exibição se houver data completa, senão mostra o valor completo
                       const displayValue = (() => {
                         if (!route.saida || route.saida === '-') return route.saida || '';
+                        // Se está editando, mostra o valor completo (com data)
+                        if (isEditing) return route.saida;
+                        // Se não está editando e tem data completa, mostra apenas horário
                         const dateTimeMatch = route.saida.match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})$/);
                         if (dateTimeMatch) {
-                          // Tem data completa, mostra apenas horário
                           return `${dateTimeMatch[4]}:${dateTimeMatch[5]}:${dateTimeMatch[6]}`;
                         }
                         return route.saida;
@@ -3028,11 +3036,35 @@ const RouteDepartureView: React.FC<{
                             key={route.id + '-saida'}
                             value={displayValue}
                             placeholder="--:--:--"
+                            onFocus={() => setEditingSaidaCell(route.id!)}
+                            onBlur={(e) => {
+                                setEditingSaidaCell(null);
+                                const val = e.target.value;
+                                if (val === '-') {
+                                    updateCell(route.id!, 'saida', '-');
+                                } else if (!val.trim()) {
+                                    // Campo vazio - limpa
+                                    updateCell(route.id!, 'saida', '');
+                                } else {
+                                    // Verifica se usuário digitou data completa (DD/MM/AAAA HH:MM:SS)
+                                    const fullDateTimeMatch = val.match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})$/);
+                                    if (fullDateTimeMatch) {
+                                        // Salva data e hora completas
+                                        updateCell(route.id!, 'saida', val);
+                                    } else {
+                                        // Apenas horário - formata como HH:MM:SS
+                                        const formatted = formatTimeInput(val);
+                                        updateCell(route.id!, 'saida', formatted);
+                                    }
+                                }
+                            }}
                             onChange={(e) => {
                                 const val = e.target.value;
                                 if (val === '-') {
                                     updateCell(route.id!, 'saida', '-');
                                 } else {
+                                    // No onChange, apenas atualiza com o valor sendo digitado
+                                    // Não chama formatTimeInput para não perder a data enquanto digita
                                     updateCell(route.id!, 'saida', val);
                                 }
                             }}
@@ -3041,23 +3073,6 @@ const RouteDepartureView: React.FC<{
                                 if (val.includes('\n')) {
                                     e.preventDefault();
                                     handleMultilinePaste('saida', rowIndex, val);
-                                }
-                            }}
-                            onBlur={(e) => {
-                                const val = e.target.value;
-                                if (val === '-') {
-                                    updateCell(route.id!, 'saida', '-');
-                                } else {
-                                    // Verifica se usuário digitou data completa (DD/MM/AAAA HH:MM:SS)
-                                    const fullDateTimeMatch = val.match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})$/);
-                                    if (fullDateTimeMatch) {
-                                        // Salva data e hora completas internamente, mas visual mostra apenas horário
-                                        updateCell(route.id!, 'saida', val);
-                                    } else {
-                                        // Apenas horário - formata como HH:MM:SS
-                                        const formatted = formatTimeInput(val);
-                                        updateCell(route.id!, 'saida', formatted);
-                                    }
                                 }
                             }}
                             className={`${inputClass} font-mono text-center`}
