@@ -12,7 +12,7 @@ import {
   ChevronRight, Maximize2, Minimize2,
   Archive, Database, Save, LinkIcon,
   Layers, Trash2, Settings2, Check, Table, SortAsc,
-  Sun, Moon, AlertTriangle
+  Sun, Moon, AlertTriangle, Calendar
 } from 'lucide-react';
 
 const MOTIVOS = [
@@ -585,8 +585,15 @@ const RouteDepartureView: React.FC<{
     const operationRoutes = routes.filter(r => r.operacao === operacao);
     if (operationRoutes.length === 0) {
       console.warn(`[WEBHOOK] Nenhuma rota encontrada para ${operacao}`);
+      cleanupSendState(operacao);
       return;
     }
+
+    // Timer de segurança: fecha o popup após 20 segundos mesmo se houver falha
+    const safetyTimer = setTimeout(() => {
+      console.warn(`[WEBHOOK_SAFETY] ⚠️ Timeout de 20s atingido para ${operacao}, limpando estado`);
+      cleanupSendState(operacao);
+    }, 20000);
 
     // Verifica se já enviou hoje para evitar duplicidade (usando fuso de Brasília)
     const today = getBrazilDate();
@@ -753,7 +760,16 @@ const RouteDepartureView: React.FC<{
         ));
 
         console.log(`[WEBHOOK_AUTO] ✅ Status de ${operacao} enviado com sucesso!`);
-        
+
+        // Limpa o timer de segurança
+        clearTimeout(safetyTimer);
+
+        // Limpa o estado de envio após 3 segundos (feedback visual)
+        setTimeout(() => {
+          cleanupSendState(operacao);
+          console.log(`[WEBHOOK_AUTO] 🧹 Limpando estado de envio para ${operacao}`);
+        }, 3000);
+
         // Força refresh dos dados após 2 segundos para garantir que o SharePoint replicou (segundo plano)
         setTimeout(() => {
           console.log(`[WEBHOOK_AUTO] 🔄 Forçando refresh dos dados após webhook`);
@@ -766,6 +782,8 @@ const RouteDepartureView: React.FC<{
       console.error(`[WEBHOOK_AUTO] ❌ Erro ao enviar status de ${operacao}:`, e.message);
       // Remove do sentTodayRef em caso de erro para permitir retry
       sentTodayRef.current.delete(sentKey);
+      // Limpa o timer de segurança
+      clearTimeout(safetyTimer);
       alert(`Erro ao enviar status automático: ${e.message}`);
       cleanupSendState(operacao);
     }
@@ -2846,7 +2864,22 @@ const RouteDepartureView: React.FC<{
                                   className={`${inputClass} font-black resize-none whitespace-pre-wrap break-words min-h-[48px] text-center`}
                                 />
                             ) : (
-                                <input type="text" value={route.rota} onChange={(e) => updateCell(route.id!, 'rota', e.target.value)} className={`${inputClass} font-black text-center`} />
+                                <div className="relative flex items-center justify-center p-2">
+                                    <input type="text" value={route.rota} onChange={(e) => updateCell(route.id!, 'rota', e.target.value)} className={`${inputClass} font-black text-center w-full`} />
+                                    {/* Indicador de alerta para rotas com histórico de problemas */}
+                                    {routeAlerts[route.rota] && routeAlerts[route.rota].count > 0 && (
+                                        <span
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setSelectedRouteAlert({ rota: route.rota, history: routeAlerts[route.rota].history });
+                                          }}
+                                          className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 bg-red-500 hover:bg-red-600 text-white text-[9px] font-black rounded-full cursor-pointer transition-colors z-10"
+                                          title={`${routeAlerts[route.rota].count} ocorrência(s) de atraso/adiantamento nos últimos 30 dias. Clique para ver histórico.`}
+                                        >
+                                          {routeAlerts[route.rota].count}
+                                        </span>
+                                    )}
+                                </div>
                             )}
                         </td>
                       );
@@ -4158,22 +4191,9 @@ const RouteDepartureView: React.FC<{
                                                   ) : (
                                                       <div
                                                           onClick={() => { setEditingHistoryId(r.id!); setEditingHistoryField('rota'); }}
-                                                          className="font-bold text-primary-700 dark:text-primary-400 cursor-pointer hover:bg-primary-50 dark:hover:bg-primary-900/20 rounded px-1 flex items-center gap-2"
+                                                          className="font-bold text-primary-700 dark:text-primary-400 cursor-pointer hover:bg-primary-50 dark:hover:bg-primary-900/20 rounded px-1"
                                                       >
                                                           {r.rota}
-                                                          {/* Indicador de alerta para rotas com histórico de problemas */}
-                                                          {routeAlerts[r.rota] && routeAlerts[r.rota].count > 0 && (
-                                                              <span
-                                                                onClick={(e) => {
-                                                                  e.stopPropagation();
-                                                                  setSelectedRouteAlert({ rota: r.rota, history: routeAlerts[r.rota].history });
-                                                                }}
-                                                                className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 bg-red-500 hover:bg-red-600 text-white text-[9px] font-black rounded-full cursor-pointer transition-colors"
-                                                                title={`${routeAlerts[r.rota].count} ocorrência(s) de atraso/adiantamento nos últimos 30 dias. Clique para ver histórico.`}
-                                                              >
-                                                                {routeAlerts[r.rota].count}
-                                                              </span>
-                                                          )}
                                                       </div>
                                                   )}
                                                       </>
@@ -4371,41 +4391,60 @@ const RouteDepartureView: React.FC<{
                           <X size={28} />
                       </button>
                   </div>
-                  <div className="p-6 max-h-[60vh] overflow-y-auto">
+                  <div className="p-6 max-h-[60vh] overflow-y-auto scrollbar-thin">
                       <div className="mb-4 p-4 bg-red-50 dark:bg-red-900/20 rounded-2xl border border-red-200 dark:border-red-800">
                           <p className="text-[11px] font-black uppercase text-red-700 dark:text-red-400 text-center">
                               ⚠️ {selectedRouteAlert.history.length} ocorrência(s) de atraso/adiantamento nos últimos 30 dias
                           </p>
                       </div>
-                      <div className="space-y-2">
+                      <div className="space-y-3">
                           {selectedRouteAlert.history.map((item, idx) => (
-                              <div key={idx} className="p-4 bg-slate-50 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700">
-                                  <div className="flex items-center justify-between mb-2">
-                                      <div className="flex items-center gap-3">
-                                          <span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase border ${
-                                              item.statusOp === 'Atrasada' 
-                                                ? 'bg-yellow-100 border-yellow-400 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400'
-                                                : 'bg-blue-100 border-blue-400 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400'
-                                          }`}>
-                                              {item.statusOp}
-                                          </span>
-                                          <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400">
-                                              {new Date(item.data).toLocaleDateString('pt-BR')}
-                                          </span>
-                                      </div>
-                                      <span className="text-[10px] font-black text-slate-600 dark:text-slate-300 uppercase">
-                                          {item.operacao}
+                              <div key={idx} className="p-5 bg-white dark:bg-slate-900 rounded-2xl border-2 border-slate-200 dark:border-slate-700 shadow-sm hover:shadow-md transition-all">
+                                  {/* Cabeçalho: Status + Data */}
+                                  <div className="flex items-center gap-2 mb-3">
+                                      {/* Badge de Status com ícone */}
+                                      <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-black uppercase border-2 ${
+                                          item.statusOp === 'Atrasada' || item.statusOp === 'Atrasado'
+                                            ? 'bg-red-100 border-red-400 text-red-800 dark:bg-red-900/40 dark:border-red-700 dark:text-red-300'
+                                            : 'bg-blue-100 border-blue-400 text-blue-800 dark:bg-blue-900/40 dark:border-blue-700 dark:text-blue-300'
+                                      }`}>
+                                          {item.statusOp === 'Atrasada' || item.statusOp === 'Atrasado' ? (
+                                              <><AlertTriangle size={12} /> ATRASADA</>
+                                          ) : (
+                                              <><Clock size={12} /> ADIANTADA</>
+                                          )}
+                                      </span>
+                                      {/* Data com ícone */}
+                                      <span className="inline-flex items-center gap-1.5 text-[10px] font-bold text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 px-3 py-1.5 rounded-full">
+                                          <Calendar size={12} />
+                                          {new Date(item.data).toLocaleDateString('pt-BR')}
                                       </span>
                                   </div>
+                                  {/* Motivo em destaque */}
                                   {item.motivo && (
-                                      <p className="text-[10px] font-bold text-slate-600 dark:text-slate-400 mt-2">
-                                          <span className="uppercase font-black">Motivo:</span> {item.motivo}
-                                      </p>
+                                      <div className="mb-3 p-3 bg-amber-50 dark:bg-amber-900/20 rounded-xl border border-amber-200 dark:border-amber-800">
+                                          <div className="flex items-start gap-2">
+                                              <span className="text-[10px] font-black uppercase text-amber-700 dark:text-amber-400 whitespace-nowrap mt-0.5">
+                                                  📌 Motivo:
+                                              </span>
+                                              <p className="text-[11px] font-bold text-amber-900 dark:text-amber-200 leading-relaxed">
+                                                  {item.motivo}
+                                              </p>
+                                          </div>
+                                      </div>
                                   )}
+                                  {/* Observação em destaque */}
                                   {item.observacao && (
-                                      <p className="text-[10px] font-normal text-slate-500 dark:text-slate-500 mt-1 whitespace-pre-wrap">
-                                          {item.observacao}
-                                      </p>
+                                      <div className="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-200 dark:border-slate-700">
+                                          <div className="flex items-start gap-2">
+                                              <span className="text-[10px] font-black uppercase text-slate-500 dark:text-slate-400 whitespace-nowrap mt-0.5">
+                                                  📝 Observação:
+                                              </span>
+                                              <p className="text-[10px] font-normal text-slate-700 dark:text-slate-300 leading-relaxed whitespace-pre-wrap">
+                                                  {item.observacao}
+                                              </p>
+                                          </div>
+                                      </div>
                                   )}
                               </div>
                           ))}
