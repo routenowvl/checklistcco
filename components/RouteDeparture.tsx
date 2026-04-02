@@ -1184,7 +1184,27 @@ const RouteDepartureView: React.FC<{
 
     // IMPORTANTE: "00:00:00" é horário válido (meia-noite), deve ser considerado no cálculo
     if (saida && saida !== '') {
-        const endSec = timeToSeconds(saida);
+        // Verifica se saida tem data completa (DD/MM/AAAA HH:MM:SS)
+        const dateTimeMatch = saida.match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})$/);
+        
+        let endSec: number;
+        
+        if (dateTimeMatch) {
+            // Tem data completa - usa essa data para o cálculo
+            const [, day, month, year, hour, minute, second] = dateTimeMatch;
+            const saidaDate = new Date(Number(year), Number(month) - 1, Number(day));
+            const routeDateObj = new Date(y, m - 1, d);
+            
+            // Calcula diferença de dias entre a data da saída e a data da rota
+            const diffDays = Math.floor((saidaDate.getTime() - routeDateObj.getTime()) / (1000 * 60 * 60 * 24));
+            
+            // Adiciona/subtrai dias ao cálculo do gap
+            endSec = timeToSeconds(`${hour}:${minute}:${second}`) + (diffDays * 24 * 3600);
+        } else {
+            // Apenas horário - usa data da coluna DATA
+            endSec = timeToSeconds(saida);
+        }
+        
         const diff = endSec - startSec;
         const gapFormatted = secondsToTime(diff);
 
@@ -2990,39 +3010,57 @@ const RouteDepartureView: React.FC<{
                     }
 
                     if (col.id === 'saida') {
+                      // Extrai apenas o horário para exibição (data fica oculta internamente)
+                      const displayValue = (() => {
+                        if (!route.saida || route.saida === '-') return route.saida || '';
+                        const dateTimeMatch = route.saida.match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})$/);
+                        if (dateTimeMatch) {
+                          // Tem data completa, mostra apenas horário
+                          return `${dateTimeMatch[4]}:${dateTimeMatch[5]}:${dateTimeMatch[6]}`;
+                        }
+                        return route.saida;
+                      })();
+
                       return (
                         <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
                           <input
-                              type="text"
-                              key={route.id + '-saida'}
-                              value={route.saida || ''}
-                              placeholder="--:--:--"
-                              onChange={(e) => {
-                                  const val = e.target.value;
-                                  if (val === '-') {
-                                      updateCell(route.id!, 'saida', '-');
-                                  } else {
-                                      const masked = applyTimeMask(val);
-                                      updateCell(route.id!, 'saida', masked);
-                                  }
-                              }}
-                              onPaste={(e: any) => {
-                                  const val = e.clipboardData.getData('text');
-                                  if (val.includes('\n')) {
-                                      e.preventDefault();
-                                      handleMultilinePaste('saida', rowIndex, val);
-                                  }
-                              }}
-                              onBlur={(e) => {
-                                  const val = e.target.value;
-                                  if (val === '-') {
-                                      updateCell(route.id!, 'saida', '-');
-                                  } else {
-                                      const formatted = formatTimeInput(val);
-                                      updateCell(route.id!, 'saida', formatted);
-                                  }
-                              }}
-                              className={`${inputClass} font-mono text-center`}
+                            type="text"
+                            key={route.id + '-saida'}
+                            value={displayValue}
+                            placeholder="--:--:--"
+                            onChange={(e) => {
+                                const val = e.target.value;
+                                if (val === '-') {
+                                    updateCell(route.id!, 'saida', '-');
+                                } else {
+                                    updateCell(route.id!, 'saida', val);
+                                }
+                            }}
+                            onPaste={(e: any) => {
+                                const val = e.clipboardData.getData('text');
+                                if (val.includes('\n')) {
+                                    e.preventDefault();
+                                    handleMultilinePaste('saida', rowIndex, val);
+                                }
+                            }}
+                            onBlur={(e) => {
+                                const val = e.target.value;
+                                if (val === '-') {
+                                    updateCell(route.id!, 'saida', '-');
+                                } else {
+                                    // Verifica se usuário digitou data completa (DD/MM/AAAA HH:MM:SS)
+                                    const fullDateTimeMatch = val.match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})$/);
+                                    if (fullDateTimeMatch) {
+                                        // Salva data e hora completas internamente, mas visual mostra apenas horário
+                                        updateCell(route.id!, 'saida', val);
+                                    } else {
+                                        // Apenas horário - formata como HH:MM:SS
+                                        const formatted = formatTimeInput(val);
+                                        updateCell(route.id!, 'saida', formatted);
+                                    }
+                                }
+                            }}
+                            className={`${inputClass} font-mono text-center`}
                           />
                         </td>
                       );

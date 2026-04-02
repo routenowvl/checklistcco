@@ -2,7 +2,7 @@
 // @google/genai guidelines: Use direct process.env.API_KEY, no UI for keys, use correct model names.
 // Correct models: 'gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-2.5-flash-image', etc.
 
-import { SPTask, SPOperation, SPStatus, Task, OperationStatus, HistoryRecord, RouteDeparture, RouteOperationMapping, RouteConfig } from '../types';
+import { SPTask, SPOperation, SPStatus, Task, OperationStatus, HistoryRecord, RouteDeparture, RouteOperationMapping, RouteConfig, NonCollection } from '../types';
 import { getBrazilDate, getBrazilISOString, getWeekString } from '../utils/dateUtils';
 
 export interface DailyWarning {
@@ -13,6 +13,22 @@ export interface DailyWarning {
   descricao: string;
   dataOcorrencia: string; // ISO Date
   visualizado: boolean;
+}
+
+export interface SPNonCollection {
+  id: string;
+  Title: string;
+  Rota: string;
+  Data: string;
+  Codigo: string;
+  Produtor: string;
+  Motivo: string;
+  Observacao: string;
+  Acao: string;
+  DataAcao: string;
+  UltimaColeta: string;
+  Culpabilidade: string;
+  Operacao: string;
 }
 
 const SITE_PATH = import.meta.env.VITE_SHAREPOINT_SITE_PATH || "vialacteoscombr.sharepoint.com:/sites/CCO";
@@ -1312,5 +1328,111 @@ export const SharePointService = {
     } catch (e: any) {
       console.error('[LOCK_RELEASE] Erro ao liberar trava:', e.message);
     }
+  },
+
+  /**
+   * Busca não coletas da lista do SharePoint
+   * Lista ID: 83e8cfb9-1982-47ae-b515-3fec112da457
+   */
+  async getNonCollections(token: string, userEmail: string): Promise<NonCollection[]> {
+    try {
+      const siteId = await getResolvedSiteId(token);
+      const listId = '83e8cfb9-1982-47ae-b515-3fec112da457';
+      
+      const data = await graphFetch(`/sites/${siteId}/lists/${listId}/items?expand=fields`, token);
+      
+      return (data.value || []).map((item: any) => ({
+        id: item.id.toString(),
+        semana: item.fields.Title || '',
+        rota: item.fields.Rota || '',
+        data: item.fields.Data ? formatDateFromSharePoint(item.fields.Data) : '',
+        codigo: item.fields.Codigo || '',
+        produtor: item.fields.Produtor || '',
+        motivo: item.fields.Motivo || '',
+        observacao: item.fields.Observacao || '',
+        acao: item.fields.Acao || '',
+        dataAcao: item.fields.DataAcao ? formatDateFromSharePoint(item.fields.DataAcao) : '',
+        ultimaColeta: item.fields._x00da_ltimaColeta ? formatDateFromSharePoint(item.fields._x00da_ltimaColeta) : '',
+        culpabilidade: item.fields.Culpabilidade || '',
+        operacao: item.fields.Opera_x00e7__x00e3_o || ''
+      }));
+    } catch (e: any) {
+      console.error('[NonCollections] Erro ao buscar não coletas:', e.message);
+      return [];
+    }
+  },
+
+  /**
+   * Salva não coleta na lista do SharePoint
+   */
+  async saveNonCollection(token: string, nonCollection: NonCollection): Promise<void> {
+    try {
+      const siteId = await getResolvedSiteId(token);
+      const listId = '83e8cfb9-1982-47ae-b515-3fec112da457';
+      const { mapping, internalNames } = await getListColumnMapping(siteId, listId, token);
+
+      const fields: any = {
+        Title: nonCollection.semana,
+        Rota: nonCollection.rota,
+        Data: parseDateForSharePoint(nonCollection.data),
+        Codigo: nonCollection.codigo,
+        Produtor: nonCollection.produtor,
+        Motivo: nonCollection.motivo,
+        Observacao: nonCollection.observacao,
+        Acao: nonCollection.acao,
+        DataAcao: parseDateForSharePoint(nonCollection.dataAcao),
+        UltimaColeta: parseDateForSharePoint(nonCollection.ultimaColeta),
+        Culpabilidade: nonCollection.culpabilidade,
+        Opera_x00e7__x00e3_o: nonCollection.operacao
+      };
+
+      const payload: any = {};
+      Object.keys(fields).forEach(key => {
+        const internalName = resolveFieldName(mapping, key);
+        if (internalNames.has(internalName) && fields[key] !== undefined) {
+          payload[internalName] = fields[key];
+        }
+      });
+
+      await graphFetch(`/sites/${siteId}/lists/${listId}/items`, token, {
+        method: 'POST',
+        body: JSON.stringify({ fields: payload })
+      });
+
+      console.log('[NonCollections] ✅ Não coleta salva com sucesso');
+    } catch (e: any) {
+      console.error('[NonCollections] Erro ao salvar não coleta:', e.message);
+      throw e;
+    }
   }
 };
+
+/**
+ * Converte data do SharePoint (ISO) para formato BR (DD/MM/YYYY)
+ */
+function formatDateFromSharePoint(isoDate: string): string {
+  if (!isoDate) return '';
+  try {
+    const date = new Date(isoDate);
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const year = date.getFullYear();
+    return `${day}/${month}/${year}`;
+  } catch {
+    return isoDate;
+  }
+}
+
+/**
+ * Converte data do formato BR (DD/MM/YYYY) para ISO (para SharePoint)
+ */
+function parseDateForSharePoint(brDate: string): string {
+  if (!brDate) return '';
+  try {
+    const [day, month, year] = brDate.split('/');
+    const date = new Date(Number(year), Number(month) - 1, Number(day));
+    return date.toISOString();
+  } catch {
+    return brDate;
+  }
+}

@@ -100,6 +100,22 @@ export interface SPOperation {
   Email: string;
 }
 
+export interface NonCollection {
+  id: string;
+  semana: string;
+  rota: string;
+  data: string;
+  codigo: string;
+  produtor: string;
+  motivo: string;
+  observacao: string;
+  acao: string;
+  dataAcao: string;
+  ultimaColeta: string;
+  culpabilidade: string;
+  operacao: string;
+}
+
 export interface SPStatus {
   id?: string;
   DataReferencia: string;

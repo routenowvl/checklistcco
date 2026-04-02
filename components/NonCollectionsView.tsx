@@ -1,13 +1,18 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { User } from '../types';
-import {
-  Search, Filter, CheckSquare, Square, ChevronDown,
-  Sun, Moon, Table, SortAsc, Plus, X, Loader2, CheckCircle2, Milk, RefreshCw
-} from 'lucide-react';
-import { getBrazilDate, getWeekString } from '../utils/dateUtils';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { RouteConfig, User } from '../types';
 import { SharePointService } from '../services/sharepointService';
 import { getValidToken } from '../services/tokenService';
-import { RouteConfig } from '../types';
+import * as XLSX from 'xlsx';
+import { getBrazilDate, getWeekString } from '../utils/dateUtils';
+import {
+  Clock, X, Loader2, RefreshCw, ShieldCheck,
+  CheckCircle2, ChevronDown,
+  Filter, Search, CheckSquare, Square,
+  ChevronRight, Maximize2, Minimize2,
+  Archive, Database, Save, LinkIcon,
+  Layers, Trash2, Settings2, Check, Table, SortAsc,
+  Sun, Moon, AlertTriangle, Plus, Milk
+} from 'lucide-react';
 
 interface NonCollection {
   id: string;
@@ -66,11 +71,9 @@ const CULPABILIDADE_OPCOES = ['VIA', 'Cliente', 'Outros'];
 const NonCollectionsView: React.FC<{
   currentUser: User;
 }> = ({ currentUser }) => {
-  // Dados reais (inicialmente vazio)
   const [nonCollections, setNonCollections] = useState<NonCollection[]>([]);
   const [userOps, setUserOps] = useState<RouteConfig[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-
   const [isDarkMode, setIsDarkMode] = useState(() => {
     const saved = localStorage.getItem('non_collections_dark_mode');
     return saved !== 'false';
@@ -95,7 +98,36 @@ const NonCollectionsView: React.FC<{
     operacao: 120
   });
 
-  // Ghost Row para adição rápida
+  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(() => {
+    const saved = localStorage.getItem('non_collections_hidden_cols');
+    if (saved) {
+      return new Set(JSON.parse(saved));
+    }
+    return new Set();
+  });
+
+  const [contextMenu, setContextMenu] = useState<{ visible: boolean; x: number; y: number; col: string | null }>({ visible: false, x: 0, y: 0, col: null });
+  const filterDropdownRef = useRef<HTMLDivElement>(null);
+  const contextMenuRef = useRef<HTMLDivElement>(null);
+  const resizingRef = useRef<{ col: string; startX: number; startWidth: number } | null>(null);
+
+  // Estados para modal de adicionar não coleta
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [newNonCollectionData, setNewNonCollectionData] = useState<{
+    rota: string;
+    data: string;
+    codigo: string;
+    produtor: string;
+    operacao: string;
+  }>({
+    rota: '',
+    data: getBrazilDate().split('-').reverse().join('/'),
+    codigo: '',
+    produtor: '',
+    operacao: ''
+  });
+
+  // Ghost Row para adição rápida via paste
   const [ghostRow, setGhostRow] = useState<Partial<NonCollection>>({
     id: 'ghost',
     semana: '',
@@ -112,10 +144,84 @@ const NonCollectionsView: React.FC<{
     operacao: ''
   });
 
-  // Estado para mostrar campo de causa raiz na ghost row
   const [showCausaRaiz, setShowCausaRaiz] = useState(false);
 
-  const filterDropdownRef = useRef<HTMLDivElement>(null);
+  const updateGhostCell = (field: keyof NonCollection, value: string) => {
+    const updatedGhost = { ...ghostRow, [field]: value };
+
+    if (field === 'motivo') {
+      const motivoData = MOTIVOS_CULPABILIDADES.find(m => m.label === value);
+      if (motivoData) {
+        if (motivoData.culpabilidades.length === 1) {
+          updatedGhost.culpabilidade = motivoData.culpabilidades[0];
+        }
+        setShowCausaRaiz(!!motivoData.causaRaiz);
+      }
+    }
+
+    setGhostRow(updatedGhost);
+  };
+
+  const handleAddFromGhost = async () => {
+    if (!ghostRow.rota || !ghostRow.data || !ghostRow.produtor || !ghostRow.operacao) {
+      alert('Preencha todos os campos obrigatórios na linha de criação!');
+      return;
+    }
+
+    try {
+      const token = await getValidToken() || currentUser.accessToken;
+      if (!token) {
+        alert('Erro: Token não encontrado');
+        return;
+      }
+
+      const dataParaSemana = ghostRow.data!.split('/').reverse().join('-');
+      const semana = getWeekString(dataParaSemana);
+
+      const newRecord: NonCollection = {
+        id: Date.now().toString(),
+        semana,
+        rota: ghostRow.rota!,
+        data: ghostRow.data!,
+        codigo: ghostRow.codigo || `P${String(nonCollections.length + 1).padStart(3, '0')}`,
+        produtor: ghostRow.produtor!,
+        motivo: ghostRow.motivo || '',
+        observacao: ghostRow.observacao || '',
+        acao: ghostRow.acao || '',
+        dataAcao: ghostRow.dataAcao || ghostRow.data!,
+        ultimaColeta: ghostRow.ultimaColeta || ghostRow.data!,
+        culpabilidade: ghostRow.culpabilidade || 'Não se aplica',
+        operacao: ghostRow.operacao!
+      };
+
+      // Salva no SharePoint
+      await SharePointService.saveNonCollection(token, newRecord);
+
+      // Adiciona localmente
+      setNonCollections(prev => [...prev, newRecord]);
+
+      // Limpa ghost row
+      setGhostRow({
+        id: 'ghost',
+        semana: '',
+        rota: '',
+        data: getBrazilDate().split('-').reverse().join('/'),
+        codigo: '',
+        produtor: '',
+        motivo: '',
+        observacao: '',
+        acao: '',
+        dataAcao: getBrazilDate().split('-').reverse().join('/'),
+        ultimaColeta: getBrazilDate().split('-').reverse().join('/'),
+        culpabilidade: '',
+        operacao: ''
+      });
+      setShowCausaRaiz(false);
+    } catch (e: any) {
+      console.error('[ADD_NON_COLLECTION] Error:', e);
+      alert(`Erro ao adicionar não coleta: ${e.message}`);
+    }
+  };
 
   // Fecha dropdown ao clicar fora
   useEffect(() => {
@@ -123,10 +229,40 @@ const NonCollectionsView: React.FC<{
       if (filterDropdownRef.current && !filterDropdownRef.current.contains(e.target as Node)) {
         setActiveFilterCol(null);
       }
+      if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
+        setContextMenu(prev => ({ ...prev, visible: false }));
+      }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // Redimensionamento de colunas
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!resizingRef.current) return;
+      const { col, startX, startWidth } = resizingRef.current;
+      const diff = e.clientX - startX;
+      const newWidth = Math.max(50, startWidth + diff);
+      setColWidths(prev => ({ ...prev, [col]: newWidth }));
+    };
+
+    const handleMouseUp = () => {
+      resizingRef.current = null;
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, []);
+
+  // Salvar preferências de colunas
+  useEffect(() => {
+    localStorage.setItem('non_collections_hidden_cols', JSON.stringify(Array.from(hiddenColumns)));
+  }, [hiddenColumns]);
 
   // Carrega operações do usuário ao montar
   useEffect(() => {
@@ -144,6 +280,11 @@ const NonCollectionsView: React.FC<{
       const configs = await SharePointService.getRouteConfigs(token, currentUser.email, true);
       setUserOps(configs || []);
       console.log('[NonCollections] Operações carregadas:', configs?.map(c => c.operacao));
+
+      // Carrega não coletas do SharePoint
+      const spNonCollections = await SharePointService.getNonCollections(token, currentUser.email);
+      setNonCollections(spNonCollections);
+      console.log('[NonCollections] ✅ Não coletas carregadas:', spNonCollections.length);
     } catch (e) {
       console.error('[NonCollections] Erro ao carregar operações:', e);
     } finally {
@@ -180,7 +321,7 @@ const NonCollectionsView: React.FC<{
 
   const hasActiveFilters = Object.keys(selectedFilters).some(col => (selectedFilters[col] || []).length > 0);
 
-  const filteredData = React.useMemo(() => {
+  const filteredData = useMemo(() => {
     let result = [...nonCollections];
 
     // Aplica filtros de texto
@@ -220,207 +361,191 @@ const NonCollectionsView: React.FC<{
     return result;
   }, [nonCollections, colFilters, selectedFilters, isSortByDataEnabled]);
 
-  const handleColumnResize = (col: string, startX: number, startWidth: number) => {
-    const handleMouseMove = (e: MouseEvent) => {
-      const newWidth = startWidth + (e.clientX - startX);
-      setColWidths(prev => ({ ...prev, [col]: Math.max(50, newWidth) }));
-    };
-
-    const handleMouseUp = () => {
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-    };
-
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
-  };
-
-  const getRowStyle = (row: NonCollection | Partial<NonCollection>) => {
-    // Ghost row style
-    if (row.id === 'ghost') {
-      return isDarkMode
-        ? 'bg-slate-800 italic text-slate-400 border-l-4 border-dashed border-slate-600'
-        : 'bg-slate-50 italic text-slate-500 border-l-4 border-dashed border-slate-300';
-    }
-
-    const culpabilidade = row.culpabilidade?.toLowerCase();
-    
-    if (culpabilidade === 'produtor') {
-      return isDarkMode
-        ? 'bg-orange-900/30 text-orange-100 border-l-[12px] border-orange-600'
-        : 'bg-orange-200 text-orange-900 border-l-[12px] border-orange-600';
-    }
-    
-    if (culpabilidade === 'logística' || culpabilidade === 'logistica') {
-      return isDarkMode
-        ? 'bg-yellow-900/30 text-yellow-100 border-l-[12px] border-yellow-600'
-        : 'bg-yellow-200 text-yellow-900 border-l-[12px] border-yellow-600';
-    }
-    
-    if (culpabilidade === 'clima') {
-      return isDarkMode
-        ? 'bg-blue-900/30 text-blue-100 border-l-[12px] border-blue-600'
-        : 'bg-blue-200 text-blue-900 border-l-[12px] border-blue-600';
-    }
-
-    return isDarkMode
-      ? 'bg-slate-800 border-l-4 border-slate-600 text-slate-300'
-      : 'bg-white border-l-4 border-slate-300 text-slate-800';
-  };
-
-  // Processa colagem em massa e adiciona múltiplas não coletas
-  const handleBulkPaste = async (pastedText: string) => {
-    const lines = pastedText.trim().split('\n');
-    const newRecords: NonCollection[] = [];
-
-    for (const line of lines) {
-      const cols = line.split('\t').map(c => c.trim());
-      
-      // Espera pelo menos: Rota, Data, Produtor, Motivo, Operação
-      if (cols.length < 5) continue;
-
-      const [rota, data, produtor, motivo, operacao, codigo, observacao, acao, culpabilidade] = cols;
-
-      // Validação mínima
-      if (!rota || !produtor || !motivo || !operacao) continue;
-
-      // Formata data se necessário
-      let dataFormatada = data || getBrazilDate().split('-').reverse().join('/');
-      if (dataFormatada.includes('-')) {
-        const [year, month, day] = dataFormatada.split('-');
-        dataFormatada = `${day}/${month}/${year}`;
-      }
-
-      // Calcula semana
-      const dataParaSemana = dataFormatada.split('/').reverse().join('-');
-      const semana = getWeekString(dataParaSemana);
-
-      // Busca culpabilidade do motivo
-      const motivoData = MOTIVOS_CULPABILIDADES.find(m => m.label === motivo);
-      const culpabilidadeFinal = culpabilidade || (motivoData?.culpabilidades.length === 1 ? motivoData.culpabilidades[0] : 'Outros');
-
-      newRecords.push({
-        id: Date.now().toString() + Math.random().toString(36).substr(2, 5),
-        semana,
-        rota,
-        data: dataFormatada,
-        codigo: codigo || `P${String(nonCollections.length + newRecords.length + 1).padStart(3, '0')}`,
-        produtor,
-        motivo,
-        observacao: observacao || '',
-        acao: acao || '',
-        dataAcao: dataFormatada,
-        ultimaColeta: dataFormatada,
-        culpabilidade: culpabilidadeFinal,
-        operacao
-      });
-    }
-
-    if (newRecords.length > 0) {
-      setNonCollections(prev => [...prev, ...newRecords]);
-      alert(`✅ ${newRecords.length} não coleta(s) adicionada(s)!`);
-      
-      // Reseta ghost row
-      setGhostRow({
-        id: 'ghost',
-        semana: '',
-        rota: '',
-        data: getBrazilDate().split('-').reverse().join('/'),
-        codigo: '',
-        produtor: '',
-        motivo: '',
-        observacao: '',
-        acao: '',
-        dataAcao: getBrazilDate().split('-').reverse().join('/'),
-        ultimaColeta: getBrazilDate().split('-').reverse().join('/'),
-        culpabilidade: '',
-        operacao: ''
-      });
-      setShowCausaRaiz(false);
-    } else {
-      alert('⚠️ Nenhum dado válido encontrado na colagem. Verifique o formato.');
-    }
-  };
-
-  // Adiciona nova não coleta a partir da ghost row
-  const handleAddFromGhost = async () => {
-    // Validação básica
-    if (!ghostRow.rota || !ghostRow.data || !ghostRow.produtor || !ghostRow.motivo || !ghostRow.operacao) {
-      alert('Preencha todos os campos obrigatórios na linha de criação!');
-      return;
-    }
-
-    // Validação de causa raiz se necessário
-    const motivoSelecionado = MOTIVOS_CULPABILIDADES.find(m => m.label === ghostRow.motivo);
-    if (motivoSelecionado?.causaRaiz && !ghostRow.observacao?.includes('Causa raiz:')) {
-      alert('⚠️ Este motivo requer que você informe a causa raiz na observação!');
+  const handleAddNonCollection = async () => {
+    if (!newNonCollectionData.rota || !newNonCollectionData.data || !newNonCollectionData.produtor || !newNonCollectionData.operacao) {
+      alert('Preencha todos os campos obrigatórios!');
       return;
     }
 
     try {
-      // Calcula a semana automaticamente baseado na data
-      const dataParaSemana = ghostRow.data!.split('/').reverse().join('-');
+      const dataParaSemana = newNonCollectionData.data.split('/').reverse().join('-');
       const semana = getWeekString(dataParaSemana);
 
       const newRecord: NonCollection = {
         id: Date.now().toString(),
         semana,
-        rota: ghostRow.rota!,
-        data: ghostRow.data!,
-        codigo: ghostRow.codigo || `P${String(nonCollections.length + 1).padStart(3, '0')}`,
-        produtor: ghostRow.produtor!,
-        motivo: ghostRow.motivo!,
-        observacao: ghostRow.observacao || '',
-        acao: ghostRow.acao || '',
-        dataAcao: ghostRow.dataAcao || ghostRow.data!,
-        ultimaColeta: ghostRow.ultimaColeta || ghostRow.data!,
-        culpabilidade: ghostRow.culpabilidade || 'Não se aplica',
-        operacao: ghostRow.operacao!
+        rota: newNonCollectionData.rota,
+        data: newNonCollectionData.data,
+        codigo: newNonCollectionData.codigo || `P${String(nonCollections.length + 1).padStart(3, '0')}`,
+        produtor: newNonCollectionData.produtor,
+        motivo: '',
+        observacao: '',
+        acao: '',
+        dataAcao: newNonCollectionData.data,
+        ultimaColeta: newNonCollectionData.data,
+        culpabilidade: 'Não se aplica',
+        operacao: newNonCollectionData.operacao
       };
 
       setNonCollections(prev => [...prev, newRecord]);
-
-      // Reseta ghost row
-      setGhostRow({
-        id: 'ghost',
-        semana: '',
+      setIsAddModalOpen(false);
+      setNewNonCollectionData({
         rota: '',
         data: getBrazilDate().split('-').reverse().join('/'),
         codigo: '',
         produtor: '',
-        motivo: '',
-        observacao: '',
-        acao: '',
-        dataAcao: getBrazilDate().split('-').reverse().join('/'),
-        ultimaColeta: getBrazilDate().split('-').reverse().join('/'),
-        culpabilidade: '',
         operacao: ''
       });
-      setShowCausaRaiz(false);
     } catch (e) {
       console.error('[ADD_NON_COLLECTION] Error:', e);
       alert('Erro ao adicionar não coleta');
     }
   };
 
-  // Atualiza célula da ghost row
-  const updateGhostCell = (field: keyof NonCollection, value: string) => {
-    const updatedGhost = { ...ghostRow, [field]: value };
-
-    // Se mudou o motivo, atualiza culpabilidade automaticamente
-    if (field === 'motivo') {
-      const motivoData = MOTIVOS_CULPABILIDADES.find(m => m.label === value);
-      if (motivoData) {
-        // Atualiza culpabilidade se houver apenas uma opção
-        if (motivoData.culpabilidades.length === 1) {
-          updatedGhost.culpabilidade = motivoData.culpabilidades[0];
-        }
-        // Mostra campo de causa raiz se necessário
-        setShowCausaRaiz(!!motivoData.causaRaiz);
-      }
+  /**
+   * Tenta separar código e produtor de uma string colada.
+   * Padrão esperado: código alfanumérico no início seguido de texto (ex: "202520769MARCELO DINIZ COUTO" ou "P0274001RODRIGO ALVES PEREIRA")
+   * Retorna null se não conseguir identificar o padrão.
+   */
+  const parseCodigoProdutor = (line: string): { codigo: string; produtor: string } | null => {
+    const trimmed = line.trim();
+    
+    // Regex: captura caracteres alfanuméricos no início (código) seguidos de texto (produtor)
+    // O código pode ter letras e números (ex: "P0274001", "202520769")
+    // O produtor é todo o restante da string
+    // Ex: "P0274001RODRIGO ALVES PEREIRA (IN )" → codigo: "P0274001", produtor: "RODRIGO ALVES PEREIRA (IN )"
+    const match = trimmed.match(/^([A-Za-z0-9]+)(.+)$/);
+    
+    if (match) {
+      return {
+        codigo: match[1].toUpperCase(),
+        produtor: match[2].trim()
+      };
     }
+    
+    return null;
+  };
 
-    setGhostRow(updatedGhost);
+  const handleBulkPaste = (field: keyof NonCollection, value: string) => {
+    const lines = value.split(/[\n\r]/).map(l => l.trim()).filter(Boolean);
+    if (lines.length === 0) return;
+
+    console.log('[BULK_PASTE] Campo:', field, 'Valores:', lines);
+    console.log('[BULK_PASTE] nonCollections.length:', nonCollections.length);
+
+    // Colunas que SEMPRE criam novas linhas (mesmo se já houver dados)
+    const colunasQueCriamLinhas: (keyof NonCollection)[] = ['rota'];
+    const criaNovasLinhas = colunasQueCriamLinhas.includes(field);
+
+    console.log('[BULK_PASTE] criaNovasLinhas:', criaNovasLinhas);
+
+    if (criaNovasLinhas) {
+      // COMPORTAMENTO 1: Criar novas linhas (apenas para ROTA)
+      const newRecords: NonCollection[] = [];
+      const dataFormatada = getBrazilDate().split('-').reverse().join('/');
+      const dataParaSemana = dataFormatada.split('/').reverse().join('-');
+      const semana = getWeekString(dataParaSemana);
+
+      for (let i = 0; i < lines.length; i++) {
+        newRecords.push({
+          id: Date.now().toString() + i,
+          semana,
+          rota: lines[i],
+          data: dataFormatada,
+          codigo: '',
+          produtor: '',
+          motivo: '',
+          observacao: '',
+          acao: '',
+          dataAcao: dataFormatada,
+          ultimaColeta: dataFormatada,
+          culpabilidade: 'Não se aplica',
+          operacao: ''
+        });
+      }
+
+      // Adiciona as novas linhas às existentes
+      setNonCollections(prev => [...prev, ...newRecords]);
+      console.log('[BULK_PASTE] ✅', newRecords.length, 'linhas criadas (adicionadas às existentes)');
+    } else {
+      // COMPORTAMENTO 2: Atualizar linhas existentes (para CÓDIGO, PRODUTOR, MOTIVO, OBSERVAÇÃO, etc.)
+      console.log('[BULK_PASTE] Atualizando linhas existentes...');
+      const updatedRecords: NonCollection[] = [];
+
+      for (let i = 0; i < Math.min(lines.length, nonCollections.length); i++) {
+        const record = nonCollections[i];
+        let finalValue = lines[i];
+        let codigo = '';
+        let produtor = '';
+
+        // Tenta separar código e produtor se o valor tiver o padrão
+        if (field === 'produtor' || field === 'codigo') {
+          const parsed = parseCodigoProdutor(lines[i]);
+          if (parsed) {
+            codigo = parsed.codigo;
+            produtor = parsed.produtor;
+            console.log('[BULK_PASTE] ✅ Código e produtor separados:', parsed);
+          }
+        }
+
+        // Formata se for data
+        if (field === 'data' || field === 'dataAcao' || field === 'ultimaColeta') {
+          if (finalValue.includes('-')) {
+            const [year, month, day] = finalValue.split('-');
+            finalValue = `${day}/${month}/${year}`;
+          }
+        }
+
+        // CÓDIGO: converte para maiúsculo (se estiver atualizando)
+        if (field === 'codigo' && !codigo) {
+          finalValue = finalValue.toUpperCase();
+        }
+
+        updatedRecords.push({
+          ...record,
+          ...(codigo && produtor ? { codigo, produtor } : { [field]: finalValue })
+        });
+        console.log('[BULK_PASTE] Atualizando linha', i, 'campo', field);
+      }
+
+      // Mantém as linhas que não foram atualizadas
+      const remainingRecords = nonCollections.slice(updatedRecords.length);
+
+      setNonCollections([...updatedRecords, ...remainingRecords]);
+      console.log('[BULK_PASTE] ✅', updatedRecords.length, 'linhas atualizadas', remainingRecords.length, 'mantidas');
+    }
+  };
+
+  const handleColumnResize = (col: string, startX: number, startWidth: number) => {
+    resizingRef.current = { col, startX, startWidth };
+  };
+
+  const handleContextMenu = (e: React.MouseEvent, col: string) => {
+    e.preventDefault();
+    setContextMenu({ visible: true, x: e.clientX, y: e.clientY, col });
+  };
+
+  const toggleColumn = (col: string) => {
+    setHiddenColumns(prev => {
+      const next = new Set(prev);
+      if (next.has(col)) {
+        next.delete(col);
+      } else {
+        next.add(col);
+      }
+      return next;
+    });
+  };
+
+  const formatDateToBR = (dateString: string) => {
+    if (!dateString) return '--/--/----';
+    if (dateString.includes('/')) return dateString;
+    try {
+      const [year, month, day] = dateString.split('-');
+      return `${day}/${month}/${year}`;
+    } catch {
+      return dateString;
+    }
   };
 
   const columns: { key: keyof NonCollection; label: string }[] = [
@@ -463,20 +588,25 @@ const NonCollectionsView: React.FC<{
         </div>
 
         <div className="flex items-center gap-3">
-          {/* Refresh Button */}
+          <button
+            onClick={() => setIsAddModalOpen(true)}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-black uppercase text-[10px] tracking-widest transition-all shadow-lg shadow-blue-500/20"
+          >
+            <Plus size={16} />
+            Adicionar Não Coleta
+          </button>
+
           <button
             onClick={loadUserOperations}
             className="p-3 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-sm hover:shadow-md transition-all"
-            title="Recarregar operações"
+            title="Recarregar"
           >
             <RefreshCw size={20} className="text-slate-600 dark:text-slate-400" />
           </button>
 
-          {/* Toggle Dark/Light Mode */}
           <button
             onClick={() => setIsDarkMode(!isDarkMode)}
             className="p-3 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-sm hover:shadow-md transition-all"
-            title={isDarkMode ? 'Modo Claro' : 'Modo Escuro'}
           >
             {isDarkMode ? (
               <Sun size={20} className="text-amber-400" />
@@ -485,7 +615,6 @@ const NonCollectionsView: React.FC<{
             )}
           </button>
 
-          {/* Toggle Sort */}
           <button
             onClick={() => setIsSortByDataEnabled(!isSortByDataEnabled)}
             className={`p-3 rounded-xl border shadow-sm hover:shadow-md transition-all ${
@@ -498,7 +627,6 @@ const NonCollectionsView: React.FC<{
             <SortAsc size={20} />
           </button>
 
-          {/* Clear Filters */}
           {hasActiveFilters && (
             <button
               onClick={clearFilters}
@@ -510,63 +638,47 @@ const NonCollectionsView: React.FC<{
         </div>
       </div>
 
-      {/* Info Bar - Operações do usuário */}
-      <div className="flex items-center gap-3 px-6 py-2">
-        <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
-          <CheckSquare size={14} className="text-blue-600 dark:text-blue-400" />
-          <span className="text-[10px] font-bold text-blue-700 dark:text-blue-300 uppercase">
-            {userOps.length} operação(ões) disponível(eis)
-          </span>
-        </div>
-        {userOps.length > 0 && (
-          <div className="flex gap-1 flex-wrap">
-            {userOps.map(op => (
-              <span key={op.operacao} className="px-2 py-0.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded text-[9px] font-bold text-slate-600 dark:text-slate-400 uppercase">
-                {op.operacao}
-              </span>
-            ))}
-          </div>
-        )}
-      </div>
-
       {/* Filters Bar */}
       <div className="flex items-center gap-3 px-6 py-3">
         <div className="flex items-center gap-2 px-4 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-sm flex-1 max-w-md">
           <Search size={16} className="text-slate-400" />
           <input
             type="text"
-            placeholder="Buscar..."
+            placeholder="Buscar por produtor..."
             className="flex-1 bg-transparent outline-none text-sm font-medium text-slate-700 dark:text-slate-300 placeholder-slate-400"
+            value={colFilters['produtor'] || ''}
+            onChange={(e) => setColFilters({ ...colFilters, produtor: e.target.value })}
           />
         </div>
 
-        <div className="flex items-center gap-2 px-4 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-sm">
-          <Table size={16} className="text-slate-400" />
-          <span className="text-xs font-bold text-slate-600 dark:text-slate-400 uppercase">
-            {filteredData.length} registro(s)
+        <div className="flex items-center gap-2 px-4 py-2.5 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl shadow-sm">
+          <CheckCircle2 size={16} className="text-blue-600 dark:text-blue-400" />
+          <span className="text-xs font-black text-blue-700 dark:text-blue-300 uppercase">
+            TOTAL: {nonCollections.length} não coleta(s)
           </span>
         </div>
       </div>
 
       {/* Table Container */}
       <div className="flex-1 mx-6 mt-4 mb-6 bg-white/95 dark:bg-slate-900/95 backdrop-blur-sm rounded-[2rem] shadow-2xl border border-white/50 dark:border-slate-800 overflow-hidden flex flex-col">
-        {/* Table Header */}
-        <div className="overflow-x-auto flex-1 scrollbar-thin">
+        <div className="overflow-x-auto flex-1 scrollbar-thin" id="table-container">
           <table className="w-full border-collapse">
             <thead className="sticky top-0 z-20">
               <tr className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900">
                 {columns.map(({ key, label }) => (
                   <th
                     key={key}
-                    className="relative px-4 py-4 text-left border-r border-slate-700/50 last:border-r-0 select-none"
+                    className={`relative px-4 py-4 text-left border-r border-slate-700/50 last:border-r-0 select-none ${
+                      hiddenColumns.has(key) ? 'hidden' : ''
+                    }`}
                     style={{ width: colWidths[key] }}
+                    onContextMenu={(e) => handleContextMenu(e, key)}
                   >
                     <div className="flex items-center gap-2">
                       <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest whitespace-nowrap">
                         {label}
                       </span>
-                      
-                      {/* Filter Button */}
+
                       <button
                         onClick={() => setActiveFilterCol(activeFilterCol === key ? null : key)}
                         className={`p-1 rounded transition-colors ${
@@ -578,7 +690,6 @@ const NonCollectionsView: React.FC<{
                         <Filter size={12} />
                       </button>
 
-                      {/* Resize Handle */}
                       <div
                         className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-500/50 transition-colors"
                         onMouseDown={(e) => {
@@ -588,13 +699,11 @@ const NonCollectionsView: React.FC<{
                       />
                     </div>
 
-                    {/* Filter Dropdown */}
                     {activeFilterCol === key && (
                       <div
                         ref={filterDropdownRef}
                         className="absolute top-full left-0 mt-2 z-50 w-56 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-2xl p-3 animate-in fade-in zoom-in-95 duration-150"
                       >
-                        {/* Search */}
                         <div className="flex items-center gap-2 mb-3 p-2 bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700">
                           <Search size={14} className="text-slate-400" />
                           <input
@@ -607,7 +716,6 @@ const NonCollectionsView: React.FC<{
                           />
                         </div>
 
-                        {/* Filter Options */}
                         <div className="max-h-48 overflow-y-auto space-y-1 scrollbar-thin border-t border-slate-100 dark:border-slate-700 py-2">
                           {getUniqueValues(key).map((value) => (
                             <div
@@ -627,7 +735,6 @@ const NonCollectionsView: React.FC<{
                           ))}
                         </div>
 
-                        {/* Clear Filter Button */}
                         <button
                           onClick={() => {
                             setColFilters({ ...colFilters, [key]: '' });
@@ -642,65 +749,454 @@ const NonCollectionsView: React.FC<{
                     )}
                   </th>
                 ))}
+                <th className="relative p-0 border border-slate-700/50 text-[10px] font-black uppercase text-center bg-slate-900/50" style={{ width: 60 }}>
+                  <Settings2 size={14} className="mx-auto opacity-40" />
+                </th>
               </tr>
             </thead>
 
-            {/* Table Body */}
             <tbody>
-              {/* Dados reais */}
               {filteredData.map((row, index) => (
                 <tr
                   key={row.id}
-                  className={`border-b border-slate-200/50 dark:border-slate-800/50 transition-colors ${getRowStyle(row)} ${
+                  className={`border-b border-slate-200/50 dark:border-slate-800/50 transition-colors ${
                     index % 2 === 0 ? '' : 'bg-black/[0.02] dark:bg-white/[0.02]'
                   }`}
                 >
-                  {columns.map(({ key }) => (
-                    <td
-                      key={key}
-                      className="px-4 py-3 border-r border-slate-200/30 dark:border-slate-800/30 last:border-r-0"
-                      style={{ minWidth: colWidths[key] }}
+                  {columns.map(({ key }) => {
+                    const inputClass = `w-full bg-transparent outline-none border-none px-3 py-2 text-[11px] transition-all ${
+                      isDarkMode ? 'text-slate-200' : 'text-slate-900'
+                    }`;
+
+                    // ROTA - Input editável
+                    if (key === 'rota') {
+                      return (
+                        <td
+                          key={key}
+                          className={`p-0 border border-slate-200/30 dark:border-slate-800/30 ${
+                            hiddenColumns.has(key) ? 'hidden' : ''
+                          }`}
+                          style={{ minWidth: colWidths[key] }}
+                        >
+                          <input
+                            type="text"
+                            value={row.rota}
+                            onChange={(e) => {
+                              const updated = { ...row, rota: e.target.value };
+                              setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
+                            }}
+                            onPaste={(e) => {
+                              const val = e.clipboardData.getData('text');
+                              if (val.includes('\n')) {
+                                e.preventDefault();
+                                handleBulkPaste('rota', val);
+                              }
+                            }}
+                            className={`${inputClass} font-black text-center`}
+                          />
+                        </td>
+                      );
+                    }
+
+                    // DATA - Input editável com máscara
+                    if (key === 'data') {
+                      return (
+                        <td
+                          key={key}
+                          className={`p-0 border border-slate-200/30 dark:border-slate-800/30 ${
+                            hiddenColumns.has(key) ? 'hidden' : ''
+                          }`}
+                          style={{ minWidth: colWidths[key] }}
+                        >
+                          <input
+                            type="text"
+                            value={row.data}
+                            onChange={(e) => {
+                              let val = e.target.value.replace(/\D/g, '');
+                              if (val.length > 8) val = val.slice(0, 8);
+                              if (val.length >= 8) {
+                                val = `${val.slice(0, 2)}/${val.slice(2, 4)}/${val.slice(4, 8)}`;
+                              }
+                              const updated = { ...row, data: val };
+                              setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
+                            }}
+                            onPaste={(e) => {
+                              const val = e.clipboardData.getData('text');
+                              if (val.includes('\n')) {
+                                e.preventDefault();
+                                handleBulkPaste('data', val);
+                              }
+                            }}
+                            className={`${inputClass} text-center font-mono`}
+                          />
+                        </td>
+                      );
+                    }
+
+                    // PRODUTOR - Input editável
+                    if (key === 'produtor') {
+                      return (
+                        <td
+                          key={key}
+                          className={`p-0 border border-slate-200/30 dark:border-slate-800/30 ${
+                            hiddenColumns.has(key) ? 'hidden' : ''
+                          }`}
+                          style={{ minWidth: colWidths[key] }}
+                        >
+                          <input
+                            type="text"
+                            value={row.produtor}
+                            onChange={(e) => {
+                              const updated = { ...row, produtor: e.target.value };
+                              setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
+                            }}
+                            onPaste={(e) => {
+                              const val = e.clipboardData.getData('text');
+                              console.log('[PASTE PRODUTOR]', val);
+                              
+                              // Múltiplas linhas: bulk paste
+                              if (val.includes('\n')) {
+                                e.preventDefault();
+                                handleBulkPaste('produtor', val);
+                                return;
+                              }
+                              
+                              // Linha única com código + produtor: separa automaticamente
+                              const parsed = parseCodigoProdutor(val);
+                              if (parsed) {
+                                e.preventDefault();
+                                const updated = { ...row, codigo: parsed.codigo, produtor: parsed.produtor };
+                                setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
+                                console.log('[PASTE PRODUTOR] ✅ Código e produtor separados:', parsed);
+                                return;
+                              }
+                              
+                              // Se não tiver padrão código+produtor, deixa colar normalmente
+                            }}
+                            className={`${inputClass} font-bold`}
+                          />
+                        </td>
+                      );
+                    }
+
+                    // CÓDIGO - Input editável
+                    if (key === 'codigo') {
+                      return (
+                        <td
+                          key={key}
+                          className={`p-0 border border-slate-200/30 dark:border-slate-800/30 ${
+                            hiddenColumns.has(key) ? 'hidden' : ''
+                          }`}
+                          style={{ minWidth: colWidths[key] }}
+                        >
+                          <input
+                            type="text"
+                            value={row.codigo}
+                            onChange={(e) => {
+                              const updated = { ...row, codigo: e.target.value.toUpperCase() };
+                              setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
+                            }}
+                            onPaste={(e) => {
+                              const val = e.clipboardData.getData('text');
+                              console.log('[PASTE CODIGO ROW]', val);
+                              
+                              // Múltiplas linhas: bulk paste
+                              if (val.includes('\n')) {
+                                e.preventDefault();
+                                handleBulkPaste('codigo', val);
+                                return;
+                              }
+                              
+                              // Linha única com código + produtor: separa automaticamente
+                              const parsed = parseCodigoProdutor(val);
+                              if (parsed) {
+                                e.preventDefault();
+                                const updated = { ...row, codigo: parsed.codigo, produtor: parsed.produtor };
+                                setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
+                                console.log('[PASTE CODIGO] ✅ Código e produtor separados:', parsed);
+                                return;
+                              }
+                              
+                              // Se não tiver padrão código+produtor, deixa colar normalmente (já converte para upper)
+                            }}
+                            className={`${inputClass} font-bold text-center uppercase`}
+                          />
+                        </td>
+                      );
+                    }
+
+                    // MOTIVO - Select editável
+                    if (key === 'motivo') {
+                      return (
+                        <td
+                          key={key}
+                          className={`p-0 border border-slate-200/30 dark:border-slate-800/30 ${
+                            hiddenColumns.has(key) ? 'hidden' : ''
+                          }`}
+                          style={{ minWidth: colWidths[key] }}
+                        >
+                          <select
+                            value={row.motivo}
+                            onChange={(e) => {
+                              const updated = { ...row, motivo: e.target.value };
+                              setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
+                            }}
+                            className={`w-full px-3 py-2 text-[11px] text-left truncate transition-all cursor-pointer outline-none border-none bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700 focus:ring-2 focus:ring-blue-500 rounded ${
+                              isDarkMode ? 'dark-mode-select' : ''
+                            }`}
+                          >
+                            <option value="" className="bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-200">Selecione...</option>
+                            {MOTIVOS_CULPABILIDADES.map(m => (
+                              <option 
+                                key={m.label} 
+                                value={m.label}
+                                className="bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-200"
+                              >
+                                {m.label}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                      );
+                    }
+
+                    // OBSERVAÇÃO - Textarea editável
+                    if (key === 'observacao') {
+                      return (
+                        <td
+                          key={key}
+                          className={`p-0 border border-slate-200/30 dark:border-slate-800/30 ${
+                            hiddenColumns.has(key) ? 'hidden' : ''
+                          }`}
+                          style={{ minWidth: colWidths[key] }}
+                        >
+                          <textarea
+                            value={row.observacao}
+                            onChange={(e) => {
+                              const updated = { ...row, observacao: e.target.value };
+                              setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
+                            }}
+                            onPaste={(e) => {
+                              const val = e.clipboardData.getData('text');
+                              if (val.includes('\n')) {
+                                e.preventDefault();
+                                handleBulkPaste('observacao', val);
+                              }
+                            }}
+                            placeholder="Detalhes + causa raiz..."
+                            rows={1}
+                            className={`${inputClass} resize-none whitespace-pre-wrap break-words min-h-[48px]`}
+                          />
+                        </td>
+                      );
+                    }
+
+                    // AÇÃO - Textarea editável
+                    if (key === 'acao') {
+                      return (
+                        <td
+                          key={key}
+                          className={`p-0 border border-slate-200/30 dark:border-slate-800/30 ${
+                            hiddenColumns.has(key) ? 'hidden' : ''
+                          }`}
+                          style={{ minWidth: colWidths[key] }}
+                        >
+                          <textarea
+                            value={row.acao}
+                            onChange={(e) => {
+                              const updated = { ...row, acao: e.target.value };
+                              setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
+                            }}
+                            onPaste={(e) => {
+                              const val = e.clipboardData.getData('text');
+                              if (val.includes('\n')) {
+                                e.preventDefault();
+                                handleBulkPaste('acao', val);
+                              }
+                            }}
+                            placeholder="Ação..."
+                            rows={1}
+                            className={`${inputClass} resize-none whitespace-pre-wrap break-words min-h-[48px]`}
+                          />
+                        </td>
+                      );
+                    }
+
+                    // DATA AÇÃO - Input editável com máscara
+                    if (key === 'dataAcao') {
+                      return (
+                        <td
+                          key={key}
+                          className={`p-0 border border-slate-200/30 dark:border-slate-800/30 ${
+                            hiddenColumns.has(key) ? 'hidden' : ''
+                          }`}
+                          style={{ minWidth: colWidths[key] }}
+                        >
+                          <input
+                            type="text"
+                            value={row.dataAcao}
+                            onChange={(e) => {
+                              let val = e.target.value.replace(/\D/g, '');
+                              if (val.length > 8) val = val.slice(0, 8);
+                              if (val.length >= 8) {
+                                val = `${val.slice(0, 2)}/${val.slice(2, 4)}/${val.slice(4, 8)}`;
+                              }
+                              const updated = { ...row, dataAcao: val };
+                              setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
+                            }}
+                            onPaste={(e) => {
+                              const val = e.clipboardData.getData('text');
+                              if (val.includes('\n')) {
+                                e.preventDefault();
+                                handleBulkPaste('dataAcao', val);
+                              }
+                            }}
+                            className={`${inputClass} text-center font-mono`}
+                          />
+                        </td>
+                      );
+                    }
+
+                    // ÚLTIMA COLETA - Input editável com máscara
+                    if (key === 'ultimaColeta') {
+                      return (
+                        <td
+                          key={key}
+                          className={`p-0 border border-slate-200/30 dark:border-slate-800/30 ${
+                            hiddenColumns.has(key) ? 'hidden' : ''
+                          }`}
+                          style={{ minWidth: colWidths[key] }}
+                        >
+                          <input
+                            type="text"
+                            value={row.ultimaColeta}
+                            onChange={(e) => {
+                              let val = e.target.value.replace(/\D/g, '');
+                              if (val.length > 8) val = val.slice(0, 8);
+                              if (val.length >= 8) {
+                                val = `${val.slice(0, 2)}/${val.slice(2, 4)}/${val.slice(4, 8)}`;
+                              }
+                              const updated = { ...row, ultimaColeta: val };
+                              setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
+                            }}
+                            onPaste={(e) => {
+                              const val = e.clipboardData.getData('text');
+                              if (val.includes('\n')) {
+                                e.preventDefault();
+                                handleBulkPaste('ultimaColeta', val);
+                              }
+                            }}
+                            className={`${inputClass} text-center font-mono`}
+                          />
+                        </td>
+                      );
+                    }
+
+                    // OPERAÇÃO - Select editável
+                    if (key === 'operacao') {
+                      return (
+                        <td
+                          key={key}
+                          className={`p-0 border border-slate-200/30 dark:border-slate-800/30 ${
+                            hiddenColumns.has(key) ? 'hidden' : ''
+                          }`}
+                          style={{ minWidth: colWidths[key] }}
+                        >
+                          <select
+                            value={row.operacao}
+                            onChange={(e) => {
+                              const updated = { ...row, operacao: e.target.value };
+                              setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
+                            }}
+                            className={`${inputClass} text-center font-bold cursor-pointer bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-200`}
+                          >
+                            <option value="" className="bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-200">Selecione...</option>
+                            {userOps.map(op => (
+                              <option key={op.operacao} value={op.operacao} className="bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-200">{op.operacao}</option>
+                            ))}
+                          </select>
+                        </td>
+                      );
+                    }
+
+                    // CULPABILIDADE - Badge (somente leitura)
+                    if (key === 'culpabilidade') {
+                      return (
+                        <td
+                          key={key}
+                          className={`p-0 border border-slate-200/30 dark:border-slate-800/30 ${
+                            hiddenColumns.has(key) ? 'hidden' : ''
+                          }`}
+                          style={{ minWidth: colWidths[key] }}
+                        >
+                          <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider ${
+                            row.culpabilidade?.toLowerCase() === 'produtor'
+                              ? 'bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300'
+                              : row.culpabilidade?.toLowerCase() === 'logística' || row.culpabilidade?.toLowerCase() === 'logistica'
+                              ? 'bg-yellow-100 dark:bg-yellow-900/40 text-yellow-700 dark:text-yellow-300'
+                              : row.culpabilidade?.toLowerCase() === 'clima'
+                              ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300'
+                              : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
+                          }`}>
+                            {row.culpabilidade}
+                          </span>
+                        </td>
+                      );
+                    }
+
+                    // SEMANA - Somente leitura
+                    if (key === 'semana') {
+                      return (
+                        <td
+                          key={key}
+                          className={`p-0 border border-slate-200/30 dark:border-slate-800/30 ${
+                            hiddenColumns.has(key) ? 'hidden' : ''
+                          }`}
+                          style={{ minWidth: colWidths[key] }}
+                        >
+                          <span className={`${inputClass} text-center block py-2`}>
+                            {row.semana || '-'}
+                          </span>
+                        </td>
+                      );
+                    }
+
+                    // Default - Texto
+                    return (
+                      <td
+                        key={key}
+                        className={`p-0 border border-slate-200/30 dark:border-slate-800/30 ${
+                          hiddenColumns.has(key) ? 'hidden' : ''
+                        }`}
+                        style={{ minWidth: colWidths[key] }}
+                      >
+                        <span className={`${inputClass} px-3 py-2 block`}>
+                          {row[key as keyof NonCollection]}
+                        </span>
+                      </td>
+                    );
+                  })}
+                  {/* Coluna de ação */}
+                  <td className="p-0 border border-slate-200/30 dark:border-slate-800/30 text-center">
+                    <button
+                      onClick={() => {
+                        setNonCollections(prev => prev.filter(r => r.id !== row.id));
+                      }}
+                      className="p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
+                      title="Excluir linha"
                     >
-                      {key === 'culpabilidade' ? (
-                        <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider ${
-                          row.culpabilidade?.toLowerCase() === 'produtor'
-                            ? 'bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300'
-                            : row.culpabilidade?.toLowerCase() === 'logística' || row.culpabilidade?.toLowerCase() === 'logistica'
-                            ? 'bg-yellow-100 dark:bg-yellow-900/40 text-yellow-700 dark:text-yellow-300'
-                            : row.culpabilidade?.toLowerCase() === 'clima'
-                            ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300'
-                            : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
-                        }`}>
-                          {row[key]}
-                        </span>
-                      ) : key === 'motivo' ? (
-                        <span className="text-[10px] font-bold uppercase tracking-wide">
-                          {row[key]}
-                        </span>
-                      ) : (
-                        <span className="text-[10px] font-medium">
-                          {row[key]}
-                        </span>
-                      )}
-                    </td>
-                  ))}
+                      <Trash2 size={16} />
+                    </button>
+                  </td>
                 </tr>
               ))}
 
-              {/* Ghost Row (sempre visível no final) */}
+              {/* Ghost Row - Adição rápida */}
               <tr
                 key="ghost"
-                className={`border-b-2 border-blue-200 dark:border-blue-800 transition-colors ${getRowStyle(ghostRow)}`}
-                onPaste={(e) => {
-                  e.preventDefault();
-                  const text = e.clipboardData.getData('text');
-                  if (text.includes('\n') || text.split('\t').length >= 5) {
-                    handleBulkPaste(text);
-                  }
-                }}
+                className="border-b-2 border-blue-200 dark:border-blue-800 transition-colors bg-slate-50 dark:bg-slate-800 italic text-slate-400 border-l-4 border-dashed border-slate-300 dark:border-slate-600"
               >
                 {columns.map(({ key }) => {
-                  const isGhost = true;
                   const inputClass = `w-full bg-transparent outline-none border-none px-3 py-2 text-[11px] font-semibold uppercase transition-all ${
                     isDarkMode ? 'text-slate-200 placeholder-slate-500' : 'text-slate-900 placeholder-slate-400'
                   }`;
@@ -712,7 +1208,14 @@ const NonCollectionsView: React.FC<{
                           type="text"
                           value={ghostRow.rota || ''}
                           onChange={(e) => updateGhostCell('rota', e.target.value)}
-                          placeholder="Cole ou digite..."
+                          onPaste={(e) => {
+                            const val = e.clipboardData.getData('text');
+                            if (val.includes('\n')) {
+                              e.preventDefault();
+                              handleBulkPaste('rota', val);
+                            }
+                          }}
+                          placeholder="Cole rotas..."
                           className={`${inputClass} font-black text-center`}
                         />
                       </td>
@@ -730,12 +1233,15 @@ const NonCollectionsView: React.FC<{
                             if (val.length > 8) val = val.slice(0, 8);
                             if (val.length >= 8) {
                               val = `${val.slice(0, 2)}/${val.slice(2, 4)}/${val.slice(4, 8)}`;
-                            } else if (val.length >= 4) {
-                              val = `${val.slice(0, 2)}/${val.slice(2, 4)}/${val.slice(4)}`;
-                            } else if (val.length >= 2) {
-                              val = `${val.slice(0, 2)}/${val.slice(2)}`;
                             }
                             updateGhostCell('data', val);
+                          }}
+                          onPaste={(e) => {
+                            const val = e.clipboardData.getData('text');
+                            if (val.includes('\n')) {
+                              e.preventDefault();
+                              handleBulkPaste('data', val);
+                            }
                           }}
                           placeholder="DD/MM/AAAA"
                           maxLength={10}
@@ -758,6 +1264,48 @@ const NonCollectionsView: React.FC<{
                             <option key={op.operacao} value={op.operacao}>{op.operacao}</option>
                           ))}
                         </select>
+                      </td>
+                    );
+                  }
+
+                  if (key === 'produtor') {
+                    return (
+                      <td key={`ghost-${key}`} className="p-0 border border-slate-200/30 dark:border-slate-800/30" style={{ verticalAlign: 'middle' }}>
+                        <input
+                          type="text"
+                          value={ghostRow.produtor || ''}
+                          onChange={(e) => updateGhostCell('produtor', e.target.value)}
+                          onPaste={(e) => {
+                            const val = e.clipboardData.getData('text');
+                            if (val.includes('\n')) {
+                              e.preventDefault();
+                              handleBulkPaste('produtor', val);
+                            }
+                          }}
+                          placeholder="Cole produtores..."
+                          className={`${inputClass} font-bold`}
+                        />
+                      </td>
+                    );
+                  }
+
+                  if (key === 'codigo') {
+                    return (
+                      <td key={`ghost-${key}`} className="p-0 border border-slate-200/30 dark:border-slate-800/30" style={{ verticalAlign: 'middle' }}>
+                        <input
+                          type="text"
+                          value={ghostRow.codigo || ''}
+                          onChange={(e) => updateGhostCell('codigo', e.target.value.toUpperCase())}
+                          onPaste={(e) => {
+                            const val = e.clipboardData.getData('text');
+                            if (val.includes('\n')) {
+                              e.preventDefault();
+                              handleBulkPaste('codigo', val);
+                            }
+                          }}
+                          placeholder="Cole códigos..."
+                          className={`${inputClass} font-bold text-center uppercase`}
+                        />
                       </td>
                     );
                   }
@@ -801,40 +1349,19 @@ const NonCollectionsView: React.FC<{
                     );
                   }
 
-                  if (key === 'produtor') {
-                    return (
-                      <td key={`ghost-${key}`} className="p-0 border border-slate-200/30 dark:border-slate-800/30" style={{ verticalAlign: 'middle' }}>
-                        <input
-                          type="text"
-                          value={ghostRow.produtor || ''}
-                          onChange={(e) => updateGhostCell('produtor', e.target.value)}
-                          placeholder="Nome do produtor"
-                          className={`${inputClass} font-bold`}
-                        />
-                      </td>
-                    );
-                  }
-
-                  if (key === 'codigo') {
-                    return (
-                      <td key={`ghost-${key}`} className="p-0 border border-slate-200/30 dark:border-slate-800/30" style={{ verticalAlign: 'middle' }}>
-                        <input
-                          type="text"
-                          value={ghostRow.codigo || ''}
-                          onChange={(e) => updateGhostCell('codigo', e.target.value.toUpperCase())}
-                          placeholder="P001"
-                          className={`${inputClass} font-bold text-center uppercase`}
-                        />
-                      </td>
-                    );
-                  }
-
                   if (key === 'observacao' || key === 'acao') {
                     return (
                       <td key={`ghost-${key}`} className="p-0 border border-slate-200/30 dark:border-slate-800/30" style={{ verticalAlign: 'middle' }}>
                         <textarea
                           value={ghostRow[key] || ''}
                           onChange={(e) => updateGhostCell(key, e.target.value)}
+                          onPaste={(e) => {
+                            const val = e.clipboardData.getData('text');
+                            if (val.includes('\n')) {
+                              e.preventDefault();
+                              handleBulkPaste(key, val);
+                            }
+                          }}
                           placeholder={key === 'observacao' ? 'Detalhes + causa raiz...' : 'Ação...'}
                           rows={1}
                           className={`${inputClass} resize-none whitespace-pre-wrap break-words min-h-[48px]`}
@@ -847,10 +1374,7 @@ const NonCollectionsView: React.FC<{
                     return (
                       <td key={`ghost-${key}`} className="p-0 border border-slate-200/30 dark:border-slate-800/30" style={{ verticalAlign: 'middle' }}>
                         <span className={`${inputClass} text-center block py-2`}>
-                          {ghostRow.data ? (() => {
-                            const dataParaSemana = ghostRow.data.split('/').reverse().join('-');
-                            return getWeekString(dataParaSemana);
-                          })() : '-'}
+                          {ghostRow.data ? getWeekString(ghostRow.data.split('/').reverse().join('-')) : '-'}
                         </span>
                       </td>
                     );
@@ -878,7 +1402,6 @@ const NonCollectionsView: React.FC<{
                     );
                   }
 
-                  // Default input
                   return (
                     <td key={`ghost-${key}`} className="p-0 border border-slate-200/30 dark:border-slate-800/30" style={{ verticalAlign: 'middle' }}>
                       <input
@@ -891,26 +1414,21 @@ const NonCollectionsView: React.FC<{
                     </td>
                   );
                 })}
-              </tr>
-
-              {/* Botão de adicionar na linha ghost */}
-              <tr className={`${isDarkMode ? 'bg-slate-900' : 'bg-slate-100'}`}>
-                <td colSpan={columns.length} className="p-3 text-center">
+                {/* Coluna de ação */}
+                <td className="p-0 border border-slate-200/30 dark:border-slate-800/30 text-center">
                   <button
                     onClick={handleAddFromGhost}
-                    className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-black uppercase text-[10px] tracking-widest transition-all flex items-center gap-2 mx-auto shadow-lg shadow-blue-500/30"
+                    className="p-2 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors"
+                    title="Adicionar"
                   >
-                    <Plus size={14} /> Adicionar Não Coleta
+                    <Plus size={18} />
                   </button>
-                  <p className="text-[9px] font-bold text-slate-400 dark:text-slate-500 mt-2 uppercase">
-                    Ou cole múltiplas linhas (Ctrl+V) com colunas separadas por tab
-                  </p>
                 </td>
               </tr>
 
               {filteredData.length === 0 && nonCollections.length === 0 && (
                 <tr>
-                  <td colSpan={columns.length} className="px-4 py-16 text-center">
+                  <td colSpan={columns.length + 1} className="px-4 py-16 text-center">
                     <div className="flex flex-col items-center gap-3">
                       <div className="w-16 h-16 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center">
                         <Milk size={32} className="text-slate-400" />
@@ -919,7 +1437,7 @@ const NonCollectionsView: React.FC<{
                         Nenhuma não coleta registrada
                       </p>
                       <p className="text-xs font-medium text-slate-400 dark:text-slate-500">
-                        Preencha a linha acima ou cole dados do Excel
+                        Clique em "Adicionar Não Coleta" ou cole dados do Excel
                       </p>
                     </div>
                   </td>
@@ -929,6 +1447,151 @@ const NonCollectionsView: React.FC<{
           </table>
         </div>
       </div>
+
+      {/* Context Menu */}
+      {contextMenu.visible && (
+        <div
+          ref={contextMenuRef}
+          className="fixed z-[1000] bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-2xl py-2 min-w-[200px] animate-in fade-in zoom-in-95 duration-150"
+          style={{ top: contextMenu.y, left: contextMenu.x }}
+        >
+          <div className="px-3 py-2 border-b border-slate-200 dark:border-slate-700">
+            <p className="text-[10px] font-black uppercase text-slate-400">Colunas</p>
+          </div>
+          {columns.map(({ key, label }) => (
+            <button
+              key={key}
+              onClick={() => toggleColumn(key)}
+              className="w-full px-3 py-2 text-left hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors flex items-center gap-2"
+            >
+              {hiddenColumns.has(key) ? (
+                <Square size={14} className="text-slate-400" />
+              ) : (
+                <CheckSquare size={14} className="text-blue-600" />
+              )}
+              <span className="text-[10px] font-bold uppercase text-slate-700 dark:text-slate-300">{label}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Modal de Adicionar Não Coleta */}
+      {isAddModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[200] flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-[2.5rem] shadow-2xl w-full max-w-lg">
+            <div className="bg-[#1e293b] p-6 flex justify-between items-center text-white">
+              <div className="flex items-center gap-3">
+                <Milk size={24} />
+                <h3 className="font-black uppercase tracking-widest text-base">Adicionar Não Coleta</h3>
+              </div>
+              <button
+                onClick={() => setIsAddModalOpen(false)}
+                className="p-2 hover:bg-slate-700 rounded-lg transition-colors"
+              >
+                <X size={24} />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              {/* Operação */}
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">
+                  Operação *
+                </label>
+                <select
+                  value={newNonCollectionData.operacao}
+                  onChange={e => setNewNonCollectionData({ ...newNonCollectionData, operacao: e.target.value })}
+                  className="w-full p-3 border dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-sm font-bold outline-none dark:text-white focus:border-primary-500 transition-colors"
+                >
+                  <option value="">Selecione a operação</option>
+                  {userOps.map(config => (
+                    <option key={config.operacao} value={config.operacao}>
+                      {config.nomeExibicao || config.operacao}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Rota */}
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">
+                  Rota *
+                </label>
+                <input
+                  type="text"
+                  value={newNonCollectionData.rota}
+                  onChange={e => setNewNonCollectionData({ ...newNonCollectionData, rota: e.target.value })}
+                  placeholder="Ex: ROTA 01"
+                  className="w-full p-3 border dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-sm font-bold outline-none dark:text-white focus:border-primary-500 transition-colors"
+                />
+              </div>
+
+              {/* Data */}
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">
+                  Data *
+                </label>
+                <input
+                  type="text"
+                  value={newNonCollectionData.data}
+                  onChange={e => {
+                    let val = e.target.value.replace(/\D/g, '');
+                    if (val.length > 8) val = val.slice(0, 8);
+                    if (val.length >= 8) {
+                      val = `${val.slice(0, 2)}/${val.slice(2, 4)}/${val.slice(4, 8)}`;
+                    }
+                    setNewNonCollectionData({ ...newNonCollectionData, data: val });
+                  }}
+                  placeholder="DD/MM/AAAA"
+                  maxLength={10}
+                  className="w-full p-3 border dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-sm font-bold outline-none dark:text-white focus:border-primary-500 transition-colors font-mono text-center"
+                />
+              </div>
+
+              {/* Código */}
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">
+                  Código
+                </label>
+                <input
+                  type="text"
+                  value={newNonCollectionData.codigo}
+                  onChange={e => setNewNonCollectionData({ ...newNonCollectionData, codigo: e.target.value.toUpperCase() })}
+                  placeholder="Ex: 123456 ou P001"
+                  className="w-full p-3 border dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-sm font-bold outline-none dark:text-white focus:border-primary-500 transition-colors uppercase"
+                />
+              </div>
+
+              {/* Produtor */}
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">
+                  Produtor *
+                </label>
+                <input
+                  type="text"
+                  value={newNonCollectionData.produtor}
+                  onChange={e => setNewNonCollectionData({ ...newNonCollectionData, produtor: e.target.value })}
+                  placeholder="Nome do produtor"
+                  className="w-full p-3 border dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-sm font-bold outline-none dark:text-white focus:border-primary-500 transition-colors"
+                />
+              </div>
+            </div>
+            <div className="p-6 pt-0 flex gap-3">
+              <button
+                onClick={() => setIsAddModalOpen(false)}
+                className="flex-1 py-3 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-xl font-black uppercase text-[10px] tracking-widest hover:bg-slate-200 dark:hover:bg-slate-700 transition-all"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleAddNonCollection}
+                className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-black uppercase text-[10px] tracking-widest transition-all shadow-lg shadow-blue-500/20"
+              >
+                Adicionar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Footer Info */}
       <div className="px-6 py-3 text-center">
