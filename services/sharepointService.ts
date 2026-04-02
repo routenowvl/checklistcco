@@ -343,8 +343,33 @@ export const SharePointService = {
       const list = await findListByIdOrName(siteId, 'Historico_checklist_web', token);
       const { mapping } = await getListColumnMapping(siteId, list.id, token);
       const celulaField = mapping['celula'] || 'celula';
-      const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields`, token);
-      return (data.value || []).map((item: any) => ({ id: item.id, timestamp: item.fields.Data, resetBy: item.fields.Title, email: (item.fields[celulaField] || "").toString().trim(), tasks: JSON.parse(item.fields.DadosJSON || '[]') })).filter((record: HistoryRecord) => record.email?.toLowerCase() === userEmail.toLowerCase().trim()).sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      
+      console.log('[HISTORY_QUERY] Buscando histórico com paginação...');
+      
+      // Busca todos os itens com paginação (SharePoint retorna max 100 por página)
+      let allItems: any[] = [];
+      let nextUrl: string | null = `/sites/${siteId}/lists/${list.id}/items?expand=fields&$top=100`;
+      
+      while (nextUrl) {
+        const data = await graphFetch(nextUrl, token);
+        allItems = allItems.concat(data.value || []);
+        nextUrl = data['@odata.nextLink'] || null;
+        console.log(`[HISTORY_QUERY] Página carregada. Total acumulado: ${allItems.length}`);
+      }
+      
+      console.log(`[HISTORY_QUERY] Total de registros brutos: ${allItems.length}`);
+      
+      const result = allItems.map((item: any) => ({ 
+        id: item.id, 
+        timestamp: item.fields.Data, 
+        resetBy: item.fields.Title, 
+        email: (item.fields[celulaField] || "").toString().trim(), 
+        tasks: JSON.parse(item.fields.DadosJSON || '[]') 
+      })).filter((record: HistoryRecord) => record.email?.toLowerCase() === userEmail.toLowerCase().trim())
+        .sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      
+      console.log(`[HISTORY_QUERY] ✅ ${result.length} registros filtrados por usuário ${userEmail}`);
+      return result;
     } catch (e) { return []; }
   },
 
@@ -787,7 +812,7 @@ export const SharePointService = {
         const f = item.fields;
         const dataStr = f[colData] ? f[colData].split('T')[0] : "";
         const semanaFromSharePoint = f[resolveFieldName(mapping, 'Semana')] || "";
-        
+
         return {
           id: String(item.id),
           semana: semanaFromSharePoint || getWeekString(dataStr), // Calcula se não vier do SharePoint
@@ -821,27 +846,27 @@ export const SharePointService = {
     const siteId = await getResolvedSiteId(token);
     const list = await findListByIdOrName(siteId, 'Dados_Saida_de_rotas', token);
     const { mapping, internalNames, readOnly } = await getListColumnMapping(siteId, list.id, token, true);
-    
+
     // Calcula a semana com base na data, usando a mesma lógica do Excel
     // Se departure.semana já existir, usa; caso contrário, calcula automaticamente
     const semana = departure.semana || getWeekString(departure.data);
-    
-    const raw: any = { 
-        Title: departure.rota, 
-        Semana: semana, 
-        DataOperacao: departure.data ? new Date(departure.data + 'T12:00:00Z').toISOString() : null, 
-        HorarioInicio: departure.inicio, 
-        Motorista: departure.motorista, 
-        Placa: departure.placa, 
-        HorarioSaida: departure.saida, 
-        MotivoAtraso: departure.motivo, 
-        Observacao: departure.observacao, 
-        StatusGeral: departure.statusGeral, 
-        Aviso: departure.aviso, 
-        Operacao: departure.operacao, 
-        StatusOp: departure.statusOp, 
-        TempGab: departure.tempo, 
-        ChecklistMotorista: departure.checklistMotorista || '' 
+
+    const raw: any = {
+        Title: departure.rota,
+        Semana: semana,
+        DataOperacao: departure.data ? new Date(departure.data + 'T12:00:00Z').toISOString() : null,
+        HorarioInicio: departure.inicio,
+        Motorista: departure.motorista,
+        Placa: departure.placa,
+        HorarioSaida: departure.saida,
+        MotivoAtraso: departure.motivo,
+        Observacao: departure.observacao,
+        StatusGeral: departure.statusGeral,
+        Aviso: departure.aviso,
+        Operacao: departure.operacao,
+        StatusOp: departure.statusOp,
+        TempGab: departure.tempo,
+        ChecklistMotorista: departure.checklistMotorista || ''
     };
 
     const fields: any = {};
@@ -865,6 +890,58 @@ export const SharePointService = {
 
     // Invalida cache após atualização
     clearCache('departures');
+    return result;
+  },
+
+  async updateArchivedDeparture(token: string, departure: RouteDeparture): Promise<string> {
+    const siteId = await getResolvedSiteId(token);
+    const historyListId = "856bf9d5-6081-4360-bcad-e771cbabfda8";
+    const { mapping, internalNames, readOnly } = await getListColumnMapping(siteId, historyListId, token, true);
+
+    // Calcula a semana com base na data, usando a mesma lógica do Excel
+    const semana = departure.semana || getWeekString(departure.data);
+
+    const raw: any = {
+        Title: departure.rota,
+        Semana: semana,
+        DataOperacao: departure.data ? new Date(departure.data + 'T12:00:00Z').toISOString() : null,
+        HorarioInicio: departure.inicio,
+        Motorista: departure.motorista,
+        Placa: departure.placa,
+        HorarioSaida: departure.saida,
+        MotivoAtraso: departure.motivo,
+        Observacao: departure.observacao,
+        StatusGeral: departure.statusGeral,
+        Aviso: departure.aviso,
+        Operacao: departure.operacao,
+        StatusOp: departure.statusOp,
+        TempGab: departure.tempo,
+        ChecklistMotorista: departure.checklistMotorista || ''
+    };
+
+    const fields: any = {};
+    Object.keys(raw).forEach(k => {
+        const int = resolveFieldName(mapping, k);
+        if (int === 'Title' || (internalNames.has(int) && !readOnly.has(int))) {
+            fields[int] = raw[k];
+        }
+    });
+
+    const isUpdate = departure.id && departure.id !== "" && departure.id !== "0" && !isNaN(Number(departure.id));
+    let result: string;
+
+    if (isUpdate) {
+      console.log(`[HISTORY_UPDATE] Atualizando item ${departure.id} na lista de histórico`);
+      await graphFetch(`/sites/${siteId}/lists/${historyListId}/items/${departure.id}/fields`, token, { method: 'PATCH', body: JSON.stringify(fields) });
+      result = departure.id;
+    } else {
+      console.log(`[HISTORY_UPDATE] Criando novo item na lista de histórico`);
+      const res = await graphFetch(`/sites/${siteId}/lists/${historyListId}/items`, token, { method: 'POST', body: JSON.stringify({ fields }) });
+      result = String(res.id);
+    }
+
+    // Invalida cache de histórico após atualização
+    clearCache('archived_departures');
     return result;
   },
 

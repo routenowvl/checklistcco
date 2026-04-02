@@ -31,6 +31,9 @@ const HistoryViewer: React.FC<HistoryViewerProps> = ({ currentUser }) => {
   const [viewingPartial, setViewingPartial] = useState(false);
   const [collapsedCategories, setCollapsedCategories] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  
+  // Filtro para mostrar/ocultar salvamentos automáticos (padrão: OCULTAR)
+  const [showAutoSaves, setShowAutoSaves] = useState(false);
 
   // Estados para filtros das colunas (igual à tabela de saídas)
   const [colFilters, setColFilters] = useState<Record<string, string[]>>({});
@@ -187,7 +190,7 @@ const HistoryViewer: React.FC<HistoryViewerProps> = ({ currentUser }) => {
 
   const processedHistory = useMemo(() => {
     const groupedByDay: Record<string, HistoryRecord[]> = {};
-    
+
     history.forEach(rec => {
         const dateStr = displayTimestamp(rec.timestamp).split(',')[0].trim();
         if (!groupedByDay[dateStr]) groupedByDay[dateStr] = [];
@@ -210,13 +213,16 @@ const HistoryViewer: React.FC<HistoryViewerProps> = ({ currentUser }) => {
                 }
                 finalHistory.push(item);
             });
-        } else { finalHistory.push(...partials); }
+        } else if (showAutoSaves) {
+            // Só mostra salvamentos automáticos se não houver manuais E o filtro estiver ativado
+            finalHistory.push(...partials);
+        }
     });
 
     const sorted = finalHistory.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     if (sorted.length > 0 && !selectedRecord) setSelectedRecord(sorted[0]);
     return sorted;
-  }, [history]);
+  }, [history, showAutoSaves]);
 
   // Filtro Automático por Permissão de Célula
   const filteredAllowedLocations = useMemo(() => {
@@ -254,6 +260,22 @@ const HistoryViewer: React.FC<HistoryViewerProps> = ({ currentUser }) => {
                 <button onClick={fetchHistory} className="w-full py-2 bg-primary-600 text-white font-black uppercase text-[10px] rounded-lg hover:bg-primary-700 transition-all flex items-center justify-center gap-2">
                     {isLoading ? <Loader2 size={14} className="animate-spin" /> : <FileSearch size={14} />} BUSCAR AGORA
                 </button>
+                
+                {/* Toggle para mostrar/ocultar salvamentos automáticos */}
+                <div className="flex items-center justify-between p-3 bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700">
+                    <div className="flex items-center gap-2">
+                        <input
+                            type="checkbox"
+                            id="show-auto-saves"
+                            checked={showAutoSaves}
+                            onChange={e => setShowAutoSaves(e.target.checked)}
+                            className="w-4 h-4 text-primary-600 bg-slate-100 border-slate-300 rounded focus:ring-primary-500 dark:ring-offset-slate-900 dark:bg-slate-700 dark:border-slate-600"
+                        />
+                        <label htmlFor="show-auto-saves" className="text-[9px] font-bold text-slate-600 dark:text-slate-400 cursor-pointer select-none">
+                            Mostrar salvamentos automáticos
+                        </label>
+                    </div>
+                </div>
             </div>
         </div>
         

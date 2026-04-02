@@ -12,7 +12,7 @@ import {
   ChevronRight, Maximize2, Minimize2,
   Archive, Database, Save, LinkIcon,
   Layers, Trash2, Settings2, Check, Table, SortAsc,
-  Sun, Moon
+  Sun, Moon, AlertTriangle
 } from 'lucide-react';
 
 const MOTIVOS = [
@@ -243,6 +243,9 @@ const RouteDepartureView: React.FC<{
   const [archivedResults, setArchivedResults] = useState<RouteDeparture[]>([]);
   const [isSearchingArchive, setIsSearchingArchive] = useState(false);
   const [isHistoryFullscreen, setIsHistoryFullscreen] = useState(false);
+  
+  // Estado para edição em lote - armazena alterações pendentes
+  const [pendingHistoryEdits, setPendingHistoryEdits] = useState<Record<string, Partial<RouteDeparture>>>({});
   const [editingHistoryId, setEditingHistoryId] = useState<string | null>(null);
   const [editingHistoryField, setEditingHistoryField] = useState<keyof RouteDeparture | null>(null);
 
@@ -256,6 +259,10 @@ const RouteDepartureView: React.FC<{
     placa: '',
     operacao: ''
   });
+
+  // Estado para alertas de rotas com histórico de problemas
+  const [routeAlerts, setRouteAlerts] = useState<Record<string, { count: number; history: RouteDeparture[] }>>({});
+  const [selectedRouteAlert, setSelectedRouteAlert] = useState<{ rota: string; history: RouteDeparture[] } | null>(null);
   
   // Estados para filtros do histórico
   const [historyColFilters, setHistoryColFilters] = useState<Record<string, string[]>>({});
@@ -334,6 +341,69 @@ const RouteDepartureView: React.FC<{
     const fallback = currentUser?.accessToken || (window as any).__access_token;
     if (fallback) return fallback;
     throw new Error('Sessão expirada. Por favor, renove sua sessão.');
+  };
+
+  // Analisa histórico dos últimos 30 dias e identifica rotas com problemas
+  const analyzeRouteHistory = async (token: string) => {
+    try {
+      console.log('[ROUTE_ALERT] Analisando histórico dos últimos 30 dias...');
+
+      // Calcula data de 30 dias atrás
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      const startDate = thirtyDaysAgo.toISOString().split('T')[0];
+      const endDate = getBrazilDate();
+
+      // Busca histórico no SharePoint
+      const history = await SharePointService.getArchivedDepartures(token, null, startDate, endDate);
+
+      console.log(`[ROUTE_ALERT] ${history.length} registros encontrados, filtrando status Atrasada/Adiantada...`);
+      
+      // Log para depuração - verifica statusOp dos registros
+      const statusCounts: Record<string, number> = {};
+      history.forEach(r => {
+        statusCounts[r.statusOp] = (statusCounts[r.statusOp] || 0) + 1;
+      });
+      console.log('[ROUTE_ALERT] Status encontrados:', statusCounts);
+
+      // Filtra apenas rotas com status "Atrasada/Atrasado" ou "Adiantada/Adiantado"
+      const problemRoutes = history.filter(r =>
+        r.statusOp === 'Atrasada' || r.statusOp === 'Atrasado' ||
+        r.statusOp === 'Adiantada' || r.statusOp === 'Adiantado'
+      );
+
+      console.log(`[ROUTE_ALERT] ${problemRoutes.length} registros com problemas`);
+
+      // Agrupa por nome de rota
+      const alerts: Record<string, { count: number; history: RouteDeparture[] }> = {};
+
+      problemRoutes.forEach(route => {
+        const rotaNome = route.rota;
+        if (!alerts[rotaNome]) {
+          alerts[rotaNome] = { count: 0, history: [] };
+        }
+        alerts[rotaNome].count++;
+        alerts[rotaNome].history.push(route);
+      });
+
+      // Ordena histórico por data (mais recente primeiro)
+      Object.keys(alerts).forEach(rota => {
+        alerts[rota].history.sort((a, b) =>
+          new Date(b.data).getTime() - new Date(a.data).getTime()
+        );
+      });
+
+      setRouteAlerts(alerts);
+      console.log(`[ROUTE_ALERT] ✅ ${Object.keys(alerts).length} rotas com alertas de problemas`);
+      
+      // Log para depuração - mostra primeiras 5 rotas com alertas
+      const first5Routes = Object.keys(alerts).slice(0, 5);
+      first5Routes.forEach(rota => {
+        console.log(`[ROUTE_ALERT] Rota: ${rota} -> ${alerts[rota].count} ocorrências`);
+      });
+    } catch (e: any) {
+      console.error('[ROUTE_ALERT] Erro ao analisar histórico:', e.message);
+    }
   };
 
   // Sistema de Lock Temporário para Edição de Linhas
@@ -803,8 +873,13 @@ const RouteDepartureView: React.FC<{
     return () => clearInterval(interval);
   }, []);
 
-  // Verifica mudanças nas rotas para disparar o popup
+  // Verifica mudanças nas rotas para disparar o popup (APENAS se histórico NÃO estiver aberto)
   useEffect(() => {
+    // SE o modal de histórico estiver aberto, NÃO faz verificações automáticas
+    if (isHistoryModalOpen) {
+      return;
+    }
+
     if (routes.length === 0 || userConfigs.length === 0) return;
 
     const today = getBrazilDate();
@@ -859,7 +934,7 @@ const RouteDepartureView: React.FC<{
         startSendCountdown(operacao);
       }
     });
-  }, [routes, userConfigs, pendingSendOps, sendingOps]);
+  }, [routes, userConfigs, pendingSendOps, sendingOps, isHistoryModalOpen]);
 
   useEffect(() => {
     // Atualiza o tempo a cada 30 segundos usando fuso de Brasília
@@ -1470,6 +1545,11 @@ const RouteDepartureView: React.FC<{
       setRoutes(recalculatedRoutes);
       console.log('[LOAD_DATA] Dados carregados com sucesso');
 
+      // Analisa histórico dos últimos 30 dias para alertas (apenas no carregamento inicial)
+      if (!isBackgroundRefresh) {
+        analyzeRouteHistory(token);
+      }
+
       // Atualiza o último checklist de motorista após carregar as rotas
       if (spData && spData.length > 0) {
         const motoristaRecords = spData.filter(r => r.motorista && r.motorista.trim() !== '');
@@ -1512,6 +1592,29 @@ const RouteDepartureView: React.FC<{
 
   useEffect(() => { loadData(); }, [currentUser]);
 
+  // Função para buscar histórico do SharePoint (usada no modal e no polling)
+  const handleSearchArchive = async () => {
+    setIsSearchingArchive(true);
+    try {
+        console.log('[SEARCH_ARCHIVE] Requesting history from SharePoint list {856bf9d5-6081-4360-bcad-e771cbabfda8}...');
+        const results = await SharePointService.getArchivedDepartures(await getAccessToken(), null, histStart, histEnd);
+        console.log('[SEARCH_ARCHIVE] Results received:', results.length);
+
+        const myOps = new Set(userConfigs.map(c => c.operacao));
+        // If myOps is empty, show everything for the user to avoid blockage if config loading is slow
+        const filtered = results && results.length > 0
+          ? results.filter(r => !myOps.size || myOps.has(r.operacao))
+          : [];
+
+        setArchivedResults(filtered);
+    } catch (err: any) {
+        console.error('[SEARCH_ARCHIVE] Error during search:', err);
+        alert("Erro na busca: " + (err?.message || "Erro desconhecido ao acessar o SharePoint. Verifique se você tem permissão na lista de histórico."));
+    } finally {
+        setIsSearchingArchive(false);
+    }
+  };
+
   // Polling para atualizar dados automaticamente a cada 10 segundos (SEGUNDO PLANO)
   useEffect(() => {
     const refreshInterval = setInterval(() => {
@@ -1522,6 +1625,36 @@ const RouteDepartureView: React.FC<{
 
     return () => clearInterval(refreshInterval);
   }, [currentUser]);
+
+  // Handler de teclado para salvar edições no histórico (Enter)
+  useEffect(() => {
+    if (!isHistoryModalOpen) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Verifica se Enter foi pressionado e não está em um input/textarea
+      if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.altKey) {
+        const target = e.target as HTMLElement;
+        // Se estiver em input/textarea/select, salva e fecha
+        if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT') {
+          // Salva as edições pendentes
+          if (Object.keys(pendingHistoryEdits).length > 0) {
+            e.preventDefault();
+            savePendingHistoryEdits();
+          }
+          return;
+        }
+        
+        // Se não estiver em input, apenas salva se houver edições
+        if (Object.keys(pendingHistoryEdits).length > 0) {
+          e.preventDefault();
+          savePendingHistoryEdits();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isHistoryModalOpen, pendingHistoryEdits]);
 
   // Persistir configurações da tabela no sessionStorage
   useEffect(() => {
@@ -2041,42 +2174,88 @@ const RouteDepartureView: React.FC<{
     }
   };
 
-  const handleUpdateHistoryCell = async (id: string, field: keyof RouteDeparture, value: string) => {
+  const handleUpdateHistoryCell = (id: string, field: keyof RouteDeparture, value: string) => {
     // Normalização automática da placa: remove espaços e hífens
     if (field === 'placa') {
       value = value.replace(/[\s-]/g, '').toUpperCase();
     }
 
-    // VALIDAÇÃO CRÍTICA: Só permite editar rotas que pertencem às operações do usuário logado
-    const route = archivedResults.find(r => r.id === id);
-    if (!route) return;
+    // Apenas armazena a edição pendente (sem salvar no SharePoint ainda)
+    setPendingHistoryEdits(prev => {
+      const current = prev[id] || {};
+      return {
+        ...prev,
+        [id]: { ...current, [field]: value }
+      };
+    });
+  };
 
-    const myOps = new Set(userConfigs.map(c => c.operacao));
-    if (route.operacao && !myOps.has(route.operacao)) {
-        console.error('[HISTORY_UPDATE_BLOCKED] Usuário tentou editar rota de operação não pertencente:', route.operacao);
-        alert('⚠️ Erro: Você não tem permissão para editar esta rota do histórico.');
-        return;
-    }
+  // Salva todas as edições pendentes de uma vez (chamado ao pressionar Enter)
+  const savePendingHistoryEdits = async () => {
+    const editIds = Object.keys(pendingHistoryEdits);
+    if (editIds.length === 0) return;
 
-    setArchivedResults(prev => prev.map(r => r.id === id ? { ...r, [field]: value } : r));
+    console.log(`[HISTORY_BATCH_SAVE] Salvando ${editIds.length} edições pendentes...`);
     setIsSyncing(true);
+
+    let successCount = 0;
+    let errorCount = 0;
+
     try {
-        const updatedRoute = { ...route, [field]: value };
+      const token = await getAccessToken();
+      
+      for (const id of editIds) {
+        const edits = pendingHistoryEdits[id];
+        const route = archivedResults.find(r => r.id === id);
+        
+        if (!route) {
+          console.warn(`[HISTORY_SAVE] Rota ${id} não encontrada, pulando...`);
+          continue;
+        }
 
-        // Recalcula status baseado nos horários
-        const config = userConfigs.find(c => c.operacao === updatedRoute.operacao);
-        const { status, gap } = calculateStatusWithTolerance(updatedRoute.inicio, updatedRoute.saida, config?.tolerancia || "00:00:00", updatedRoute.data);
-        updatedRoute.statusOp = status;
-        updatedRoute.tempo = gap;
+        try {
+          // Cria rota atualizada com todas as edições
+          const updatedRoute = { ...route, ...edits };
 
-        await SharePointService.updateDeparture(await getAccessToken(), updatedRoute);
-        setEditingHistoryId(null);
-        setEditingHistoryField(null);
-    } catch (e) {
-        console.error('[HISTORY_UPDATE] Error:', e);
-        alert('Erro ao atualizar histórico');
+          // Recalcula status baseado nos horários se necessário
+          if (edits.inicio || edits.saida || edits.data) {
+            const config = userConfigs.find(c => c.operacao === updatedRoute.operacao);
+            const { status, gap } = calculateStatusWithTolerance(
+              updatedRoute.inicio, 
+              updatedRoute.saida, 
+              config?.tolerancia || "00:00:00", 
+              updatedRoute.data
+            );
+            updatedRoute.statusOp = status;
+            updatedRoute.tempo = gap;
+          }
+
+          // Salva no SharePoint
+          await SharePointService.updateArchivedDeparture(token, updatedRoute);
+          successCount++;
+          console.log(`[HISTORY_SAVE] ✅ Rota ${id} atualizada com sucesso`);
+        } catch (e: any) {
+          errorCount++;
+          console.error(`[HISTORY_SAVE] Erro ao atualizar ${id}:`, e.message);
+        }
+      }
+
+      // Limpa edições pendentes
+      setPendingHistoryEdits({});
+      setEditingHistoryId(null);
+      setEditingHistoryField(null);
+
+      // Feedback para o usuário
+      if (errorCount === 0) {
+        console.log(`[HISTORY_SAVE] ✅ ${successCount} edições salvas com sucesso!`);
+      } else {
+        alert(`⚠️ ${successCount} edições salvas, ${errorCount} falharam.`);
+      }
+    } catch (e: any) {
+      console.error('[HISTORY_SAVE] Erro crítico:', e);
+      alert('Erro ao salvar edições: ' + (e.message || 'Erro desconhecido'));
     } finally {
-        setIsSyncing(false);
+      setIsSyncing(false);
     }
   };
 
@@ -2530,28 +2709,6 @@ const RouteDepartureView: React.FC<{
       return { geral, interno };
     });
   }, [routes.length, userConfigs.length]); // Apenas quantidade importa para estabilidade
-
-  const handleSearchArchive = async () => {
-    setIsSearchingArchive(true);
-    try {
-        console.log('[SEARCH_ARCHIVE] Requesting history from SharePoint list {856bf9d5-6081-4360-bcad-e771cbabfda8}...');
-        const results = await SharePointService.getArchivedDepartures(await getAccessToken(), null, histStart, histEnd);
-        console.log('[SEARCH_ARCHIVE] Results received:', results.length);
-        
-        const myOps = new Set(userConfigs.map(c => c.operacao));
-        // If myOps is empty, show everything for the user to avoid blockage if config loading is slow
-        const filtered = results && results.length > 0 
-          ? results.filter(r => !myOps.size || myOps.has(r.operacao))
-          : [];
-        
-        setArchivedResults(filtered);
-    } catch (err: any) { 
-        console.error('[SEARCH_ARCHIVE] Error during search:', err);
-        alert("Erro na busca: " + (err?.message || "Erro desconhecido ao acessar o SharePoint. Verifique se você tem permissão na lista de histórico.")); 
-    } finally { 
-        setIsSearchingArchive(false); 
-    }
-  };
 
   const tableColumns = [
     { id: 'rota', label: 'ROTA' }, { id: 'data', label: 'DATA' }, { id: 'inicio', label: 'INÍCIO' },
@@ -3504,8 +3661,26 @@ const RouteDepartureView: React.FC<{
                                   {archivedResults.length} registro(s)
                               </span>
                           )}
+                          {/* Indicador de edições pendentes */}
+                          {Object.keys(pendingHistoryEdits).length > 0 && (
+                              <span className="text-[10px] font-black uppercase tracking-widest text-amber-400 bg-amber-900/30 px-3 py-1 rounded-full border border-amber-600 animate-pulse">
+                                  {Object.keys(pendingHistoryEdits).length} alteração(ões) pendente(s) - Pressione ENTER para salvar
+                              </span>
+                          )}
                       </div>
                       <div className="flex items-center gap-2">
+                          {/* Botão de salvar edições pendentes */}
+                          {Object.keys(pendingHistoryEdits).length > 0 && (
+                              <button
+                                  onClick={savePendingHistoryEdits}
+                                  disabled={isSyncing}
+                                  className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black uppercase text-[10px] rounded-xl shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                                  title="Salvar alterações (Enter)"
+                              >
+                                  {isSyncing ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                                  SALVAR ({Object.keys(pendingHistoryEdits).length})
+                              </button>
+                          )}
                           <button
                               onClick={() => setIsHistoryFullscreen(!isHistoryFullscreen)}
                               className="p-2 hover:bg-slate-700 rounded-lg transition-colors"
@@ -3914,25 +4089,28 @@ const RouteDepartureView: React.FC<{
                                       </tr>
                                   </thead>
                                   <tbody>
-                                      {filteredArchivedResults.map((r, i) => (
-                                          <tr key={i} className="hover:bg-slate-50 dark:hover:bg-slate-800 border-b border-slate-200 dark:border-slate-800 group">
+                                      {filteredArchivedResults.map((r, i) => {
+                                          // Verifica se esta linha tem edições pendentes
+                                          const pendingEdits = pendingHistoryEdits[r.id!];
+                                          
+                                          return (
+                                              <tr key={i} className={`hover:bg-slate-50 dark:hover:bg-slate-800 border-b border-slate-200 dark:border-slate-800 group ${pendingEdits ? 'bg-amber-50 dark:bg-amber-900/10' : ''}`}>
                                               <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center font-mono">
                                                   {editingHistoryId === r.id && editingHistoryField === 'semana' ? (
                                                       <input
                                                           type="text"
-                                                          value={r.semana || ''}
+                                                          defaultValue={r.semana || ''}
                                                           onChange={(e) => handleUpdateHistoryCell(r.id!, 'semana', e.target.value)}
                                                           onBlur={() => { setEditingHistoryId(null); setEditingHistoryField(null); }}
-                                                          onKeyDown={(e) => { if (e.key === 'Enter') { (e.target as HTMLInputElement).blur(); } }}
                                                           className="w-full bg-primary-100 dark:bg-primary-900/30 border-2 border-primary-500 px-2 py-1 font-bold outline-none"
                                                           autoFocus
                                                       />
                                                   ) : (
                                                       <div
                                                           onClick={() => { setEditingHistoryId(r.id!); setEditingHistoryField('semana'); }}
-                                                          className="cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 rounded px-1"
+                                                          className={`cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 rounded px-1 ${pendingEdits?.semana ? 'bg-amber-200 dark:bg-amber-800 font-bold' : ''}`}
                                                       >
-                                                          {r.semana || '---'}
+                                                          {pendingEdits?.semana || r.semana || '---'}
                                                       </div>
                                                   )}
                                               </td>
@@ -3940,7 +4118,7 @@ const RouteDepartureView: React.FC<{
                                                   {editingHistoryId === r.id && editingHistoryField === 'data' ? (
                                                       <input
                                                           type="date"
-                                                          value={r.data}
+                                                          defaultValue={r.data}
                                                           onChange={(e) => handleUpdateHistoryCell(r.id!, 'data', e.target.value)}
                                                           onBlur={() => { setEditingHistoryId(null); setEditingHistoryField(null); }}
                                                           className="w-full bg-primary-100 dark:bg-primary-900/30 border-2 border-primary-500 px-2 py-1 font-bold outline-none"
@@ -3949,7 +4127,7 @@ const RouteDepartureView: React.FC<{
                                                   ) : (
                                                       <div
                                                           onClick={() => { setEditingHistoryId(r.id!); setEditingHistoryField('data'); }}
-                                                          className="cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 rounded px-1"
+                                                          className={`cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 rounded px-1 ${pendingEdits?.data ? 'bg-amber-200 dark:bg-amber-800 font-bold' : ''}`}
                                                       >
                                                           {(() => {
                                                             if (!r.data) return '';
@@ -3960,43 +4138,64 @@ const RouteDepartureView: React.FC<{
                                                       </div>
                                                   )}
                                               </td>
-                                              <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}">
+                                              <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} relative">
+                                                  {(() => {
+                                                    // Debug: log para verificar se routeAlerts está acessível
+                                                    if (r.rota && routeAlerts[r.rota] && routeAlerts[r.rota].count > 0 && Math.random() < 0.01) {
+                                                      console.log(`[ROUTE_CELL_DEBUG] Rota ${r.rota} tem ${routeAlerts[r.rota].count} alertas`);
+                                                    }
+                                                    return (
+                                                      <>
                                                   {editingHistoryId === r.id && editingHistoryField === 'rota' ? (
                                                       <input
                                                           type="text"
-                                                          value={r.rota}
+                                                          defaultValue={r.rota}
                                                           onChange={(e) => handleUpdateHistoryCell(r.id!, 'rota', e.target.value)}
                                                           onBlur={() => { setEditingHistoryId(null); setEditingHistoryField(null); }}
-                                                          onKeyDown={(e) => { if (e.key === 'Enter') { (e.target as HTMLInputElement).blur(); } }}
                                                           className="w-full bg-primary-100 dark:bg-primary-900/30 border-2 border-primary-500 px-2 py-1 font-bold outline-none"
                                                           autoFocus
                                                       />
                                                   ) : (
                                                       <div
                                                           onClick={() => { setEditingHistoryId(r.id!); setEditingHistoryField('rota'); }}
-                                                          className="font-bold text-primary-700 dark:text-primary-400 cursor-pointer hover:bg-primary-50 dark:hover:bg-primary-900/20 rounded px-1"
+                                                          className="font-bold text-primary-700 dark:text-primary-400 cursor-pointer hover:bg-primary-50 dark:hover:bg-primary-900/20 rounded px-1 flex items-center gap-2"
                                                       >
                                                           {r.rota}
+                                                          {/* Indicador de alerta para rotas com histórico de problemas */}
+                                                          {routeAlerts[r.rota] && routeAlerts[r.rota].count > 0 && (
+                                                              <span
+                                                                onClick={(e) => {
+                                                                  e.stopPropagation();
+                                                                  setSelectedRouteAlert({ rota: r.rota, history: routeAlerts[r.rota].history });
+                                                                }}
+                                                                className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 bg-red-500 hover:bg-red-600 text-white text-[9px] font-black rounded-full cursor-pointer transition-colors"
+                                                                title={`${routeAlerts[r.rota].count} ocorrência(s) de atraso/adiantamento nos últimos 30 dias. Clique para ver histórico.`}
+                                                              >
+                                                                {routeAlerts[r.rota].count}
+                                                              </span>
+                                                          )}
                                                       </div>
                                                   )}
+                                                      </>
+                                                    );
+                                                  })()}
                                               </td>
                                               <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center font-mono">
                                                   {editingHistoryId === r.id && editingHistoryField === 'inicio' ? (
                                                       <input
                                                           type="text"
-                                                          value={r.inicio}
+                                                          defaultValue={r.inicio}
                                                           onChange={(e) => handleUpdateHistoryCell(r.id!, 'inicio', applyTimeMask(e.target.value))}
                                                           onBlur={() => { setEditingHistoryId(null); setEditingHistoryField(null); }}
-                                                          onKeyDown={(e) => { if (e.key === 'Enter') { (e.target as HTMLInputElement).blur(); } }}
                                                           className="w-full bg-primary-100 dark:bg-primary-900/30 border-2 border-primary-500 px-2 py-1 font-mono font-bold outline-none"
                                                           autoFocus
                                                       />
                                                   ) : (
                                                       <div
                                                           onClick={() => { setEditingHistoryId(r.id!); setEditingHistoryField('inicio'); }}
-                                                          className="cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 rounded px-1"
+                                                          className={`cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 rounded px-1 ${pendingEdits?.inicio ? 'bg-amber-200 dark:bg-amber-800 font-bold' : ''}`}
                                                       >
-                                                          {r.inicio || '---'}
+                                                          {pendingEdits?.inicio || r.inicio || '---'}
                                                       </div>
                                                   )}
                                               </td>
@@ -4004,19 +4203,18 @@ const RouteDepartureView: React.FC<{
                                                   {editingHistoryId === r.id && editingHistoryField === 'motorista' ? (
                                                       <input
                                                           type="text"
-                                                          value={r.motorista}
+                                                          defaultValue={r.motorista}
                                                           onChange={(e) => handleUpdateHistoryCell(r.id!, 'motorista', e.target.value)}
                                                           onBlur={() => { setEditingHistoryId(null); setEditingHistoryField(null); }}
-                                                          onKeyDown={(e) => { if (e.key === 'Enter') { (e.target as HTMLInputElement).blur(); } }}
                                                           className="w-full bg-primary-100 dark:bg-primary-900/30 border-2 border-primary-500 px-2 py-1 font-bold outline-none"
                                                           autoFocus
                                                       />
                                                   ) : (
                                                       <div
                                                           onClick={() => { setEditingHistoryId(r.id!); setEditingHistoryField('motorista'); }}
-                                                          className="cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 rounded px-1"
+                                                          className={`cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 rounded px-1 ${pendingEdits?.motorista ? 'bg-amber-200 dark:bg-amber-800 font-bold' : ''}`}
                                                       >
-                                                          {r.motorista || '---'}
+                                                          {pendingEdits?.motorista || r.motorista || '---'}
                                                       </div>
                                                   )}
                                               </td>
@@ -4024,23 +4222,21 @@ const RouteDepartureView: React.FC<{
                                                   {editingHistoryId === r.id && editingHistoryField === 'placa' ? (
                                                       <input
                                                           type="text"
-                                                          value={r.placa}
+                                                          defaultValue={r.placa}
                                                           onChange={(e) => {
-                                                            // Normalização: remove espaços, hífens e converte para maiúsculo
                                                             const cleanValue = e.target.value.replace(/[\s-]/g, '').toUpperCase();
                                                             handleUpdateHistoryCell(r.id!, 'placa', cleanValue);
                                                           }}
                                                           onBlur={() => { setEditingHistoryId(null); setEditingHistoryField(null); }}
-                                                          onKeyDown={(e) => { if (e.key === 'Enter') { (e.target as HTMLInputElement).blur(); } }}
                                                           className="w-full bg-primary-100 dark:bg-primary-900/30 border-2 border-primary-500 px-2 py-1 font-mono font-bold outline-none uppercase"
                                                           autoFocus
                                                       />
                                                   ) : (
                                                       <div
                                                           onClick={() => { setEditingHistoryId(r.id!); setEditingHistoryField('placa'); }}
-                                                          className="cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 rounded px-1"
+                                                          className={`cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 rounded px-1 ${pendingEdits?.placa ? 'bg-amber-200 dark:bg-amber-800 font-bold' : ''}`}
                                                       >
-                                                          {r.placa || '---'}
+                                                          {pendingEdits?.placa || r.placa || '---'}
                                                       </div>
                                                   )}
                                               </td>
@@ -4048,26 +4244,25 @@ const RouteDepartureView: React.FC<{
                                                   {editingHistoryId === r.id && editingHistoryField === 'saida' ? (
                                                       <input
                                                           type="text"
-                                                          value={r.saida}
+                                                          defaultValue={r.saida}
                                                           onChange={(e) => handleUpdateHistoryCell(r.id!, 'saida', applyTimeMask(e.target.value))}
                                                           onBlur={() => { setEditingHistoryId(null); setEditingHistoryField(null); }}
-                                                          onKeyDown={(e) => { if (e.key === 'Enter') { (e.target as HTMLInputElement).blur(); } }}
                                                           className="w-full bg-primary-100 dark:bg-primary-900/30 border-2 border-primary-500 px-2 py-1 font-mono font-bold outline-none"
                                                           autoFocus
                                                       />
                                                   ) : (
                                                       <div
                                                           onClick={() => { setEditingHistoryId(r.id!); setEditingHistoryField('saida'); }}
-                                                          className="cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 rounded px-1"
+                                                          className={`cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 rounded px-1 ${pendingEdits?.saida ? 'bg-amber-200 dark:bg-amber-800 font-bold' : ''}`}
                                                       >
-                                                          {r.saida || '---'}
+                                                          {pendingEdits?.saida || r.saida || '---'}
                                                       </div>
                                                   )}
                                               </td>
                                               <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}">
                                                   {editingHistoryId === r.id && editingHistoryField === 'motivo' ? (
                                                       <select
-                                                          value={r.motivo}
+                                                          defaultValue={r.motivo}
                                                           onChange={(e) => handleUpdateHistoryCell(r.id!, 'motivo', e.target.value)}
                                                           onBlur={() => { setEditingHistoryId(null); setEditingHistoryField(null); }}
                                                           className="w-full bg-primary-100 dark:bg-primary-900/30 border-2 border-primary-500 px-2 py-1 font-bold outline-none"
@@ -4079,16 +4274,16 @@ const RouteDepartureView: React.FC<{
                                                   ) : (
                                                       <div
                                                           onClick={() => { setEditingHistoryId(r.id!); setEditingHistoryField('motivo'); }}
-                                                          className="cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 rounded px-1"
+                                                          className={`cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 rounded px-1 ${pendingEdits?.motivo ? 'bg-amber-200 dark:bg-amber-800 font-bold' : ''}`}
                                                       >
-                                                          {r.motivo || '---'}
+                                                          {pendingEdits?.motivo || r.motivo || '---'}
                                                       </div>
                                                   )}
                                               </td>
                                               <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} max-w-xs">
                                                   {editingHistoryId === r.id && editingHistoryField === 'observacao' ? (
                                                       <textarea
-                                                          value={r.observacao}
+                                                          defaultValue={r.observacao}
                                                           onChange={(e) => handleUpdateHistoryCell(r.id!, 'observacao', e.target.value)}
                                                           onBlur={() => { setEditingHistoryId(null); setEditingHistoryField(null); }}
                                                           onInput={(e: any) => {
@@ -4103,10 +4298,9 @@ const RouteDepartureView: React.FC<{
                                                   ) : (
                                                       <div
                                                           onClick={() => { setEditingHistoryId(r.id!); setEditingHistoryField('observacao'); }}
-                                                          className="cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 rounded px-1 whitespace-pre-wrap break-words"
-                                                          style={{ wordBreak: 'break-word', overflowWrap: 'break-word' }}
+                                                          className={`cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 rounded px-1 whitespace-pre-wrap break-words ${pendingEdits?.observacao ? 'bg-amber-200 dark:bg-amber-800 font-bold' : ''}`}
                                                       >
-                                                          {r.observacao || '---'}
+                                                          {pendingEdits?.observacao || r.observacao || '---'}
                                                       </div>
                                                   )}
                                               </td>
@@ -4129,7 +4323,8 @@ const RouteDepartureView: React.FC<{
                                                   {r.tempo}
                                               </td>
                                           </tr>
-                                      ))}
+                                          );
+                                      })}
                                   </tbody>
                               </table>
                           </div>
@@ -4153,6 +4348,68 @@ const RouteDepartureView: React.FC<{
                       <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 text-center">
                           💡 Clique em qualquer célula para editar • Os dados são sincronizados com o SharePoint
                       </p>
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* Modal de Alerta de Rota com Histórico de Problemas */}
+      {selectedRouteAlert && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[300] flex items-center justify-center p-4" onClick={() => setSelectedRouteAlert(null)}>
+              <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] shadow-2xl w-full max-w-2xl border dark:border-slate-800 overflow-hidden" onClick={(e) => e.stopPropagation()}>
+                  <div className="bg-red-600 p-6 flex justify-between items-center text-white">
+                      <div className="flex items-center gap-4">
+                          <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center">
+                              <AlertTriangle size={28} />
+                          </div>
+                          <div>
+                              <h3 className="font-black uppercase tracking-widest text-lg">Histórico de Problemas</h3>
+                              <p className="text-[10px] font-bold text-white/80 uppercase tracking-wide">Rota: {selectedRouteAlert.rota}</p>
+                          </div>
+                      </div>
+                      <button onClick={() => setSelectedRouteAlert(null)} className="p-2 hover:bg-white/20 rounded-xl transition-colors">
+                          <X size={28} />
+                      </button>
+                  </div>
+                  <div className="p-6 max-h-[60vh] overflow-y-auto">
+                      <div className="mb-4 p-4 bg-red-50 dark:bg-red-900/20 rounded-2xl border border-red-200 dark:border-red-800">
+                          <p className="text-[11px] font-black uppercase text-red-700 dark:text-red-400 text-center">
+                              ⚠️ {selectedRouteAlert.history.length} ocorrência(s) de atraso/adiantamento nos últimos 30 dias
+                          </p>
+                      </div>
+                      <div className="space-y-2">
+                          {selectedRouteAlert.history.map((item, idx) => (
+                              <div key={idx} className="p-4 bg-slate-50 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700">
+                                  <div className="flex items-center justify-between mb-2">
+                                      <div className="flex items-center gap-3">
+                                          <span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase border ${
+                                              item.statusOp === 'Atrasada' 
+                                                ? 'bg-yellow-100 border-yellow-400 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400'
+                                                : 'bg-blue-100 border-blue-400 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400'
+                                          }`}>
+                                              {item.statusOp}
+                                          </span>
+                                          <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400">
+                                              {new Date(item.data).toLocaleDateString('pt-BR')}
+                                          </span>
+                                      </div>
+                                      <span className="text-[10px] font-black text-slate-600 dark:text-slate-300 uppercase">
+                                          {item.operacao}
+                                      </span>
+                                  </div>
+                                  {item.motivo && (
+                                      <p className="text-[10px] font-bold text-slate-600 dark:text-slate-400 mt-2">
+                                          <span className="uppercase font-black">Motivo:</span> {item.motivo}
+                                      </p>
+                                  )}
+                                  {item.observacao && (
+                                      <p className="text-[10px] font-normal text-slate-500 dark:text-slate-500 mt-1 whitespace-pre-wrap">
+                                          {item.observacao}
+                                      </p>
+                                  )}
+                              </div>
+                          ))}
+                      </div>
                   </div>
               </div>
           </div>
