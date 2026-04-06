@@ -2,7 +2,11 @@
   "permissions": {
     "allow": [
       "Bash(del *)",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(git checkout *)",
+      "Bash(powershell *)",
+      "Bash(npx *)",
+      "Bash(findstr *)"
     ]
   },
   "$version": 3

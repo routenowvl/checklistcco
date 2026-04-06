@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { RouteConfig, User } from '../types';
 import { SharePointService } from '../services/sharepointService';
 import { getValidToken } from '../services/tokenService';
@@ -26,45 +26,45 @@ interface NonCollection {
   acao: string;
   dataAcao: string;
   ultimaColeta: string;
-  culpabilidade: string;
+  Culpabilidade: string;
   operacao: string;
 }
 
-// Lista de MOTIVOS no padrÃ£o "MOTIVO - CULPABILIDADE"
-const MOTIVOS_CULPABILIDADES: Record<string, string> = {
-  'Rota Atrasada/FÃ¡brica': 'Cliente',
-  'Rota Atrasada/LogÃ­stica': 'VIA',
-  'Rota Atrasada/ManutenÃ§Ã£o': 'VIA',
-  'Rota Atrasada/MÃ£o De Obra': 'VIA',
+// Lista de MOTIVOS no padrão "MOTIVO - Culpabilidade"
+const MOTIVOS_CulpabilidadeS: Record<string, string> = {
+  'Rota Atrasada/Fábrica': 'Cliente',
+  'Rota Atrasada/Logística': 'VIA',
+  'Rota Atrasada/Manutenção': 'VIA',
+  'Rota Atrasada/Mão De Obra': 'VIA',
   'Eqp. Cheio/Coleta Extra': 'VIA',
   'Eqp. Cheio/Eqp Menor': 'VIA',
   'Eqp. Cheio/Rota Atrasada': 'VIA',
   'Alizarol Positivo': 'Outros',
-  'Leite Com AntibiÃ³tico': 'Outros',
+  'Leite Com Antibiótico': 'Outros',
   'Leite Congelado': 'Outros',
   'Leite Descartado': 'Outros',
   'Leite Quente': 'Outros',
-  'NÃ£o Coletado - SaÃºde Do Motorista': 'VIA',
-  'NÃ£o Coletado - Greve': 'Outros',
-  'NÃ£o Coletado - Solicitado Pelo Sdl': 'Cliente',
+  'Não Coletado - Saúde Do Motorista': 'VIA',
+  'Não Coletado - Greve': 'Outros',
+  'Não Coletado - Solicitado Pelo SDL': 'Cliente',
   'Objeto Ou Sujeira No Leite': 'Outros',
   'Parou De Fornecer': 'Outros',
   'Produtor Suspenso': 'Cliente',
   'Passou Para 48Hrs': 'VIA',
-  'Problemas MecÃ¢nicos Equipamento': 'VIA',
-  'Produtor Solicitou A NÃ£o Coleta': 'Outros',
+  'Problemas Mecânicos Equipamento': 'VIA',
+  'Produtor Solicitou A Não Coleta': 'Outros',
   'Resfriador Vazio': 'Outros',
   'Volume Insuficiente Para Medida': 'Outros',
   'Coletado Por Outra Transportadora': 'VIA',
-  'Descumprimento de roteirizaÃ§Ã£o': 'VIA',
-  'A rota nÃ£o foi realizada': 'Outros',
+  'Descumprimento de roteirização': 'VIA',
+  'A rota Não foi realizada': 'Outros',
   'Falta De Acesso': 'Outros',
   'Jornada Excedida': 'Outros',
   'Eqp. Cheio/Aumento de Vol.': 'Outros',
-  'CorreÃ§Ã£o de RoteirzaÃ§Ã£o': 'VIA',
+  'Correção de Roteirização': 'VIA',
   'Crioscopia': 'Outros',
   'Rota Atrasada/Infraestrutura': 'Outros',
-  'Eqp. Cheio/ManutenÃ§Ã£o': 'VIA'
+  'Eqp. Cheio/Manutenção': 'VIA'
 };
 
 // Motivos que mostram popup de causa raiz
@@ -73,10 +73,10 @@ const MOTIVOS_COM_CAUSA_RAIZ = [
   'Eqp. Cheio/Eqp Menor',
   'Eqp. Cheio/Rota Atrasada',
   'Coletado Por Outra Transportadora',
-  'Descumprimento de roteirizaÃ§Ã£o'
+  'Descumprimento de roteirização'
 ];
 
-const CULPABILIDADE_OPCOES = ['VIA', 'Cliente', 'Outros'];
+const Culpabilidade_OPCOES = ['VIA', 'Cliente', 'Outros'];
 
 const NonCollectionsView: React.FC<{
   currentUser: User;
@@ -104,7 +104,7 @@ const NonCollectionsView: React.FC<{
     acao: 200,
     dataAcao: 120,
     ultimaColeta: 120,
-    culpabilidade: 130,
+    Culpabilidade: 130,
     operacao: 120
   });
 
@@ -121,7 +121,7 @@ const NonCollectionsView: React.FC<{
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const resizingRef = useRef<{ col: string; startX: number; startWidth: number } | null>(null);
 
-  // Estados para modal de adicionar nÃ£o coleta
+  // Estados para modal de adicionar Não coleta
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [newNonCollectionData, setNewNonCollectionData] = useState<{
     rota: string;
@@ -137,7 +137,7 @@ const NonCollectionsView: React.FC<{
     operacao: ''
   });
 
-  // Ghost Row para adiÃ§Ã£o rÃ¡pida via paste
+  // Ghost Row para adição rápida via paste
   const [ghostRow, setGhostRow] = useState<Partial<NonCollection>>({
     id: 'ghost',
     semana: '',
@@ -150,13 +150,13 @@ const NonCollectionsView: React.FC<{
     acao: '',
     dataAcao: '',
     ultimaColeta: '',
-    culpabilidade: '',
+    Culpabilidade: '',
     operacao: ''
   });
 
   const [showCausaRaiz, setShowCausaRaiz] = useState(false);
 
-  // Estados para modal de seleÃ§Ã£o de operaÃ§Ã£o (bulk paste)
+  // Estados para modal de seleção de Operação (bulk paste)
   const [isOperationModalOpen, setIsOperationModalOpen] = useState(false);
   const [pendingBulkRoutes, setPendingBulkRoutes] = useState<string[]>([]);
 
@@ -164,12 +164,12 @@ const NonCollectionsView: React.FC<{
     const updatedGhost = { ...ghostRow, [field]: value };
 
     if (field === 'motivo') {
-      // Preenche culpabilidade automaticamente baseado no motivo
-      const culpabilidadeAuto = MOTIVOS_CULPABILIDADES[value];
-      if (culpabilidadeAuto) {
-        updatedGhost.culpabilidade = culpabilidadeAuto;
+      // Preenche Culpabilidade automaticamente baseado no motivo
+      const CulpabilidadeAuto = MOTIVOS_CulpabilidadeS[value];
+      if (CulpabilidadeAuto) {
+        updatedGhost.Culpabilidade = CulpabilidadeAuto;
       }
-      // Verifica se Ã© motivo com causa raiz
+      // Verifica se é motivo com causa raiz
       setShowCausaRaiz(MOTIVOS_COM_CAUSA_RAIZ.includes(value));
     }
 
@@ -178,27 +178,27 @@ const NonCollectionsView: React.FC<{
 
   const handleAddFromGhost = async () => {
     if (!ghostRow.rota || !ghostRow.data || !ghostRow.produtor || !ghostRow.operacao) {
-      alert('Preencha todos os campos obrigatÃ³rios na linha de criaÃ§Ã£o!');
+      alert('Preencha todos os campos obrigatórios na linha de criação!');
       return;
     }
 
     try {
       const token = await getValidToken() || currentUser.accessToken;
       if (!token) {
-        alert('Erro: Token nÃ£o encontrado');
+        alert('Erro: Token Não encontrado');
         return;
       }
 
       const dataParaSemana = ghostRow.data!.split('/').reverse().join('-');
       const semana = getWeekString(dataParaSemana);
 
-      // Calcula dataAcao automÃ¡tica: data + 2 dias se motivo gerar "SerÃ¡ coletado na rota..."
+      // Calcula dataAcao automática: data + 2 dias se motivo gerar "Será coletado na rota..."
       const calcularDataAcao = () => {
         const motivo = (ghostRow.motivo || '').trim();
         const dataNaoColeta = ghostRow.data!;
 
         if (motivo && dataNaoColeta) {
-          // Motivos que geram "Leite Descartado" ou "Aguardando autorizaÃ§Ã£o" ficam com hÃ­fen
+          // Motivos que geram "Leite Descartado" ou "Aguardando autorização" ficam com héfen
           const motivoLower = motivo.toLowerCase();
           if (motivoLower === 'parou de fornecer' || motivoLower === 'produtor suspenso' || motivoLower === 'alizarol positivo') {
             return '-';
@@ -234,11 +234,11 @@ const NonCollectionsView: React.FC<{
         acao: ghostRow.acao || '',
         dataAcao: calcularDataAcao(),
         ultimaColeta: '',
-        culpabilidade: ghostRow.culpabilidade || 'NÃ£o se aplica',
+        Culpabilidade: ghostRow.Culpabilidade || 'Não se aplica',
         operacao: ghostRow.operacao!
       };
 
-      // Salva no SharePoint e obtÃ©m o ID real
+      // Salva no SharePoint e obtém o ID real
       const spId = await SharePointService.saveNonCollection(token, newRecord);
 
       // Adiciona localmente com o ID real do SharePoint
@@ -257,18 +257,18 @@ const NonCollectionsView: React.FC<{
         acao: '',
         dataAcao: '',
         ultimaColeta: '',
-        culpabilidade: '',
+        Culpabilidade: '',
         operacao: ''
       });
       setShowCausaRaiz(false);
     } catch (e: any) {
       console.error('[ADD_NON_COLLECTION] Error:', e);
-      alert(`Erro ao adicionar nÃ£o coleta: ${e.message}`);
+      alert(`Erro ao adicionar Não coleta: ${e.message}`);
     }
   };
 
   /**
-   * Cria novas linhas de nÃ£o coleta apÃ³s o usuÃ¡rio selecionar a operaÃ§Ã£o no modal.
+   * Cria novas linhas de Não coleta após o usuário selecionar a Operação no modal.
    * SALVA CADA REGISTRO NO SHAREPOINT IMEDIATAMENTE.
    */
   const createBulkRecordsWithOperation = async (operacao: string) => {
@@ -280,8 +280,8 @@ const NonCollectionsView: React.FC<{
     try {
       const token = await getValidToken() || currentUser.accessToken;
       if (!token) {
-        console.error('[BULK_PASTE] Token nÃ£o encontrado, criando apenas localmente');
-        // Fallback: cria localmente (nÃ£o serÃ¡ salvo no SharePoint)
+        console.error('[BULK_PASTE] Token Não encontrado, criando apenas localmente');
+        // Fallback: cria localmente (Não será salvo no SharePoint)
         const newRecords: NonCollection[] = pendingBulkRoutes.map((rota, i) => ({
           id: Date.now().toString() + i,
           semana,
@@ -294,7 +294,7 @@ const NonCollectionsView: React.FC<{
           acao: '',
           dataAcao: '',
           ultimaColeta: '',
-          culpabilidade: 'NÃ£o se aplica',
+          Culpabilidade: 'Não se aplica',
           operacao
         }));
         setNonCollections(prev => [...prev, ...newRecords]);
@@ -310,7 +310,7 @@ const NonCollectionsView: React.FC<{
       for (let i = 0; i < pendingBulkRoutes.length; i++) {
         const rota = pendingBulkRoutes[i];
         const tempRecord: NonCollection = {
-          id: 'temp', // ID temporÃ¡rio, serÃ¡ substituÃ­do pelo ID real do SharePoint
+          id: 'temp', // ID temporário, será substituído pelo ID real do SharePoint
           semana,
           rota,
           data: dataFormatada,
@@ -321,7 +321,7 @@ const NonCollectionsView: React.FC<{
           acao: '',
           dataAcao: '',
           ultimaColeta: '',
-          culpabilidade: 'NÃ£o se aplica',
+          Culpabilidade: 'Não se aplica',
           operacao
         };
 
@@ -331,15 +331,15 @@ const NonCollectionsView: React.FC<{
           savedRecords.push({ ...tempRecord, id: spId }); // Usa o ID real do SharePoint
         } catch (e: any) {
           console.error('[BULK_PASTE] Erro ao criar registro no SharePoint:', rota, e.message);
-          // Adiciona localmente com ID temporÃ¡rio mesmo com erro
+          // Adiciona localmente com ID temporário mesmo com erro
           savedRecords.push({ ...tempRecord, id: (Date.now() + i).toString() });
         }
       }
 
       setNonCollections(prev => [...prev, ...savedRecords]);
-      console.log('[BULK_PASTE] âœ…', savedRecords.length, 'linhas criadas e salvas com operaÃ§Ã£o:', operacao);
+      console.log('[BULK_PASTE] âœ…', savedRecords.length, 'linhas criadas e salvas com Operação:', operacao);
     } catch (e: any) {
-      console.error('[BULK_PASTE] Erro crÃ­tico ao salvar no SharePoint:', e.message);
+      console.error('[BULK_PASTE] Erro crítico ao salvar no SharePoint:', e.message);
       // Fallback: cria localmente
       const newRecords: NonCollection[] = pendingBulkRoutes.map((rota, i) => ({
         id: Date.now().toString() + i,
@@ -353,7 +353,7 @@ const NonCollectionsView: React.FC<{
         acao: '',
         dataAcao: '',
         ultimaColeta: '',
-        culpabilidade: 'NÃ£o se aplica',
+        Culpabilidade: 'Não se aplica',
         operacao
       }));
       setNonCollections(prev => [...prev, ...newRecords]);
@@ -365,7 +365,7 @@ const NonCollectionsView: React.FC<{
   };
 
   /**
-   * Cancela o modal de seleÃ§Ã£o de operaÃ§Ã£o sem criar linhas.
+   * Cancela o modal de seleção de Operação sem criar linhas.
    */
   const cancelBulkPaste = () => {
     setIsOperationModalOpen(false);
@@ -408,12 +408,12 @@ const NonCollectionsView: React.FC<{
     };
   }, []);
 
-  // Salvar preferÃªncias de colunas
+  // Salvar preferências de colunas
   useEffect(() => {
     localStorage.setItem('non_collections_hidden_cols', JSON.stringify(Array.from(hiddenColumns)));
   }, [hiddenColumns]);
 
-  // Carrega dados ao montar e quando usuÃ¡rio muda
+  // Carrega dados ao montar e quando usuário muda
   useEffect(() => {
     loadData();
   }, [currentUser]);
@@ -422,30 +422,30 @@ const NonCollectionsView: React.FC<{
     try {
       const token = await getValidToken() || currentUser.accessToken;
       if (!token) {
-        console.error('[NonCollections] Token nÃ£o encontrado');
+        console.error('[NonCollections] Token Não encontrado');
         return;
       }
 
       console.log('[NonCollections] Carregando dados...', currentUser.email);
 
-      // Carrega configuraÃ§Ãµes do usuÃ¡rio
+      // Carrega configurações do usuário
       const configs = await SharePointService.getRouteConfigs(token, currentUser.email, true);
       setUserConfigs(configs || []);
-      console.log('[NonCollections] OperaÃ§Ãµes do usuÃ¡rio:', configs?.map(c => c.operacao));
+      console.log('[NonCollections] operações do usuário:', configs?.map(c => c.operacao));
 
-      // Carrega nÃ£o coletas do SharePoint
+      // Carrega Não coletas do SharePoint
       const spNonCollections = await SharePointService.getNonCollections(token, currentUser.email);
       console.log('[NonCollections] Total bruto do SharePoint:', spNonCollections.length);
 
-      // Filtra APENAS nÃ£o coletas das operaÃ§Ãµes do usuÃ¡rio logado
+      // Filtra APENAS Não coletas das operações do usuário logado
       const myOps = new Set((configs || []).map(c => c.operacao));
       const filtered = (spNonCollections || []).filter(nc => {
-        if (myOps.size === 0) return true; // Fallback se config nÃ£o carregou
+        if (myOps.size === 0) return true; // Fallback se config Não carregou
         return myOps.has(nc.operacao);
       });
 
-      console.log('[NonCollections] NÃ£o coletas filtradas por usuÃ¡rio:', filtered.length);
-      console.log('[NonCollections] OperaÃ§Ãµes nos dados filtrados:', Array.from(new Set(filtered.map(r => r.operacao))));
+      console.log('[NonCollections] Não coletas filtradas por usuário:', filtered.length);
+      console.log('[NonCollections] operações nos dados filtrados:', Array.from(new Set(filtered.map(r => r.operacao))));
 
       setNonCollections(filtered);
       console.log('[NonCollections] âœ… Dados carregados com sucesso');
@@ -506,7 +506,7 @@ const NonCollectionsView: React.FC<{
       });
     });
 
-    // OrdenaÃ§Ã£o por data
+    // Ordenação por data
     if (isSortByDataEnabled) {
       result.sort((a, b) => {
         const parseDate = (dateStr: string) => {
@@ -527,7 +527,7 @@ const NonCollectionsView: React.FC<{
 
   const handleAddNonCollection = async () => {
     if (!newNonCollectionData.rota || !newNonCollectionData.data || !newNonCollectionData.produtor || !newNonCollectionData.operacao) {
-      alert('Preencha todos os campos obrigatÃ³rios!');
+      alert('Preencha todos os campos obrigatórios!');
       return;
     }
 
@@ -547,7 +547,7 @@ const NonCollectionsView: React.FC<{
         acao: '',
         dataAcao: '',
         ultimaColeta: '',
-        culpabilidade: 'NÃ£o se aplica',
+        Culpabilidade: 'Não se aplica',
         operacao: newNonCollectionData.operacao
       };
 
@@ -562,21 +562,21 @@ const NonCollectionsView: React.FC<{
       });
     } catch (e) {
       console.error('[ADD_NON_COLLECTION] Error:', e);
-      alert('Erro ao adicionar nÃ£o coleta');
+      alert('Erro ao adicionar Não coleta');
     }
   };
 
   /**
-   * Tenta separar cÃ³digo e produtor de uma string colada.
-   * PadrÃ£o esperado: cÃ³digo alfanumÃ©rico no inÃ­cio seguido de texto (ex: "202520769MARCELO DINIZ COUTO" ou "P0274001RODRIGO ALVES PEREIRA")
-   * Retorna null se nÃ£o conseguir identificar o padrÃ£o.
+   * Tenta separar Código e produtor de uma string colada.
+   * Padrão esperado: Código alfanumérico no início seguido de texto (ex: "202520769MARCELO DINIZ COUTO" ou "P0274001RODRIGO ALVES PEREIRA")
+   * Retorna null se Não conseguir identificar o padrão.
    */
   const parseCodigoProdutor = (line: string): { codigo: string; produtor: string } | null => {
     const trimmed = line.trim();
     
-    // Regex: captura caracteres alfanumÃ©ricos no inÃ­cio (cÃ³digo) seguidos de texto (produtor)
-    // O cÃ³digo pode ter letras e nÃºmeros (ex: "P0274001", "202520769")
-    // O produtor Ã© todo o restante da string
+    // Regex: captura caracteres alfanuméricos no início (Código) seguidos de texto (produtor)
+    // O Código pode ter letras e números (ex: "P0274001", "202520769")
+    // O produtor é todo o restante da string
     // Ex: "P0274001RODRIGO ALVES PEREIRA (IN )" â†’ codigo: "P0274001", produtor: "RODRIGO ALVES PEREIRA (IN )"
     const match = trimmed.match(/^([A-Za-z0-9]+)(.+)$/);
     
@@ -597,7 +597,7 @@ const NonCollectionsView: React.FC<{
     console.log('[BULK_PASTE] Campo:', field, 'Valores:', lines);
     console.log('[BULK_PASTE] nonCollections.length:', nonCollections.length);
 
-    // Colunas que SEMPRE criam novas linhas (mesmo se jÃ¡ houver dados)
+    // Colunas que SEMPRE criam novas linhas (mesmo se já houver dados)
     const colunasQueCriamLinhas: (keyof NonCollection)[] = ['rota'];
     const criaNovasLinhas = colunasQueCriamLinhas.includes(field);
 
@@ -605,15 +605,15 @@ const NonCollectionsView: React.FC<{
 
     if (criaNovasLinhas) {
       // COMPORTAMENTO 1: Criar novas linhas (apenas para ROTA)
-      // Abre modal para selecionar operaÃ§Ã£o antes de criar as linhas
+      // Abre modal para selecionar Operação antes de criar as linhas
       setPendingBulkRoutes(lines);
       setIsOperationModalOpen(true);
     } else {
-      // COMPORTAMENTO 2: Atualizar linhas existentes (para CÃ“DIGO, PRODUTOR, MOTIVO, OBSERVAÃ‡ÃƒO, etc.)
+      // COMPORTAMENTO 2: Atualizar linhas existentes (para CÓDIGO, PRODUTOR, MOTIVO, OBSERVAÇÃO, etc.)
       console.log('[BULK_PASTE] Atualizando linhas existentes...');
       const updatedRecords: NonCollection[] = [];
 
-      // Colunas que devem ser tratadas individualmente (sem tentar separar cÃ³digo/produtor)
+      // Colunas que devem ser tratadas individualmente (sem tentar separar Código/produtor)
       const colunasIndividuais: (keyof NonCollection)[] = ['codigo', 'produtor'];
       const isColunaIndividual = colunasIndividuais.includes(field);
 
@@ -623,13 +623,13 @@ const NonCollectionsView: React.FC<{
         let codigo = '';
         let produtor = '';
 
-        // Tenta separar cÃ³digo e produtor SOMENTE se NÃƒO for coluna individual
+        // Tenta separar Código e produtor SOMENTE se NÃO for coluna individual
         if (!isColunaIndividual) {
           const parsed = parseCodigoProdutor(lines[i]);
           if (parsed) {
             codigo = parsed.codigo;
             produtor = parsed.produtor;
-            console.log('[BULK_PASTE] âœ… CÃ³digo e produtor separados:', parsed);
+            console.log('[BULK_PASTE] âœ… Código e produtor separados:', parsed);
           }
         }
 
@@ -641,12 +641,12 @@ const NonCollectionsView: React.FC<{
           }
         }
 
-        // CÃ“DIGO: converte para maiÃºsculo
+        // CÓDIGO: converte para maiúsculo
         if (field === 'codigo') {
           finalValue = finalValue.toUpperCase();
         }
 
-        // Se Ã© coluna individual, aplica direto. Se separou cÃ³digo/produtor, aplica ambos.
+        // Se é coluna individual, aplica direto. Se separou Código/produtor, aplica ambos.
         if (isColunaIndividual) {
           updatedRecords.push({
             ...record,
@@ -661,33 +661,33 @@ const NonCollectionsView: React.FC<{
         console.log('[BULK_PASTE] Atualizando linha', i, 'campo', field, 'valor', isColunaIndividual ? finalValue : (codigo && produtor ? `${codigo} + ${produtor}` : finalValue));
       }
 
-      // MantÃ©m as linhas que nÃ£o foram atualizadas
+      // Mantém as linhas que Não foram atualizadas
       const remainingRecords = nonCollections.slice(updatedRecords.length);
 
       // Atualiza estado local
       setNonCollections([...updatedRecords, ...remainingRecords]);
       console.log('[BULK_PASTE] âœ…', updatedRecords.length, 'linhas atualizadas', remainingRecords.length, 'mantidas');
 
-      // Salva no SharePoint APENAS registros que jÃ¡ existem no SharePoint
-      // Registros criados localmente (com IDs baseados em timestamp) sÃ£o ignorados
-      // atÃ© serem salvos via "Adicionar NÃ£o Coleta" ou similar
+      // Salva no SharePoint APENAS registros que já existem no SharePoint
+      // Registros criados localmente (com IDs baseados em timestamp) são ignorados
+      // até serem salvos via "Adicionar Não Coleta" ou similar
       try {
         const token = await getValidToken() || currentUser.accessToken;
         if (!token) {
-          console.error('[BULK_PASTE] Token nÃ£o encontrado, pulando salvamento no SharePoint');
+          console.error('[BULK_PASTE] Token Não encontrado, pulando salvamento no SharePoint');
           return;
         }
 
-        // Filtra apenas registros que jÃ¡ existem no SharePoint (IDs numÃ©ricos vÃ¡lidos)
-        // IDs locais gerados por Date.now() sÃ£o strings grandes (13+ dÃ­gitos)
+        // Filtra apenas registros que já existem no SharePoint (IDs numéricos válidos)
+        // IDs locais gerados por Date.now() são strings grandes (13+ dígitos)
         const recordsToSave = updatedRecords.filter(r => {
           const id = parseInt(r.id);
-          // SharePoint IDs sÃ£o inteiros pequenos (< 1 milhÃ£o), locais sÃ£o timestamps grandes
+          // SharePoint IDs são inteiros pequenos (< 1 milhão), locais são timestamps grandes
           return !isNaN(id) && id < 1000000;
         });
 
         if (recordsToSave.length === 0) {
-          console.log('[BULK_PASTE] Nenhum registro para salvar no SharePoint (todos sÃ£o locais)');
+          console.log('[BULK_PASTE] Nenhum registro para salvar no SharePoint (todos são locais)');
           return;
         }
 
@@ -744,15 +744,15 @@ const NonCollectionsView: React.FC<{
     { key: 'semana', label: 'SEMANA' },
     { key: 'rota', label: 'ROTA' },
     { key: 'data', label: 'DATA' },
-    { key: 'codigo', label: 'CÃ“DIGO' },
+    { key: 'codigo', label: 'CÓDIGO' },
     { key: 'produtor', label: 'PRODUTOR' },
     { key: 'motivo', label: 'MOTIVO' },
-    { key: 'observacao', label: 'OBSERVAÃ‡ÃƒO' },
-    { key: 'acao', label: 'AÃ‡ÃƒO' },
-    { key: 'dataAcao', label: 'DATA AÃ‡ÃƒO' },
-    { key: 'ultimaColeta', label: 'ÃšLTIMA COLETA' },
-    { key: 'culpabilidade', label: 'CULPABILIDADE' },
-    { key: 'operacao', label: 'OPERAÃ‡ÃƒO' }
+    { key: 'observacao', label: 'OBSERVAÇÃO' },
+    { key: 'acao', label: 'AÇÃO' },
+    { key: 'dataAcao', label: 'DATA AÇÃO' },
+    { key: 'ultimaColeta', label: 'ÚLTIMA COLETA' },
+    { key: 'Culpabilidade', label: 'CULPABILIDADE' },
+    { key: 'operacao', label: 'OPERAÇÃO' }
   ];
 
   if (isLoading) {
@@ -773,10 +773,10 @@ const NonCollectionsView: React.FC<{
         <div className="flex items-center gap-6">
           <div>
             <h1 className="text-2xl font-black uppercase text-slate-800 dark:text-white tracking-tight">
-              NÃ£o Coletas
+              Não coletas
             </h1>
             <p className="text-xs font-bold text-slate-500 dark:text-slate-400 mt-1 uppercase tracking-widest">
-              Acompanhamento de ocorrÃªncias
+              Acompanhamento de ocorrências
             </p>
           </div>
 
@@ -800,7 +800,7 @@ const NonCollectionsView: React.FC<{
             className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-black uppercase text-[10px] tracking-widest transition-all shadow-lg shadow-blue-500/20"
           >
             <Plus size={16} />
-            Adicionar NÃ£o Coleta
+            Adicionar Não Coleta
           </button>
 
           <button
@@ -954,7 +954,7 @@ const NonCollectionsView: React.FC<{
                       isDarkMode ? 'text-slate-200' : 'text-slate-900'
                     }`;
 
-                    // ROTA - Input editÃ¡vel
+                    // ROTA - Input editável
                     if (key === 'rota') {
                       return (
                         <td
@@ -984,7 +984,7 @@ const NonCollectionsView: React.FC<{
                       );
                     }
 
-                    // DATA - Input editÃ¡vel com mÃ¡scara
+                    // DATA - Input editável com máscara
                     if (key === 'data') {
                       return (
                         <td
@@ -1019,7 +1019,7 @@ const NonCollectionsView: React.FC<{
                       );
                     }
 
-                    // PRODUTOR - Input editÃ¡vel
+                    // PRODUTOR - Input editável
                     if (key === 'produtor') {
                       return (
                         <td
@@ -1040,24 +1040,24 @@ const NonCollectionsView: React.FC<{
                               const val = e.clipboardData.getData('text');
                               console.log('[PASTE PRODUTOR]', val);
                               
-                              // MÃºltiplas linhas: bulk paste
+                              // Múltiplas linhas: bulk paste
                               if (val.includes('\n')) {
                                 e.preventDefault();
                                 handleBulkPaste('produtor', val);
                                 return;
                               }
                               
-                              // Linha Ãºnica com cÃ³digo + produtor: separa automaticamente
+                              // Linha única com Código + produtor: separa automaticamente
                               const parsed = parseCodigoProdutor(val);
                               if (parsed) {
                                 e.preventDefault();
                                 const updated = { ...row, codigo: parsed.codigo, produtor: parsed.produtor };
                                 setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
-                                console.log('[PASTE PRODUTOR] âœ… CÃ³digo e produtor separados:', parsed);
+                                console.log('[PASTE PRODUTOR] âœ… Código e produtor separados:', parsed);
                                 return;
                               }
                               
-                              // Se nÃ£o tiver padrÃ£o cÃ³digo+produtor, deixa colar normalmente
+                              // Se Não tiver padrão Código+produtor, deixa colar normalmente
                             }}
                             className={`${inputClass} font-bold`}
                           />
@@ -1065,7 +1065,7 @@ const NonCollectionsView: React.FC<{
                       );
                     }
 
-                    // CÃ“DIGO - Input editÃ¡vel
+                    // CÓDIGO - Input editável
                     if (key === 'codigo') {
                       return (
                         <td
@@ -1086,24 +1086,24 @@ const NonCollectionsView: React.FC<{
                               const val = e.clipboardData.getData('text');
                               console.log('[PASTE CODIGO ROW]', val);
                               
-                              // MÃºltiplas linhas: bulk paste
+                              // Múltiplas linhas: bulk paste
                               if (val.includes('\n')) {
                                 e.preventDefault();
                                 handleBulkPaste('codigo', val);
                                 return;
                               }
                               
-                              // Linha Ãºnica com cÃ³digo + produtor: separa automaticamente
+                              // Linha única com Código + produtor: separa automaticamente
                               const parsed = parseCodigoProdutor(val);
                               if (parsed) {
                                 e.preventDefault();
                                 const updated = { ...row, codigo: parsed.codigo, produtor: parsed.produtor };
                                 setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
-                                console.log('[PASTE CODIGO] âœ… CÃ³digo e produtor separados:', parsed);
+                                console.log('[PASTE CODIGO] âœ… Código e produtor separados:', parsed);
                                 return;
                               }
                               
-                              // Se nÃ£o tiver padrÃ£o cÃ³digo+produtor, deixa colar normalmente (jÃ¡ converte para upper)
+                              // Se Não tiver padrão Código+produtor, deixa colar normalmente (já converte para upper)
                             }}
                             className={`${inputClass} font-bold text-center uppercase`}
                           />
@@ -1111,7 +1111,7 @@ const NonCollectionsView: React.FC<{
                       );
                     }
 
-                    // MOTIVO - Select editÃ¡vel
+                    // MOTIVO - Select editável
                     if (key === 'motivo') {
                       return (
                         <td
@@ -1125,20 +1125,71 @@ const NonCollectionsView: React.FC<{
                             value={row.motivo}
                             onChange={(e) => {
                               const selectedMotivo = e.target.value;
-                              const culpabilidadeAuto = MOTIVOS_CULPABILIDADES[selectedMotivo];
+                              const CulpabilidadeAuto = MOTIVOS_CulpabilidadeS[selectedMotivo];
+
+                              // Calcula Ação automática baseado no motivo
+                              const calcularAcaoAutomatica = (motivo: string, rota: string): string => {
+                                const motivoLower = motivo.toLowerCase();
+                                if (motivoLower === 'parou de fornecer') return 'Retirado da roteirização';
+                                if (motivoLower === 'produtor suspenso') return 'Aguardando autorização';
+                                if (motivoLower === 'alizarol positivo') return 'Leite Descartado';
+                                if (rota) return `Será coletado na rota ${rota}`;
+                                return '';
+                              };
+
+                              // Calcula Data Ação automática
+                              const calcularDataAcaoAutomatica = (motivo: string, data: string, rota: string): string => {
+                                const motivoLower = motivo.toLowerCase();
+                                if (motivoLower === 'parou de fornecer' || motivoLower === 'produtor suspenso' || motivoLower === 'alizarol positivo') return '-';
+                                if (motivo && data && rota) {
+                                  const match = data.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+                                  if (match) {
+                                    const [, day, month, year] = match;
+                                    const dateObj = new Date(Number(year), Number(month) - 1, Number(day));
+                                    dateObj.setDate(dateObj.getDate() + 2);
+                                    const d = String(dateObj.getDate()).padStart(2, '0');
+                                    const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+                                    const y = dateObj.getFullYear();
+                                    return `${d}/${m}/${y}`;
+                                  }
+                                }
+                                return '';
+                              };
+
+                              const acaoAuto = calcularAcaoAutomatica(selectedMotivo, row.rota || '');
+                              const dataAcaoAuto = calcularDataAcaoAutomatica(selectedMotivo, row.data || '', row.rota || '');
+
                               const updated = {
                                 ...row,
                                 motivo: selectedMotivo,
-                                culpabilidade: culpabilidadeAuto || row.culpabilidade || ''
+                                Culpabilidade: CulpabilidadeAuto || row.Culpabilidade || '',
+                                acao: acaoAuto,
+                                dataAcao: dataAcaoAuto
                               };
                               setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
+                            }}
+                            onBlur={async () => {
+                              if (row.id !== 'ghost' && !row.id.startsWith('temp')) {
+                                try {
+                                  const token = await getValidToken() || currentUser.accessToken;
+                                  if (token) {
+                                    const currentRow = nonCollections.find(r => r.id === row.id);
+                                    if (currentRow) {
+                                      await SharePointService.updateNonCollection(token, currentRow);
+                                      console.log('[NC_SAVE] Motivo salvo:', currentRow.rota);
+                                    }
+                                  }
+                                } catch (e: any) {
+                                  console.error('[NC_SAVE] Erro ao salvar motivo:', e.message);
+                                }
+                              }
                             }}
                             className={`w-full px-3 py-2 text-[11px] text-left truncate transition-all cursor-pointer outline-none border-none bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700 focus:ring-2 focus:ring-blue-500 rounded ${
                               isDarkMode ? 'dark-mode-select' : ''
                             }`}
                           >
                             <option value="" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white">Selecione...</option>
-                            {Object.keys(MOTIVOS_CULPABILIDADES).map(label => (
+                            {Object.keys(MOTIVOS_CulpabilidadeS).map(label => (
                               <option
                                 key={label}
                                 value={label}
@@ -1152,7 +1203,7 @@ const NonCollectionsView: React.FC<{
                       );
                     }
 
-                    // OBSERVAÃ‡ÃƒO - Textarea editÃ¡vel
+                    // OBSERVAÇÃO - Textarea editável
                     if (key === 'observacao') {
                       return (
                         <td
@@ -1168,6 +1219,22 @@ const NonCollectionsView: React.FC<{
                               const updated = { ...row, observacao: e.target.value };
                               setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
                             }}
+                            onBlur={async () => {
+                              if (row.id !== 'ghost' && !row.id.startsWith('temp')) {
+                                try {
+                                  const token = await getValidToken() || currentUser.accessToken;
+                                  if (token) {
+                                    const currentRow = nonCollections.find(r => r.id === row.id);
+                                    if (currentRow) {
+                                      await SharePointService.updateNonCollection(token, currentRow);
+                                      console.log('[NC_SAVE] Observação salva:', currentRow.rota);
+                                    }
+                                  }
+                                } catch (e: any) {
+                                  console.error('[NC_SAVE] Erro ao salvar observação:', e.message);
+                                }
+                              }
+                            }}
                             onPaste={(e) => {
                               const val = e.clipboardData.getData('text');
                               if (val.includes('\n')) {
@@ -1182,30 +1249,30 @@ const NonCollectionsView: React.FC<{
                       );
                     }
 
-                    // AÃ‡ÃƒO - Campo automÃ¡tico baseado no MOTIVO (editÃ¡vel)
+                    // AÇÃO - Campo automático baseado no MOTIVO (editável)
                     if (key === 'acao') {
-                      // Calcula o valor automÃ¡tico da aÃ§Ã£o baseado no motivo
+                      // Calcula o valor automático da Ação baseado no motivo
                       const getAcaoAutomatica = () => {
                         const motivo = (row.motivo || '').trim();
                         const rota = (row.rota || '').trim();
 
-                        // Se nÃ£o tem motivo definido, retorna vazio
+                        // Se Não tem motivo definido, retorna vazio
                         if (!motivo) return '';
 
-                        // Regras especÃ­ficas
+                        // Regras específicas
                         if (motivo.toLowerCase() === 'parou de fornecer') {
-                          return 'Retirado da roteirizaÃ§Ã£o';
+                          return 'Retirado da roteirização';
                         }
                         if (motivo.toLowerCase() === 'produtor suspenso') {
-                          return 'Aguardando autorizaÃ§Ã£o';
+                          return 'Aguardando autorização';
                         }
                         if (motivo.toLowerCase() === 'alizarol positivo') {
                           return 'Leite Descartado';
                         }
 
-                        // Se tem rota, gera "SerÃ¡ coletado na rota X"
+                        // Se tem rota, gera "Será coletado na rota X"
                         if (rota) {
-                          return `SerÃ¡ coletado na rota ${rota}`;
+                          return `Será coletado na rota ${rota}`;
                         }
 
                         return '';
@@ -1227,6 +1294,23 @@ const NonCollectionsView: React.FC<{
                               const updated = { ...row, acao: e.target.value };
                               setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
                             }}
+                            onBlur={async () => {
+                              if (row.id !== 'ghost' && !row.id.startsWith('temp')) {
+                                try {
+                                  const token = await getValidToken() || currentUser.accessToken;
+                                  if (token) {
+                                    // Busca o valor MAIS RECENTE do estado (o onChange já atualizou)
+                                    const currentRow = nonCollections.find(r => r.id === row.id);
+                                    if (currentRow) {
+                                      await SharePointService.updateNonCollection(token, currentRow);
+                                      console.log('[NC_SAVE] Ação salva:', currentRow.rota);
+                                    }
+                                  }
+                                } catch (e: any) {
+                                  console.error('[NC_SAVE] Erro ao salvar ação:', e.message);
+                                }
+                              }
+                            }}
                             onPaste={(e) => {
                               const val = e.clipboardData.getData('text');
                               if (val.includes('\n')) {
@@ -1241,17 +1325,17 @@ const NonCollectionsView: React.FC<{
                       );
                     }
 
-                    // DATA AÃ‡ÃƒO - Input editÃ¡vel com mÃ¡scara (preenchida automaticamente apenas para "SerÃ¡ coletado na rota...")
+                    // DATA AÇÃO - Input editável com máscara (preenchida automaticamente apenas para "Será coletado na rota...")
                     if (key === 'dataAcao') {
-                      // Calcula data aÃ§Ã£o automÃ¡tica: data + 2 dias APENAS para motivos que geram "SerÃ¡ coletado na rota..."
+                      // Calcula data Ação automática: data + 2 dias APENAS para motivos que geram "Será coletado na rota..."
                       const getDataAcaoAutomatica = () => {
                         const motivo = (row.motivo || '').trim();
                         const dataNaoColeta = (row.data || '').trim();
 
-                        // Se o usuÃ¡rio jÃ¡ preencheu dataAcao manualmente, respeita
+                        // Se o usuário já preencheu dataAcao manualmente, respeita
                         if (row.dataAcao) return row.dataAcao;
 
-                        // Para "parou de fornecer", "produtor suspenso" e "alizarol positivo", coloca hÃ­fen
+                        // Para "parou de fornecer", "produtor suspenso" e "alizarol positivo", coloca héfen
                         const motivoLower = motivo.toLowerCase();
                         if (motivoLower === 'parou de fornecer' || motivoLower === 'produtor suspenso' || motivoLower === 'alizarol positivo') {
                           return '-';
@@ -1296,6 +1380,22 @@ const NonCollectionsView: React.FC<{
                               const updated = { ...row, dataAcao: val };
                               setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
                             }}
+                            onBlur={async () => {
+                              if (row.id !== 'ghost' && !row.id.startsWith('temp')) {
+                                try {
+                                  const token = await getValidToken() || currentUser.accessToken;
+                                  if (token) {
+                                    const currentRow = nonCollections.find(r => r.id === row.id);
+                                    if (currentRow) {
+                                      await SharePointService.updateNonCollection(token, currentRow);
+                                      console.log('[NC_SAVE] Data Ação salva:', currentRow.rota);
+                                    }
+                                  }
+                                } catch (e: any) {
+                                  console.error('[NC_SAVE] Erro ao salvar data ação:', e.message);
+                                }
+                              }
+                            }}
                             onPaste={(e) => {
                               const val = e.clipboardData.getData('text');
                               if (val.includes('\n')) {
@@ -1309,7 +1409,7 @@ const NonCollectionsView: React.FC<{
                       );
                     }
 
-                    // ÃšLTIMA COLETA - Input editÃ¡vel com mÃ¡scara
+                    // ÚLTIMA COLETA - Input editável com máscara
                     if (key === 'ultimaColeta') {
                       return (
                         <td
@@ -1323,13 +1423,35 @@ const NonCollectionsView: React.FC<{
                             type="text"
                             value={row.ultimaColeta}
                             onChange={(e) => {
-                              let val = e.target.value.replace(/\D/g, '');
-                              if (val.length > 8) val = val.slice(0, 8);
-                              if (val.length >= 8) {
-                                val = `${val.slice(0, 2)}/${val.slice(2, 4)}/${val.slice(4, 8)}`;
+                              let val = e.target.value;
+                              // Permite hífen como valor único (igual Data Ação)
+                              if (val === '-') {
+                                // já está ok
+                              } else {
+                                val = val.replace(/\D/g, '');
+                                if (val.length > 8) val = val.slice(0, 8);
+                                if (val.length >= 8) {
+                                  val = `${val.slice(0, 2)}/${val.slice(2, 4)}/${val.slice(4, 8)}`;
+                                }
                               }
                               const updated = { ...row, ultimaColeta: val };
                               setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
+                            }}
+                            onBlur={async () => {
+                              if (row.id !== 'ghost' && !row.id.startsWith('temp')) {
+                                try {
+                                  const token = await getValidToken() || currentUser.accessToken;
+                                  if (token) {
+                                    const currentRow = nonCollections.find(r => r.id === row.id);
+                                    if (currentRow) {
+                                      await SharePointService.updateNonCollection(token, currentRow);
+                                      console.log('[NC_SAVE] Última Coleta salva:', currentRow.rota);
+                                    }
+                                  }
+                                } catch (e: any) {
+                                  console.error('[NC_SAVE] Erro ao salvar última coleta:', e.message);
+                                }
+                              }
                             }}
                             onPaste={(e) => {
                               const val = e.clipboardData.getData('text');
@@ -1344,7 +1466,7 @@ const NonCollectionsView: React.FC<{
                       );
                     }
 
-                    // OPERAÃ‡ÃƒO - Select editÃ¡vel
+                    // OPERAÇÃO - Select editável
                     if (key === 'operacao') {
                       return (
                         <td
@@ -1371,8 +1493,8 @@ const NonCollectionsView: React.FC<{
                       );
                     }
 
-                    // CULPABILIDADE - Dropdown editÃ¡vel com opÃ§Ãµes fixas
-                    if (key === 'culpabilidade') {
+                    // Culpabilidade - Dropdown editável com opções fixas
+                    if (key === 'Culpabilidade') {
                       return (
                         <td
                           key={key}
@@ -1382,15 +1504,31 @@ const NonCollectionsView: React.FC<{
                           style={{ minWidth: colWidths[key] }}
                         >
                           <select
-                            value={row.culpabilidade || ''}
+                            value={row.Culpabilidade || ''}
                             onChange={(e) => {
-                              const updated = { ...row, culpabilidade: e.target.value };
+                              const updated = { ...row, Culpabilidade: e.target.value };
                               setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
+                            }}
+                            onBlur={async () => {
+                              if (row.id !== 'ghost' && !row.id.startsWith('temp')) {
+                                try {
+                                  const token = await getValidToken() || currentUser.accessToken;
+                                  if (token) {
+                                    const currentRow = nonCollections.find(r => r.id === row.id);
+                                    if (currentRow) {
+                                      await SharePointService.updateNonCollection(token, currentRow);
+                                      console.log('[NC_SAVE] Culpabilidade salva:', currentRow.rota);
+                                    }
+                                  }
+                                } catch (e: any) {
+                                  console.error('[NC_SAVE] Erro ao salvar culpabilidade:', e.message);
+                                }
+                              }
                             }}
                             className={`${inputClass} text-center cursor-pointer`}
                           >
                             <option value="" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white">Selecione...</option>
-                            {CULPABILIDADE_OPCOES.map(culp => (
+                            {Culpabilidade_OPCOES.map(culp => (
                               <option key={culp} value={culp} className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white">{culp}</option>
                             ))}
                           </select>
@@ -1430,11 +1568,28 @@ const NonCollectionsView: React.FC<{
                       </td>
                     );
                   })}
-                  {/* Coluna de aÃ§Ã£o */}
+                  {/* Coluna de Ação */}
                   <td className="p-0 border border-slate-200/30 dark:border-slate-800/30 text-center">
                     <button
-                      onClick={() => {
-                        setNonCollections(prev => prev.filter(r => r.id !== row.id));
+                      onClick={async () => {
+                        const rowId = row.id;
+                        // Remove localmente imediatamente para feedback visual
+                        setNonCollections(prev => prev.filter(r => r.id !== rowId));
+                        // Tenta excluir do SharePoint (apenas registros já persistidos)
+                        if (rowId !== 'ghost' && !rowId.startsWith('temp')) {
+                          try {
+                            const token = await getValidToken() || currentUser.accessToken;
+                            if (token) {
+                              await SharePointService.deleteNonCollection(token, rowId);
+                              console.log('[NC_DELETE] Não coleta excluída do SharePoint:', row.rota);
+                            }
+                          } catch (e: any) {
+                            console.error('[NC_DELETE] Erro ao excluir do SharePoint:', e.message);
+                            alert('Erro ao excluir do servidor. A linha foi removida apenas localmente.');
+                            // Re-adiciona a linha se falhou ao excluir do SharePoint
+                            loadData();
+                          }
+                        }
                       }}
                       className="p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
                       title="Excluir linha"
@@ -1445,7 +1600,7 @@ const NonCollectionsView: React.FC<{
                 </tr>
               ))}
 
-              {/* Ghost Row - AdiÃ§Ã£o rÃ¡pida */}
+              {/* Ghost Row - Adição rápida */}
               <tr
                 key="ghost"
                 className="border-b-2 border-blue-200 dark:border-blue-800 transition-colors bg-slate-50 dark:bg-slate-800 italic text-slate-400 border-l-4 border-dashed border-slate-300 dark:border-slate-600"
@@ -1557,7 +1712,7 @@ const NonCollectionsView: React.FC<{
                               handleBulkPaste('codigo', val);
                             }
                           }}
-                          placeholder="Cole cÃ³digos..."
+                          placeholder="Cole Códigos..."
                           className={`${inputClass} font-bold text-center uppercase`}
                         />
                       </td>
@@ -1569,11 +1724,44 @@ const NonCollectionsView: React.FC<{
                       <td key={`ghost-${key}`} className="p-0 border border-slate-200/30 dark:border-slate-800/30" style={{ verticalAlign: 'middle' }}>
                         <select
                           value={ghostRow.motivo || ''}
-                          onChange={(e) => updateGhostCell('motivo', e.target.value)}
+                          onChange={(e) => {
+                            const selectedMotivo = e.target.value;
+                            const CulpabilidadeAuto = MOTIVOS_CulpabilidadeS[selectedMotivo];
+
+                            // Calcula Ação automática
+                            const motivoLower = selectedMotivo.toLowerCase();
+                            let acaoAuto = '';
+                            if (motivoLower === 'parou de fornecer') acaoAuto = 'Retirado da roteirização';
+                            else if (motivoLower === 'produtor suspenso') acaoAuto = 'Aguardando autorização';
+                            else if (motivoLower === 'alizarol positivo') acaoAuto = 'Leite Descartado';
+                            else if (ghostRow.rota) acaoAuto = `Será coletado na rota ${ghostRow.rota}`;
+
+                            // Calcula Data Ação automática
+                            let dataAcaoAuto = '';
+                            if (motivoLower === 'parou de fornecer' || motivoLower === 'produtor suspenso' || motivoLower === 'alizarol positivo') {
+                              dataAcaoAuto = '-';
+                            } else if (selectedMotivo && ghostRow.data && ghostRow.rota) {
+                              const match = ghostRow.data.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+                              if (match) {
+                                const [, day, month, year] = match;
+                                const dateObj = new Date(Number(year), Number(month) - 1, Number(day));
+                                dateObj.setDate(dateObj.getDate() + 2);
+                                const d = String(dateObj.getDate()).padStart(2, '0');
+                                const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+                                const y = dateObj.getFullYear();
+                                dataAcaoAuto = `${d}/${m}/${y}`;
+                              }
+                            }
+
+                            updateGhostCell('motivo', selectedMotivo);
+                            if (CulpabilidadeAuto) updateGhostCell('Culpabilidade', CulpabilidadeAuto);
+                            if (acaoAuto) updateGhostCell('acao', acaoAuto);
+                            if (dataAcaoAuto) updateGhostCell('dataAcao', dataAcaoAuto);
+                          }}
                           className={`${inputClass} text-left cursor-pointer`}
                         >
                           <option value="" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white">Selecione...</option>
-                          {Object.keys(MOTIVOS_CULPABILIDADES).map(label => (
+                          {Object.keys(MOTIVOS_CulpabilidadeS).map(label => (
                             <option key={label} value={label} className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white">{label}</option>
                           ))}
                         </select>
@@ -1581,16 +1769,16 @@ const NonCollectionsView: React.FC<{
                     );
                   }
 
-                  if (key === 'culpabilidade') {
+                  if (key === 'Culpabilidade') {
                     return (
                       <td key={`ghost-${key}`} className="p-0 border border-slate-200/30 dark:border-slate-800/30" style={{ verticalAlign: 'middle' }}>
                         <select
-                          value={ghostRow.culpabilidade || ''}
-                          onChange={(e) => updateGhostCell('culpabilidade', e.target.value)}
+                          value={ghostRow.Culpabilidade || ''}
+                          onChange={(e) => updateGhostCell('Culpabilidade', e.target.value)}
                           className={`${inputClass} text-center cursor-pointer`}
                         >
                           <option value="" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white">Selecione...</option>
-                          {CULPABILIDADE_OPCOES.map(culp => (
+                          {Culpabilidade_OPCOES.map(culp => (
                             <option key={culp} value={culp} className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white">{culp}</option>
                           ))}
                         </select>
@@ -1619,28 +1807,28 @@ const NonCollectionsView: React.FC<{
                   }
 
                   if (key === 'acao') {
-                    // Calcula o valor automÃ¡tico da aÃ§Ã£o baseado no motivo (ghost row)
+                    // Calcula o valor automático da Ação baseado no motivo (ghost row)
                     const getAcaoAutomatica = () => {
                       const motivo = (ghostRow.motivo || '').trim();
                       const rota = (ghostRow.rota || '').trim();
 
-                      // Se nÃ£o tem motivo definido, retorna vazio
+                      // Se Não tem motivo definido, retorna vazio
                       if (!motivo) return '';
 
-                      // Regras especÃ­ficas
+                      // Regras específicas
                       if (motivo.toLowerCase() === 'parou de fornecer') {
-                        return 'Retirado da roteirizaÃ§Ã£o';
+                        return 'Retirado da roteirização';
                       }
                       if (motivo.toLowerCase() === 'produtor suspenso') {
-                        return 'Aguardando autorizaÃ§Ã£o';
+                        return 'Aguardando autorização';
                       }
                       if (motivo.toLowerCase() === 'alizarol positivo') {
                         return 'Leite Descartado';
                       }
 
-                      // Se tem rota, gera "SerÃ¡ coletado na rota X"
+                      // Se tem rota, gera "Será coletado na rota X"
                       if (rota) {
-                        return `SerÃ¡ coletado na rota ${rota}`;
+                        return `Será coletado na rota ${rota}`;
                       }
 
                       return '';
@@ -1678,16 +1866,16 @@ const NonCollectionsView: React.FC<{
                   }
 
                   if (key === 'dataAcao' || key === 'ultimaColeta') {
-                    // Para dataAcao, calcula automaticamente data + 2 dias APENAS para "SerÃ¡ coletado na rota..."
+                    // Para dataAcao, calcula automaticamente data + 2 dias APENAS para "Será coletado na rota..."
                     if (key === 'dataAcao') {
                       const getDataAcaoAutomatica = () => {
-                        // Se o usuÃ¡rio jÃ¡ preencheu manualmente, respeita
+                        // Se o usuário já preencheu manualmente, respeita
                         if (ghostRow.dataAcao) return ghostRow.dataAcao;
 
                         const motivo = (ghostRow.motivo || '').trim();
                         const dataNaoColeta = (ghostRow.data || '').trim();
 
-                        // Motivos que geram "Leite Descartado" ou "Aguardando autorizaÃ§Ã£o" ficam com hÃ­fen
+                        // Motivos que geram "Leite Descartado" ou "Aguardando autorização" ficam com héfen
                         const motivoLower = motivo.toLowerCase();
                         if (motivoLower === 'parou de fornecer' || motivoLower === 'produtor suspenso' || motivoLower === 'alizarol positivo') {
                           return '-';
@@ -1732,17 +1920,23 @@ const NonCollectionsView: React.FC<{
                       );
                     }
 
-                    // ultimaColeta mantÃ©m comportamento normal (vazio para usuÃ¡rio preencher)
+                    // ultimaColeta mantém comportamento normal (vazio para usuário preencher, ou hífen)
                     return (
                       <td key={`ghost-${key}`} className="p-0 border border-slate-200/30 dark:border-slate-800/30" style={{ verticalAlign: 'middle' }}>
                         <input
                           type="text"
                           value={ghostRow[key] || ''}
                           onChange={(e) => {
-                            let val = e.target.value.replace(/\D/g, '');
-                            if (val.length > 8) val = val.slice(0, 8);
-                            if (val.length >= 8) {
-                              val = `${val.slice(0, 2)}/${val.slice(2, 4)}/${val.slice(4, 8)}`;
+                            let val = e.target.value;
+                            // Permite hífen como valor único (igual Data Ação)
+                            if (val === '-') {
+                              // já está ok
+                            } else {
+                              val = val.replace(/\D/g, '');
+                              if (val.length > 8) val = val.slice(0, 8);
+                              if (val.length >= 8) {
+                                val = `${val.slice(0, 2)}/${val.slice(2, 4)}/${val.slice(4, 8)}`;
+                              }
                             }
                             updateGhostCell(key, val);
                           }}
@@ -1766,7 +1960,7 @@ const NonCollectionsView: React.FC<{
                     </td>
                   );
                 })}
-                {/* Coluna de aÃ§Ã£o */}
+                {/* Coluna de Ação */}
                 <td className="p-0 border border-slate-200/30 dark:border-slate-800/30 text-center">
                   <button
                     onClick={handleAddFromGhost}
@@ -1786,10 +1980,10 @@ const NonCollectionsView: React.FC<{
                         <Milk size={32} className="text-slate-400" />
                       </div>
                       <p className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest">
-                        Nenhuma nÃ£o coleta registrada
+                        Nenhuma Não coleta registrada
                       </p>
                       <p className="text-xs font-medium text-slate-400 dark:text-slate-500">
-                        Clique em "Adicionar NÃ£o Coleta" ou cole dados do Excel
+                        Clique em "Adicionar Não Coleta" ou cole dados do Excel
                       </p>
                     </div>
                   </td>
@@ -1827,14 +2021,14 @@ const NonCollectionsView: React.FC<{
         </div>
       )}
 
-      {/* Modal de Adicionar NÃ£o Coleta */}
+      {/* Modal de Adicionar Não Coleta */}
       {isAddModalOpen && (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[200] flex items-center justify-center p-4">
           <div className="bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-[2.5rem] shadow-2xl w-full max-w-lg">
             <div className="bg-[#1e293b] p-6 flex justify-between items-center text-white">
               <div className="flex items-center gap-3">
                 <Milk size={24} />
-                <h3 className="font-black uppercase tracking-widest text-base">Adicionar NÃ£o Coleta</h3>
+                <h3 className="font-black uppercase tracking-widest text-base">Adicionar Não Coleta</h3>
               </div>
               <button
                 onClick={() => setIsAddModalOpen(false)}
@@ -1844,17 +2038,17 @@ const NonCollectionsView: React.FC<{
               </button>
             </div>
             <div className="p-6 space-y-4">
-              {/* OperaÃ§Ã£o */}
+              {/* Operação */}
               <div>
                 <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">
-                  OperaÃ§Ã£o *
+                  Operação *
                 </label>
                 <select
                   value={newNonCollectionData.operacao}
                   onChange={e => setNewNonCollectionData({ ...newNonCollectionData, operacao: e.target.value })}
                   className="w-full p-3 border dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-sm font-bold outline-none dark:text-white focus:border-primary-500 transition-colors"
                 >
-                  <option value="">Selecione a operaÃ§Ã£o</option>
+                  <option value="">Selecione a Operação</option>
                   {userConfigs.map(config => (
                     <option key={config.operacao} value={config.operacao}>
                       {config.nomeExibicao || config.operacao}
@@ -1899,10 +2093,10 @@ const NonCollectionsView: React.FC<{
                 />
               </div>
 
-              {/* CÃ³digo */}
+              {/* Código */}
               <div>
                 <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">
-                  CÃ³digo
+                  Código
                 </label>
                 <input
                   type="text"
@@ -1948,25 +2142,25 @@ const NonCollectionsView: React.FC<{
       {/* Footer Info */}
       <div className="px-6 py-3 text-center">
         <p className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">
-          VisualizaÃ§Ã£o apenas â€¢ Dados nÃ£o persistidos
+          Visualização apenas • Dados não persistidos
         </p>
       </div>
 
-      {/* Modal de SeleÃ§Ã£o de OperaÃ§Ã£o (Bulk Paste) */}
+      {/* Modal de seleção de Operação (Bulk Paste) */}
       {isOperationModalOpen && (
         <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-[300] flex items-center justify-center p-4 animate-in fade-in zoom-in-95 duration-200">
           <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-8 w-full max-w-md border border-blue-500/50 shadow-2xl animate-in zoom-in duration-300">
             <div className="flex items-center gap-3 text-blue-600 dark:text-blue-400 mb-6 font-black uppercase text-xs">
               <Milk size={24} />
-              Selecionar OperaÃ§Ã£o
+              selecionar Operação
             </div>
             <p className="text-sm text-slate-600 dark:text-slate-400 mb-2 font-medium">
-              {pendingBulkRoutes.length} rota(s) colada(s). Selecione a operaÃ§Ã£o:
+              {pendingBulkRoutes.length} rota(s) colada(s). Selecione a Operação:
             </p>
             <div className="mb-6 max-h-32 overflow-y-auto scrollbar-thin bg-slate-50 dark:bg-slate-800 rounded-xl p-3 border border-slate-200 dark:border-slate-700">
               {pendingBulkRoutes.slice(0, 10).map((rota, i) => (
                 <div key={i} className="text-[10px] font-bold text-slate-600 dark:text-slate-400 py-1 truncate">
-                  â€¢ {rota}
+                  • {rota}
                 </div>
               ))}
               {pendingBulkRoutes.length > 10 && (
@@ -1979,8 +2173,8 @@ const NonCollectionsView: React.FC<{
             {userConfigs.length === 0 ? (
               <div className="text-center py-6 text-slate-400 dark:text-slate-500">
                 <AlertTriangle size={32} className="mx-auto mb-3 opacity-50" />
-                <p className="text-sm font-bold">Nenhuma operaÃ§Ã£o disponÃ­vel</p>
-                <p className="text-[10px] mt-1">Contate o administrador para configurar suas operaÃ§Ãµes.</p>
+                <p className="text-sm font-bold">Nenhuma Operação disponível</p>
+                <p className="text-[10px] mt-1">Contate o administrador para configurar suas operações.</p>
               </div>
             ) : (
               <div className="grid grid-cols-2 gap-3">

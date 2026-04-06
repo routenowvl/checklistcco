@@ -1355,7 +1355,7 @@ export const SharePointService = {
           acao: f.A_x00e7__x00e3_o || '',
           dataAcao: f.DataA_x00e7__x00e3_o ? formatDateFromSharePoint(f.DataA_x00e7__x00e3_o) : '',
           ultimaColeta: f._x00da_ltimaColeta ? formatDateFromSharePoint(f._x00da_ltimaColeta) : '',
-          culpabilidade: f.Culpabilidade || '',
+          Culpabilidade: f.Culpabilidade || '',
           operacao: f.Opera_x00e7__x00e3_o || ''
         };
       });
@@ -1392,15 +1392,19 @@ export const SharePointService = {
 
       if (nonCollection.semana) payload.Title = nonCollection.semana;
       if (nonCollection.rota) payload.Rota = nonCollection.rota;
-      if (nonCollection.data) payload.Data = parseDateForSharePoint(nonCollection.data);
+      if (nonCollection.data) {
+        const parsedData = parseDateForSharePoint(nonCollection.data);
+        if (parsedData) payload.Data = parsedData;
+      }
       if (nonCollection.codigo) payload.C_x00f3_digo = nonCollection.codigo;
       if (nonCollection.produtor) payload.Produtor = nonCollection.produtor;
       if (nonCollection.motivo) payload.Motivo = nonCollection.motivo;
       if (nonCollection.observacao) payload.Observa_x00e7__x00e3_o = nonCollection.observacao;
       if (nonCollection.acao) payload.A_x00e7__x00e3_o = nonCollection.acao;
-      if (nonCollection.dataAcao) payload.DataA_x00e7__x00e3_o = parseDateForSharePoint(nonCollection.dataAcao);
-      if (nonCollection.ultimaColeta) payload._x00da_ltimaColeta = parseDateForSharePoint(nonCollection.ultimaColeta);
-      if (nonCollection.culpabilidade) payload.Culpabilidade = nonCollection.culpabilidade;
+      // Campos DateTime: só envia se parse resultou em valor válido
+      { const v = parseDateForSharePoint(nonCollection.dataAcao); if (v) payload.DataA_x00e7__x00e3_o = v; }
+      { const v = parseDateForSharePoint(nonCollection.ultimaColeta); if (v) payload._x00da_ltimaColeta = v; }
+      if (nonCollection.Culpabilidade) payload.Culpabilidade = nonCollection.Culpabilidade;
       if (nonCollection.operacao) payload.Opera_x00e7__x00e3_o = nonCollection.operacao;
 
       console.log('[NonCollections] Salvando payload:', JSON.stringify(payload));
@@ -1428,20 +1432,28 @@ export const SharePointService = {
       const siteId = await getResolvedSiteId(token);
       const listId = '83e8cfb9-1982-47ae-b515-3fec112da457';
 
-      const payload = {
-        Title: nonCollection.semana || '',
-        Rota: nonCollection.rota || '',
-        Data: nonCollection.data ? parseDateForSharePoint(nonCollection.data) : '',
-        C_x00f3_digo: nonCollection.codigo || '',
-        Produtor: nonCollection.produtor || '',
-        Motivo: nonCollection.motivo || '',
-        Observa_x00e7__x00e3_o: nonCollection.observacao || '',
-        A_x00e7__x00e3_o: nonCollection.acao || '',
-        DataA_x00e7__x00e3_o: nonCollection.dataAcao ? parseDateForSharePoint(nonCollection.dataAcao) : '',
-        _x00da_ltimaColeta: nonCollection.ultimaColeta ? parseDateForSharePoint(nonCollection.ultimaColeta) : '',
-        Culpabilidade: nonCollection.culpabilidade || '',
-        Opera_x00e7__x00e3_o: nonCollection.operacao || ''
-      };
+      // Constrói payload removendo campos vazios (SharePoint rejeita DateTime com "")
+      const payload: any = {};
+
+      if (nonCollection.semana) payload.Title = nonCollection.semana;
+      if (nonCollection.rota) payload.Rota = nonCollection.rota;
+      if (nonCollection.data) {
+        const parsedData = parseDateForSharePoint(nonCollection.data);
+        if (parsedData) payload.Data = parsedData;
+      }
+      if (nonCollection.codigo) payload.C_x00f3_digo = nonCollection.codigo;
+      if (nonCollection.produtor) payload.Produtor = nonCollection.produtor;
+      if (nonCollection.motivo) payload.Motivo = nonCollection.motivo;
+      if (nonCollection.observacao) payload.Observa_x00e7__x00e3_o = nonCollection.observacao;
+      if (nonCollection.acao) payload.A_x00e7__x00e3_o = nonCollection.acao;
+      // Campos DateTime: só envia se parse resultou em valor válido
+      { const v = parseDateForSharePoint(nonCollection.dataAcao); if (v) payload.DataA_x00e7__x00e3_o = v; }
+      { const v = parseDateForSharePoint(nonCollection.ultimaColeta); if (v) payload._x00da_ltimaColeta = v; }
+      if (nonCollection.Culpabilidade) payload.Culpabilidade = nonCollection.Culpabilidade;
+      if (nonCollection.operacao) payload.Opera_x00e7__x00e3_o = nonCollection.operacao;
+
+      console.log('[NonCollections] Atualizando payload:', JSON.stringify(payload));
+      console.log('[NonCollections] ID do item:', nonCollection.id);
 
       await graphFetch(`/sites/${siteId}/lists/${listId}/items/${nonCollection.id}`, token, {
         method: 'PATCH',
@@ -1451,6 +1463,26 @@ export const SharePointService = {
       console.log('[NonCollections] ✅ Não coleta atualizada com sucesso:', nonCollection.rota, '-', nonCollection.codigo);
     } catch (e: any) {
       console.error('[NonCollections] Erro ao atualizar não coleta:', e.message);
+      throw e;
+    }
+  },
+
+  /**
+   * Exclui não coleta existente da lista do SharePoint
+   * Lista: Dados_Nao_Coletas (ID: 83e8cfb9-1982-47ae-b515-3fec112da457)
+   */
+  async deleteNonCollection(token: string, id: string): Promise<void> {
+    try {
+      const siteId = await getResolvedSiteId(token);
+      const listId = '83e8cfb9-1982-47ae-b515-3fec112da457';
+
+      await graphFetch(`/sites/${siteId}/lists/${listId}/items/${id}`, token, {
+        method: 'DELETE'
+      });
+
+      console.log('[NonCollections] ✅ Não coleta excluída com sucesso, ID:', id);
+    } catch (e: any) {
+      console.error('[NonCollections] Erro ao excluir não coleta:', e.message);
       throw e;
     }
   }
@@ -1476,12 +1508,13 @@ function formatDateFromSharePoint(isoDate: string): string {
  * Converte data do formato BR (DD/MM/YYYY) para ISO (para SharePoint)
  */
 function parseDateForSharePoint(brDate: string): string {
-  if (!brDate) return '';
+  if (!brDate || brDate.trim() === '' || brDate === '-') return '';
   try {
     const [day, month, year] = brDate.split('/');
     const date = new Date(Number(year), Number(month) - 1, Number(day));
+    if (isNaN(date.getTime())) return '';
     return date.toISOString();
   } catch {
-    return brDate;
+    return '';
   }
 }

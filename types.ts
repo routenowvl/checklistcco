@@ -112,7 +112,7 @@ export interface NonCollection {
   acao: string;
   dataAcao: string;
   ultimaColeta: string;
-  culpabilidade: string;
+  Culpabilidade: string;
   operacao: string;
 }
 

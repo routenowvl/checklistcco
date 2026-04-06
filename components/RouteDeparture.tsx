@@ -1342,16 +1342,24 @@ const RouteDepartureView: React.FC<{
     }
   };
 
+  // Estado para controlar se o usuário está editando alguma célula (pausa polling)
+  const [isEditingCell, setIsEditingCell] = useState(false);
+
   // Polling para atualizar dados automaticamente a cada 10 segundos (SEGUNDO PLANO)
   useEffect(() => {
     const refreshInterval = setInterval(() => {
+      // Se o usuário está editando, NÃO faz polling para evitar lag
+      if (isEditingCell) {
+        console.log('[POLLING_ROUTE_DEPARTURE] Pulando atualização (usuário editando)');
+        return;
+      }
       console.log('[POLLING_ROUTE_DEPARTURE] Atualização automática de dados (segundo plano)');
       console.log('[POLLING_ROUTE_DEPARTURE] Usuário:', currentUser.email);
       loadData(true); // true = background refresh
     }, 10000);
 
     return () => clearInterval(refreshInterval);
-  }, [currentUser]);
+  }, [currentUser, isEditingCell]);
 
   // Handler de teclado para salvar edições no histórico (Enter)
   useEffect(() => {
@@ -2586,7 +2594,12 @@ const RouteDepartureView: React.FC<{
       )}
 
       {/* Table Section - flex-1 para ocupar espaço restante */}
-      <div className={`flex-1 overflow-y-auto overflow-x-auto rounded-2xl border shadow-2xl relative scrollbar-thin ${isDarkMode ? 'bg-slate-900 border-slate-700/50' : 'bg-white border-slate-400 shadow-xl'}`} id="table-container">
+      <div
+        className={`flex-1 overflow-y-auto overflow-x-auto rounded-2xl border shadow-2xl relative scrollbar-thin ${isDarkMode ? 'bg-slate-900 border-slate-700/50' : 'bg-white border-slate-400 shadow-xl'}`}
+        id="table-container"
+        onFocusCapture={() => setIsEditingCell(true)}
+        onBlurCapture={() => setIsEditingCell(false)}
+      >
         <div className="min-w-max" style={{ overflow: 'visible' }}>
         <table className="border-collapse" style={{ width: `${tableColumns.filter(col => !hiddenColumns.has(col.id)).reduce((acc, col) => acc + colWidths[col.id], 0) + 60}px`, tableLayout: 'fixed' }}>
           <thead className={`sticky top-0 z-[100] shadow-md ${isDarkMode ? 'bg-[#1e293b] text-white' : 'bg-gradient-to-r from-slate-800 to-slate-900 text-white shadow-slate-900/30'}`} style={{ position: 'sticky', top: 0, left: 0 }}>
