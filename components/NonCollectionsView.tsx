@@ -146,6 +146,10 @@ const NonCollectionsView: React.FC<{
 
   const [showCausaRaiz, setShowCausaRaiz] = useState(false);
 
+  // Estados para modal de seleção de operação (bulk paste)
+  const [isOperationModalOpen, setIsOperationModalOpen] = useState(false);
+  const [pendingBulkRoutes, setPendingBulkRoutes] = useState<string[]>([]);
+
   const updateGhostCell = (field: keyof NonCollection, value: string) => {
     const updatedGhost = { ...ghostRow, [field]: value };
 
@@ -221,6 +225,46 @@ const NonCollectionsView: React.FC<{
       console.error('[ADD_NON_COLLECTION] Error:', e);
       alert(`Erro ao adicionar não coleta: ${e.message}`);
     }
+  };
+
+  /**
+   * Cria novas linhas de não coleta após o usuário selecionar a operação no modal.
+   */
+  const createBulkRecordsWithOperation = async (operacao: string) => {
+    const dataFormatada = getBrazilDate().split('-').reverse().join('/');
+    const dataParaSemana = dataFormatada.split('/').reverse().join('-');
+    const semana = getWeekString(dataParaSemana);
+
+    const newRecords: NonCollection[] = pendingBulkRoutes.map((rota, i) => ({
+      id: Date.now().toString() + i,
+      semana,
+      rota,
+      data: dataFormatada,
+      codigo: '',
+      produtor: '',
+      motivo: '',
+      observacao: '',
+      acao: '',
+      dataAcao: dataFormatada,
+      ultimaColeta: dataFormatada,
+      culpabilidade: 'Não se aplica',
+      operacao
+    }));
+
+    setNonCollections(prev => [...prev, ...newRecords]);
+    console.log('[BULK_PASTE] ✅', newRecords.length, 'linhas criadas com operação:', operacao);
+
+    // Limpa estados do modal
+    setIsOperationModalOpen(false);
+    setPendingBulkRoutes([]);
+  };
+
+  /**
+   * Cancela o modal de seleção de operação sem criar linhas.
+   */
+  const cancelBulkPaste = () => {
+    setIsOperationModalOpen(false);
+    setPendingBulkRoutes([]);
   };
 
   // Fecha dropdown ao clicar fora
@@ -441,32 +485,9 @@ const NonCollectionsView: React.FC<{
 
     if (criaNovasLinhas) {
       // COMPORTAMENTO 1: Criar novas linhas (apenas para ROTA)
-      const newRecords: NonCollection[] = [];
-      const dataFormatada = getBrazilDate().split('-').reverse().join('/');
-      const dataParaSemana = dataFormatada.split('/').reverse().join('-');
-      const semana = getWeekString(dataParaSemana);
-
-      for (let i = 0; i < lines.length; i++) {
-        newRecords.push({
-          id: Date.now().toString() + i,
-          semana,
-          rota: lines[i],
-          data: dataFormatada,
-          codigo: '',
-          produtor: '',
-          motivo: '',
-          observacao: '',
-          acao: '',
-          dataAcao: dataFormatada,
-          ultimaColeta: dataFormatada,
-          culpabilidade: 'Não se aplica',
-          operacao: ''
-        });
-      }
-
-      // Adiciona as novas linhas às existentes
-      setNonCollections(prev => [...prev, ...newRecords]);
-      console.log('[BULK_PASTE] ✅', newRecords.length, 'linhas criadas (adicionadas às existentes)');
+      // Abre modal para selecionar operação antes de criar as linhas
+      setPendingBulkRoutes(lines);
+      setIsOperationModalOpen(true);
     } else {
       // COMPORTAMENTO 2: Atualizar linhas existentes (para CÓDIGO, PRODUTOR, MOTIVO, OBSERVAÇÃO, etc.)
       console.log('[BULK_PASTE] Atualizando linhas existentes...');
@@ -1599,6 +1620,60 @@ const NonCollectionsView: React.FC<{
           Visualização apenas • Dados não persistidos
         </p>
       </div>
+
+      {/* Modal de Seleção de Operação (Bulk Paste) */}
+      {isOperationModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-[300] flex items-center justify-center p-4 animate-in fade-in zoom-in-95 duration-200">
+          <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-8 w-full max-w-md border border-blue-500/50 shadow-2xl animate-in zoom-in duration-300">
+            <div className="flex items-center gap-3 text-blue-600 dark:text-blue-400 mb-6 font-black uppercase text-xs">
+              <Milk size={24} />
+              Selecionar Operação
+            </div>
+            <p className="text-sm text-slate-600 dark:text-slate-400 mb-2 font-medium">
+              {pendingBulkRoutes.length} rota(s) colada(s). Selecione a operação:
+            </p>
+            <div className="mb-6 max-h-32 overflow-y-auto scrollbar-thin bg-slate-50 dark:bg-slate-800 rounded-xl p-3 border border-slate-200 dark:border-slate-700">
+              {pendingBulkRoutes.slice(0, 10).map((rota, i) => (
+                <div key={i} className="text-[10px] font-bold text-slate-600 dark:text-slate-400 py-1 truncate">
+                  • {rota}
+                </div>
+              ))}
+              {pendingBulkRoutes.length > 10 && (
+                <div className="text-[10px] font-bold text-slate-400 italic mt-1">
+                  ...e mais {pendingBulkRoutes.length - 10} rota(s)
+                </div>
+              )}
+            </div>
+
+            {userOps.length === 0 ? (
+              <div className="text-center py-6 text-slate-400 dark:text-slate-500">
+                <AlertTriangle size={32} className="mx-auto mb-3 opacity-50" />
+                <p className="text-sm font-bold">Nenhuma operação disponível</p>
+                <p className="text-[10px] mt-1">Contate o administrador para configurar suas operações.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-3">
+                {userOps.map(op => (
+                  <button
+                    key={op.operacao}
+                    onClick={() => createBulkRecordsWithOperation(op.operacao)}
+                    className="p-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl hover:bg-blue-600 hover:text-white hover:border-blue-700 dark:hover:bg-blue-600 dark:hover:border-blue-500 transition-all font-black text-xs uppercase text-slate-700 dark:text-slate-300"
+                  >
+                    {op.operacao}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <button
+              onClick={cancelBulkPaste}
+              className="w-full mt-6 py-4 text-[10px] font-black uppercase text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
+            >
+              Cancelar
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

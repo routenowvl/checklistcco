@@ -321,13 +321,13 @@ const RouteDepartureView: React.FC<{
   const [copiedGeralStatus, setCopiedGeralStatus] = useState<string | null>(null);
   const [hoveredGeralCell, setHoveredGeralCell] = useState<string | null>(null);
 
-  // Estados para popup de envio de status
-  const [pendingSendOps, setPendingSendOps] = useState<Set<string>>(new Set());
-  const [countdowns, setCountdowns] = useState<Record<string, number>>({});
-  const [sendingOps, setSendingOps] = useState<Set<string>>(new Set());
-  const countdownTimersRef = useRef<Record<string, NodeJS.Timeout>>({});
-  const sentTodayRef = useRef<Set<string>>(new Set()); // Evita envio duplicado no mesmo dia
-  const blockedUntilRef = useRef<Record<string, number>>({}); // Bloqueio temporário após cancelamento
+  // ⚠️ Estados para envio automático REMOVIDOS — envio agora é feito apenas pela tela "Resumo"
+  // const [pendingSendOps, setPendingSendOps] = useState<Set<string>>(new Set());
+  // const [countdowns, setCountdowns] = useState<Record<string, number>>({});
+  // const [sendingOps, setSendingOps] = useState<Set<string>>(new Set());
+  // const countdownTimersRef = useRef<Record<string, NodeJS.Timeout>>({});
+  // const sentTodayRef = useRef<Set<string>>(new Set());
+  // const blockedUntilRef = useRef<Record<string, number>>({});
 
   const obsDropdownRef = useRef<HTMLDivElement>(null);
   const obsTextareaRefs = useRef<Record<string, HTMLTextAreaElement>>({});
@@ -469,335 +469,18 @@ const RouteDepartureView: React.FC<{
     }));
   };
 
-  // Libera locks ao desmontar o componente
-  useEffect(() => {
-    return () => {
-      releaseAllLocks();
-    };
-  }, [currentUser.email]);
+  // ⚠️ checkOperationAllOK REMOVIDA — só era usada pelo envio automático desabilitado
+  // const checkOperationAllOK = (operacao: string): boolean => { ... };
 
-  // Verifica se todas as rotas de uma operação estão com statusGeral = 'OK'
-  // e se não há rotas pendentes de sair no dia (coluna SAÍDA vazia)
-  const checkOperationAllOK = (operacao: string): boolean => {
-    const operationRoutes = routes.filter(r => r.operacao === operacao);
-    if (operationRoutes.length === 0) return false;
+  // ⚠️ Funções de envio automática REMOVIDAS — envio agora é feito apenas pela tela "Resumo"
+  // startSendCountdown, cancelSendCountdown, cleanupSendState, handleSendStatus
 
-    // Verifica se há alguma rota prevista para hoje que ainda não saiu (saida vazia/nula)
-    const today = getBrazilDate();
-    const hasPendingRoute = operationRoutes.some(r => {
-      // Considera apenas rotas do dia atual
-      const routeDate = r.data || '';
-      if (routeDate !== today) return false;
-
-      // Verifica se a coluna saida está vazia (nula, undefined, string vazia, ou apenas espaços)
-      // IMPORTANTE: "00:00:00" é um horário válido (meia-noite) e NÃO é considerado vazio
-      // Se tiver "-" na coluna saida, considera como rota que já saiu (não é pendente)
-      const saidaVazia = !r.saida || r.saida.trim() === '';
-
-      // Se saida está vazia e a rota é de hoje, é uma rota pendente
-      return saidaVazia;
-    });
-
-    // Se há rota pendente de sair hoje, não considera como OK
-    if (hasPendingRoute) {
-      console.log(`[checkOperationAllOK] ${operacao} tem rota pendente de sair hoje - não pode ser OK`);
-      return false;
-    }
-
-    // Verifica se todas as rotas estão com statusGeral = 'OK'
-    return operationRoutes.every(r => r.statusGeral === 'OK');
-  };
-
-  // Inicia o countdown para envio de status
-  const startSendCountdown = (operacao: string) => {
-    // Se já tem countdown em andamento, não inicia outro
-    if (countdownTimersRef.current[operacao]) {
-      console.warn(`[COUNTDOWN] ⚠️ Já existe countdown ativo para ${operacao}`);
-      return;
-    }
-
-    console.log(`[COUNTDOWN] Iniciando 20s para ${operacao}`);
-    setCountdowns(prev => ({ ...prev, [operacao]: 20 }));
-
-    countdownTimersRef.current[operacao] = setInterval(() => {
-      setCountdowns(prev => {
-        const newValue = (prev[operacao] || 1) - 1;
-        if (newValue <= 0) {
-          // Countdown chegou a zero - chama o webhook
-          console.log(`[COUNTDOWN] Tempo esgotado para ${operacao}, chamando webhook`);
-          clearInterval(countdownTimersRef.current[operacao]);
-          delete countdownTimersRef.current[operacao];
-          handleSendStatus(operacao);
-          return { ...prev, [operacao]: 0 };
-        }
-        return { ...prev, [operacao]: newValue };
-      });
-    }, 1000);
-  };
-
-  // Cancela o countdown para uma operação e adiciona bloqueio de 10 minutos
-  const cancelSendCountdown = (operacao: string) => {
-    if (countdownTimersRef.current[operacao]) {
-      clearInterval(countdownTimersRef.current[operacao]);
-      delete countdownTimersRef.current[operacao];
-    }
-    
-    // Adiciona bloqueio de 10 minutos (600000 ms)
-    const blockedUntil = Date.now() + 10 * 60 * 1000; // 10 minutos
-    blockedUntilRef.current[operacao] = blockedUntil;
-    
-    console.log(`[CANCEL_SEND] ${operacao} bloqueada até ${new Date(blockedUntil).toLocaleTimeString()}`);
-    
-    setPendingSendOps(prev => {
-      const next = new Set(prev);
-      next.delete(operacao);
-      return next;
-    });
-    setCountdowns(prev => {
-      const next = { ...prev };
-      delete next[operacao];
-      return next;
-    });
-  };
-
-  // Limpa estados de envio para uma operação
-  const cleanupSendState = (operacao: string) => {
-    setSendingOps(prev => {
-      const next = new Set(prev);
-      next.delete(operacao);
-      return next;
-    });
-    setPendingSendOps(prev => {
-      const next = new Set(prev);
-      next.delete(operacao);
-      return next;
-    });
-    setCountdowns(prev => {
-      const next = { ...prev };
-      delete next[operacao];
-      return next;
-    });
-  };
-
-  // Envia o status da operação para o webhook ao final do countdown
-  const handleSendStatus = async (operacao: string) => {
-    const token = await getAccessToken();
-    const config = userConfigs.find(c => c.operacao === operacao);
-
-    // Filtra rotas da operação
-    const operationRoutes = routes.filter(r => r.operacao === operacao);
-    if (operationRoutes.length === 0) {
-      console.warn(`[WEBHOOK] Nenhuma rota encontrada para ${operacao}`);
-      cleanupSendState(operacao);
-      return;
-    }
-
-    // Timer de segurança: fecha o popup após 20 segundos mesmo se houver falha
-    const safetyTimer = setTimeout(() => {
-      console.warn(`[WEBHOOK_SAFETY] ⚠️ Timeout de 20s atingido para ${operacao}, limpando estado`);
-      cleanupSendState(operacao);
-    }, 20000);
-
-    // Verifica se já enviou hoje para evitar duplicidade (usando fuso de Brasília)
-    const today = getBrazilDate();
-    const sentKey = `${operacao}_${today}`;
-
-    // Verifica primeiro no sentTodayRef (sessão atual)
-    if (sentTodayRef.current.has(sentKey)) {
-      console.log(`[WEBHOOK] ⚠️ Já enviado hoje para ${operacao} (sessão atual), ignorando envio duplicado`);
-      cleanupSendState(operacao);
-      return;
-    }
-
-    // Verifica também no SharePoint (persistência entre sessões)
-    // Se o ultimoEnvioSaida estiver preenchido e for de hoje, bloqueia o envio
-    if (config?.ultimoEnvioSaida && config.ultimoEnvioSaida.trim() !== '') {
-      try {
-        let envioDate: Date | null = null;
-
-        // Tenta converter o ultimoEnvioSaida para Date
-        if (config.ultimoEnvioSaida.includes('T')) {
-          envioDate = new Date(config.ultimoEnvioSaida);
-        } else if (config.ultimoEnvioSaida.includes('/')) {
-          const [data, hora] = config.ultimoEnvioSaida.split(' ');
-          const [dia, mes, ano] = data.split('/');
-          const [h, m, s] = hora ? hora.split(':') : ['00', '00', '00'];
-          envioDate = new Date(Number(ano), Number(mes) - 1, Number(dia), Number(h), Number(m), Number(s));
-        }
-
-        if (envioDate && !isNaN(envioDate.getTime())) {
-          // Verifica se o envio foi HOJE no fuso de Brasília
-          const envioDateBrazil = envioDate.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-          const todayBrazil = getBrazilDate();
-
-          if (envioDateBrazil === todayBrazil) {
-            console.log(`[WEBHOOK] ⚠️ Já enviado hoje para ${operacao} (SharePoint: ${config.ultimoEnvioSaida}), ignorando envio duplicado`);
-            cleanupSendState(operacao);
-            return;
-          }
-        }
-      } catch (err) {
-        console.error(`[WEBHOOK] Erro ao verificar ultimoEnvioSaida:`, err);
-        // Em caso de erro, continua com o envio por segurança
-      }
-    }
-
-    // VERIFICA SE HÁ ROTAS PENDENTES DE SAIR NO DIA (saida vazia)
-    // Se houver, o status deve ser "Atualizar" em vez de "OK"
-    const hasPendingRoute = operationRoutes.some(r => {
-      const routeDate = r.data || '';
-      if (routeDate !== today) return false;
-      
-      // Verifica se a coluna saida está vazia (nula, undefined, string vazia, ou apenas espaços)
-      // IMPORTANTE: "00:00:00" é um horário válido (meia-noite) e NÃO é considerado vazio
-      // Se tiver "-" na coluna saida, considera como rota que já saiu (não é pendente)
-      const saidaVazia = !r.saida || r.saida.trim() === '';
-      
-      return saidaVazia;
-    });
-
-    // Determina o status baseado na verificação de rotas pendentes
-    const statusDeterminado = hasPendingRoute ? 'Atualizar' : 'OK';
-    console.log(`[WEBHOOK_AUTO] Status determinado para ${operacao}: ${statusDeterminado} (hasPendingRoute: ${hasPendingRoute})`);
-
-    // Marca como enviado para evitar duplicidade
-    sentTodayRef.current.add(sentKey);
-
-    // Adiciona aos estados de envio
-    setSendingOps(prev => new Set(prev).add(operacao));
-
-    const payload = {
-      tipo: "SAIDAS_AUTO",
-      operacao: operacao,
-      nomeExibicao: config?.nomeExibicao || operacao,
-      tolerancia: config?.tolerancia || "00:00:00",
-      atualizacao: "não",
-      usuario: currentUser.email,
-      dataEnvio: new Date().toISOString(),
-      envio: config?.Envio || "", // Emails para envio principal
-      copia: config?.Copia || "", // Emails para cópia
-      saidas: operationRoutes.map(r => ({
-        rota: r.rota,
-        data: r.data,
-        inicio: r.inicio,
-        motorista: r.motorista,
-        placa: r.placa,
-        saida: r.saida,
-        motivo: r.motivo,
-        observacao: r.observacao,
-        status: r.statusOp
-      }))
-    };
-
-    const WEBHOOK_URL = import.meta.env.VITE_WEBHOOK_SAIDAS_URL || "https://n8n.datastack.viagroup.com.br/webhook/8cb1f3e1-833d-42a7-a3f0-2f959ea390d6";
-
-    try {
-      console.log(`[WEBHOOK_AUTO] 🚀 Enviando status de ${operacao}:`, payload);
-      const response = await fetch(WEBHOOK_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-
-      if (response.ok) {
-        let responseData;
-        try {
-          responseData = await response.json();
-        } catch {
-          console.warn("[WEBHOOK_AUTO] Resposta não é JSON válido");
-          responseData = { sucesso: true };
-        }
-
-        console.log(`[WEBHOOK_AUTO] ✅ Resposta recebida:`, responseData);
-        console.log(`[WEBHOOK_AUTO] Campos na resposta:`, Object.keys(responseData));
-        console.log(`[WEBHOOK_AUTO] responseData[0]:`, responseData[0]);
-        console.log(`[WEBHOOK_AUTO] status:`, responseData[0]?.status || responseData.status);
-        console.log(`[WEBHOOK_AUTO] dataEnvioEmail:`, responseData[0]?.dataEnvioEmail || responseData.dataEnvioEmail);
-        console.log(`[WEBHOOK_AUTO] horarioEnvioEmail:`, responseData[0]?.horarioEnvioEmail || responseData.horarioEnvioEmail);
-
-        // Atualiza UltimoEnvioSaida se o webhook retornar data/hora
-        const dataEnvio = responseData[0]?.dataEnvioEmail || responseData.dataEnvioEmail;
-        const horarioEnvio = responseData[0]?.horarioEnvioEmail || responseData.horarioEnvioEmail;
-
-        if (dataEnvio && horarioEnvio) {
-          const dataHoraEnvio = `${dataEnvio} ${horarioEnvio}`;
-          console.log(`[WEBHOOK_AUTO] Atualizando UltimoEnvioSaida: ${dataHoraEnvio}`);
-          await SharePointService.updateUltimoEnvioSaida(token, operacao, dataHoraEnvio);
-
-          // Atualiza estado local IMEDIATAMENTE
-          setUserConfigs(prev => prev.map(c =>
-            c.operacao === operacao
-              ? { ...c, ultimoEnvioSaida: dataHoraEnvio }
-              : c
-          ));
-        } else {
-          console.warn(`[WEBHOOK_AUTO] ⚠️ Webhook não retornou dataEnvioEmail/horarioEnvioEmail`);
-        }
-
-        // Atualiza Status baseado no retorno do webhook OU no status determinado localmente
-        const statusRetorno = responseData[0]?.status || responseData.status;
-        
-        // Usa o status do webhook se disponível, senão usa o status determinado localmente
-        let statusFinal = '';
-        
-        if (statusRetorno) {
-          // Webhook retornou status - usa o retorno (pode ser "OK" ou "Atualizar")
-          statusFinal = statusRetorno.toLowerCase() === "atualizar" ? "Atualizar" :
-                        statusRetorno.toLowerCase() === "ok" ? "OK" : statusRetorno;
-          console.log(`[WEBHOOK_AUTO] Status retornado pelo webhook: ${statusFinal}`);
-        } else {
-          // Webhook não retornou status - usa o status determinado localmente
-          statusFinal = statusDeterminado;
-          console.log(`[WEBHOOK_AUTO] Webhook não retornou status - usando status determinado localmente: ${statusFinal}`);
-        }
-        
-        // Atualiza o status no SharePoint
-        console.log(`[WEBHOOK_AUTO] Atualizando Status: ${statusFinal}`);
-        await SharePointService.updateStatusOperacao(token, operacao, statusFinal);
-
-        // Atualiza estado local IMEDIATAMENTE
-        setUserConfigs(prev => prev.map(c =>
-          c.operacao === operacao
-            ? { ...c, Status: statusFinal }
-            : c
-        ));
-
-        console.log(`[WEBHOOK_AUTO] ✅ Status de ${operacao} enviado com sucesso!`);
-
-        // Limpa o timer de segurança
-        clearTimeout(safetyTimer);
-
-        // Limpa o estado de envio após 3 segundos (feedback visual)
-        setTimeout(() => {
-          cleanupSendState(operacao);
-          console.log(`[WEBHOOK_AUTO] 🧹 Limpando estado de envio para ${operacao}`);
-        }, 3000);
-
-        // Força refresh dos dados após 2 segundos para garantir que o SharePoint replicou (segundo plano)
-        setTimeout(() => {
-          console.log(`[WEBHOOK_AUTO] 🔄 Forçando refresh dos dados após webhook`);
-          loadData(true); // background refresh
-        }, 2000);
-      } else {
-        throw new Error(`Erro na resposta do webhook: ${response.status}`);
-      }
-    } catch (e: any) {
-      console.error(`[WEBHOOK_AUTO] ❌ Erro ao enviar status de ${operacao}:`, e.message);
-      // Remove do sentTodayRef em caso de erro para permitir retry
-      sentTodayRef.current.delete(sentKey);
-      // Limpa o timer de segurança
-      clearTimeout(safetyTimer);
-      alert(`Erro ao enviar status automático: ${e.message}`);
-      cleanupSendState(operacao);
-    }
-  };
-
-  // Limpa timers ao desmontar
-  useEffect(() => {
-    return () => {
-      Object.values(countdownTimersRef.current).forEach(timer => clearInterval(timer));
-    };
-  }, []);
+  // Limpa timers ao desmontar (removido pois countdowns não existem mais)
+  // useEffect(() => {
+  //   return () => {
+  //     Object.values(countdownTimersRef.current).forEach(timer => clearInterval(timer));
+  //   };
+  // }, []);
 
   // Sincroniza com modal de configuração vindo do App.tsx
   useEffect(() => {
@@ -894,68 +577,15 @@ const RouteDepartureView: React.FC<{
     return () => clearInterval(interval);
   }, []);
 
-  // Verifica mudanças nas rotas para disparar o popup (APENAS se histórico NÃO estiver aberto)
-  useEffect(() => {
-    // SE o modal de histórico estiver aberto, NÃO faz verificações automáticas
-    if (isHistoryModalOpen) {
-      return;
-    }
-
-    if (routes.length === 0 || userConfigs.length === 0) return;
-
-    const today = getBrazilDate();
-    const now = Date.now();
-
-    // Para cada operação do usuário, verifica se todas as rotas estão OK
-    userConfigs.forEach(config => {
-      const { operacao, ultimoEnvioSaida } = config;
-
-      // Se já está na lista de pendentes ou enviando, ignora
-      if (pendingSendOps.has(operacao) || sendingOps.has(operacao)) return;
-
-      // Verifica se está BLOQUEADA temporariamente (após cancelamento)
-      const blockedUntil = blockedUntilRef.current[operacao];
-      if (blockedUntil && now < blockedUntil) {
-        const remainingMinutes = Math.ceil((blockedUntil - now) / 60000);
-        console.log(`[SKIP_AUTO_SEND] ${operacao} está bloqueada por mais ${remainingMinutes} min (cancelamento do usuário)`);
-        return; // Pula para a próxima operação
-      }
-
-      // Verifica se JÁ FOI ENVIADO HOJE usando o campo ultimoEnvioSaida da config
-      if (ultimoEnvioSaida && ultimoEnvioSaida.trim() !== "") {
-        let envioDateStr = "";
-
-        // Extrai a data do ultimoEnvioSaida (pode ser ISO ou DD/MM/YYYY HH:MM:SS)
-        if (ultimoEnvioSaida.includes('T')) {
-          // Formato ISO: 2026-03-13T08:57:00Z
-          envioDateStr = ultimoEnvioSaida.split('T')[0];
-        } else if (ultimoEnvioSaida.includes('/')) {
-          // Formato brasileiro: 13/03/2026 08:57:00
-          const [data] = ultimoEnvioSaida.split(' ');
-          const [dia, mes, ano] = data.split('/');
-          envioDateStr = `${ano}-${mes}-${dia}`;
-        }
-
-        // Compara com hoje
-        if (envioDateStr === today) {
-          console.log(`[SKIP_AUTO_SEND] ${operacao} já foi enviado hoje (${ultimoEnvioSaida}), ignorando`);
-          return; // Pula para a próxima operação
-        }
-      }
-
-      // Verifica se todas as rotas estão OK
-      if (checkOperationAllOK(operacao)) {
-        console.log(`[COUNTDOWN_TRIGGER] Iniciando countdown para ${operacao}`);
-        // Adiciona aos pendentes e inicia countdown
-        setPendingSendOps(prev => {
-          const next = new Set(prev);
-          next.add(operacao);
-          return next;
-        });
-        startSendCountdown(operacao);
-      }
-    });
-  }, [routes, userConfigs, pendingSendOps, sendingOps, isHistoryModalOpen]);
+  // ⚠️ ENVIO AUTOMÁTICO DESABILITADO — O envio agora é feito apenas manualmente pela tela "Resumo" (SendReportView)
+  // O useEffect abaixo foi desabilitado intencionalmente. O envio automático por countdown
+  // não é mais necessário pois o usuário controla os envios pela tela de "Envio de Saídas e Não Coletas".
+  //
+  // useEffect(() => {
+  //   if (isHistoryModalOpen) return;
+  //   if (routes.length === 0 || userConfigs.length === 0) return;
+  //   ... lógica de checkOperationAllOK + startSendCountdown ...
+  // }, [routes, userConfigs, pendingSendOps, sendingOps, isHistoryModalOpen]);
 
   useEffect(() => {
     // Atualiza o tempo a cada 30 segundos usando fuso de Brasília
@@ -4766,42 +4396,7 @@ const RouteDepartureView: React.FC<{
         </div>
       )}
 
-      {/* Popup de Envio de Status - Parte Inferior */}
-      <div className="fixed bottom-0 left-0 right-0 z-[100] flex flex-col items-center gap-3 pb-4 pointer-events-none">
-        {Array.from(pendingSendOps).map(operacao => {
-          const countdown = countdowns[operacao] || 20;
-          const isSending = sendingOps.has(operacao);
-          return (
-            <div
-              key={operacao}
-              className="pointer-events-auto bg-emerald-600 hover:bg-emerald-700 transition-colors text-white px-6 py-3 rounded-t-2xl shadow-2xl flex items-center gap-4 animate-in slide-in-from-bottom duration-300 border-t border-x border-emerald-500"
-            >
-              <div className="flex items-center gap-3">
-                {isSending ? (
-                  <Loader2 size={20} className="animate-spin" />
-                ) : (
-                  <CheckCircle2 size={20} className="animate-pulse" />
-                )}
-                <span className="text-[11px] font-black uppercase tracking-widest">
-                  {isSending ? (
-                    <>Enviando status de <span className="text-emerald-200 font-black">{operacao}</span> para webhook...</>
-                  ) : (
-                    <>Enviando status de saída de <span className="text-emerald-200 font-black">{operacao}</span> em <span className="text-emerald-200 font-black w-6 text-center inline-block">{countdown}</span> segundos</>
-                  )}
-                </span>
-              </div>
-              {!isSending && (
-                <button
-                  onClick={() => cancelSendCountdown(operacao)}
-                  className="px-4 py-1.5 bg-emerald-800 hover:bg-emerald-900 text-white rounded-xl text-[10px] font-black uppercase tracking-wider transition-all border border-emerald-700 shadow-lg"
-                >
-                  Cancelar
-                </button>
-              )}
-            </div>
-          );
-        })}
-      </div>
+      {/* ⚠️ Popup de Envio Automático REMOVIDO — Envio agora é feito apenas pela tela "Resumo" */}
     </div>
   );
 };
