@@ -3015,7 +3015,7 @@ const RouteDepartureView: React.FC<{
                     if (col.id === 'saida') {
                       // Verifica se esta célula está sendo editada
                       const isEditing = editingSaidaCell === route.id;
-                      
+
                       // Extrai apenas o horário para exibição se houver data completa, senão mostra o valor completo
                       const displayValue = (() => {
                         if (!route.saida || route.saida === '-') return route.saida || '';
@@ -3033,7 +3033,6 @@ const RouteDepartureView: React.FC<{
                         <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
                           <input
                             type="text"
-                            key={route.id + '-saida'}
                             value={displayValue}
                             placeholder="--:--:--"
                             onFocus={() => setEditingSaidaCell(route.id!)}
@@ -3058,21 +3057,32 @@ const RouteDepartureView: React.FC<{
                                     }
                                 }
                             }}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                    (e.target as HTMLInputElement).blur();
+                                }
+                            }}
                             onChange={(e) => {
                                 const val = e.target.value;
+                                // Permite digitação livre sem formatação automática
+                                // A formatação só ocorre no onBlur
                                 if (val === '-') {
                                     updateCell(route.id!, 'saida', '-');
                                 } else {
-                                    // No onChange, apenas atualiza com o valor sendo digitado
-                                    // Não chama formatTimeInput para não perder a data enquanto digita
+                                    // Atualiza diretamente para permitir digitação fluida
                                     updateCell(route.id!, 'saida', val);
                                 }
                             }}
                             onPaste={(e: any) => {
-                                const val = e.clipboardData.getData('text');
-                                if (val.includes('\n')) {
-                                    e.preventDefault();
-                                    handleMultilinePaste('saida', rowIndex, val);
+                                const pastedText = e.clipboardData.getData('text').trim();
+                                e.preventDefault();
+
+                                // Verifica se é paste de múltiplas linhas
+                                if (pastedText.includes('\n')) {
+                                    handleMultilinePaste('saida', rowIndex, pastedText);
+                                } else {
+                                    // Paste de valor único - insere diretamente
+                                    updateCell(route.id!, 'saida', pastedText);
                                 }
                             }}
                             className={`${inputClass} font-mono text-center`}
