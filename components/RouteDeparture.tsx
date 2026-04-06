@@ -69,6 +69,57 @@ const FilterDropdown = ({ col, routes, colFilters, setColFilters, selectedFilter
     );
 };
 
+// Componente de filtro para o modal de Histórico (igual ao da tabela principal)
+const HistoryFilterDropdown = ({ col, values, colFilter, setColFilter, selected, setSelected, onClose, dropdownRef, anchorEl }: any) => {
+    const toggleValue = (val: string) => {
+        const next = selected.includes(val) ? selected.filter((v: string) => v !== val) : [...selected, val];
+        setSelected(next);
+    };
+
+    // Calcula posição fixed baseada no elemento âncora
+    const [position, setPosition] = React.useState<{ top: number; left: number } | null>(null);
+
+    React.useEffect(() => {
+        if (anchorEl) {
+            const rect = anchorEl.getBoundingClientRect();
+            setPosition({
+                top: rect.bottom + 4,
+                left: rect.left
+            });
+        }
+    }, [anchorEl]);
+
+    if (!position) return null;
+
+    return (
+        <div
+            ref={dropdownRef}
+            className="fixed z-[9999] bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-2xl rounded-xl w-64 animate-in fade-in zoom-in-95 duration-150"
+            style={{
+                top: `${position.top}px`,
+                left: `${position.left}px`,
+                maxHeight: 'min(450px, calc(100vh - 100px))'
+            }}
+        >
+            <div className="flex items-center gap-2 p-3 pb-2 bg-slate-50 dark:bg-slate-900 rounded-t-xl border-b border-slate-200 dark:border-slate-700">
+                <Search size={14} className="text-slate-400 shrink-0" />
+                <input type="text" placeholder="Filtrar..." autoFocus value={colFilter || ""} onChange={e => setColFilter(e.target.value)} className="w-full bg-transparent outline-none text-[10px] font-bold text-slate-800 dark:text-white" />
+            </div>
+            <div className="overflow-y-auto p-2 space-y-1 scrollbar-thin" style={{ minHeight: '180px', maxHeight: 'min(400px, calc(100vh - 180px))' }}>
+                {values.filter((v: string) => v.toLowerCase().includes((colFilter || "").toLowerCase())).map((v: string) => (
+                    <div key={v} onClick={() => toggleValue(v)} className="flex items-center gap-2 p-2.5 hover:bg-slate-50 dark:hover:bg-slate-700 rounded-lg cursor-pointer transition-all">
+                        {selected.includes(v) ? <CheckSquare size={14} className="text-blue-600 shrink-0" /> : <Square size={14} className="text-slate-300 shrink-0" />}
+                        <span className="text-[10px] font-bold uppercase truncate text-slate-700 dark:text-slate-300">{v || "(VAZIO)"}</span>
+                    </div>
+                ))}
+            </div>
+            <div className="p-2 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50 rounded-b-xl">
+                <button onClick={() => { setColFilter(""); setSelected([]); onClose(); }} className="w-full py-2.5 text-[10px] font-black uppercase text-red-600 bg-red-50 dark:bg-red-900/30 hover:bg-red-100 dark:hover:bg-red-900/50 rounded-lg border border-red-100 dark:border-red-900/50 transition-colors"> Limpar Filtro </button>
+            </div>
+        </div>
+    );
+};
+
 // Componente de Input de Emails com Pills (altura automática baseada no conteúdo)
 interface EmailInputProps {
   label: string;
@@ -271,6 +322,7 @@ const RouteDepartureView: React.FC<{
   const [historyColFilters, setHistoryColFilters] = useState<Record<string, string[]>>({});
   const [historySelectedFilters, setHistorySelectedFilters] = useState<Record<string, string[]>>({});
   const [historyActiveFilterCol, setHistoryActiveFilterCol] = useState<string | null>(null);
+  const [historyFilterAnchorEl, setHistoryFilterAnchorEl] = useState<HTMLElement | null>(null);
   const historyFilterDropdownRef = useRef<HTMLDivElement>(null);
 
   const [activeObsId, setActiveObsId] = useState<string | null>(null);
@@ -1911,6 +1963,29 @@ const RouteDepartureView: React.FC<{
         }
       }
 
+      // Atualiza archivedResults localmente com as edições salvas (feedback imediato)
+      setArchivedResults(prev => prev.map(r => {
+        const edits = pendingHistoryEdits[r.id!];
+        if (!edits) return r;
+
+        const updated = { ...r, ...edits };
+
+        // Recalcula status se horários foram alterados
+        if (edits.inicio || edits.saida || edits.data) {
+          const config = userConfigs.find(c => c.operacao === updated.operacao);
+          const { status, gap } = calculateStatusWithTolerance(
+            updated.inicio,
+            updated.saida,
+            config?.tolerancia || "00:00:00",
+            updated.data
+          );
+          updated.statusOp = status;
+          updated.tempo = gap;
+        }
+
+        return updated;
+      }));
+
       // Limpa edições pendentes
       setPendingHistoryEdits({});
       setEditingHistoryId(null);
@@ -1966,6 +2041,12 @@ const RouteDepartureView: React.FC<{
     });
   };
 
+  // Wrapper para toggle com stopPropagation (evita fechar dropdown ao clicar)
+  const handleHistoryFilterClick = (e: React.MouseEvent, col: string, value: string) => {
+    e.stopPropagation();
+    toggleHistoryColFilter(col, value);
+  };
+
   const clearHistoryColFilters = () => {
     setHistorySelectedFilters({});
     setHistoryColFilters({});
@@ -1976,13 +2057,14 @@ const RouteDepartureView: React.FC<{
   // Fecha dropdown ao clicar fora
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
-      if (historyFilterDropdownRef.current && !historyFilterDropdownRef.current.contains(e.target as Node)) {
+      if (historyActiveFilterCol && historyFilterDropdownRef.current && !historyFilterDropdownRef.current.contains(e.target as Node)) {
         setHistoryActiveFilterCol(null);
+        setHistoryFilterAnchorEl(null);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  }, [historyActiveFilterCol]);
 
   // Aplica filtros aos resultados do histórico e ordena por data/hora (da mais antiga para a mais recente)
   const filteredArchivedResults = useMemo(() => {
@@ -3489,7 +3571,15 @@ const RouteDepartureView: React.FC<{
                                               <div className="flex items-center justify-center gap-1">
                                                   <span>Semana</span>
                                                   <button
-                                                    onClick={() => setHistoryActiveFilterCol(historyActiveFilterCol === 'semana' ? null : 'semana')}
+                                                    ref={(el) => { if (historyActiveFilterCol === 'semana') setHistoryFilterAnchorEl(el); }}
+                                                    onClick={() => {
+                                                        if (historyActiveFilterCol === 'semana') {
+                                                            setHistoryActiveFilterCol(null);
+                                                            setHistoryFilterAnchorEl(null);
+                                                        } else {
+                                                            setHistoryActiveFilterCol('semana');
+                                                        }
+                                                    }}
                                                     className={`p-1 rounded transition-all opacity-0 group-hover:opacity-100 ${
                                                       historyActiveFilterCol === 'semana' || historySelectedFilters['semana']?.length > 0
                                                         ? 'opacity-100 bg-primary-600 text-white'
@@ -3500,35 +3590,17 @@ const RouteDepartureView: React.FC<{
                                                   </button>
                                               </div>
                                               {historyActiveFilterCol === 'semana' && (
-                                                <div className="absolute top-full left-0 mt-1 w-40 bg-white dark:bg-slate-700 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-600 overflow-hidden z-[100] animate-in fade-in slide-in-from-top-2">
-                                                    <div className="p-2 border-b dark:border-slate-600 flex justify-between items-center">
-                                                        <span className="text-[9px] font-black uppercase text-slate-600 dark:text-slate-400 px-2">Semana</span>
-                                                        {historySelectedFilters['semana']?.length > 0 && (
-                                                            <button
-                                                                onClick={() => setHistorySelectedFilters(prev => ({ ...prev, semana: [] }))}
-                                                                className="text-[8px] font-bold text-primary-600 hover:text-primary-700 uppercase px-2"
-                                                            >
-                                                                Limpar
-                                                            </button>
-                                                        )}
-                                                    </div>
-                                                    <div className="max-h-48 overflow-y-auto p-2 space-y-1">
-                                                        {getHistoryColUniqueValues('semana').map(s => (
-                                                            <button
-                                                                key={s}
-                                                                onClick={() => toggleHistoryColFilter('semana', s)}
-                                                                className={`w-full text-left px-3 py-2 rounded-lg text-[10px] font-bold transition-all flex items-center justify-between ${
-                                                                    historySelectedFilters['semana']?.includes(s)
-                                                                        ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400'
-                                                                        : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-600'
-                                                                }`}
-                                                            >
-                                                                {s}
-                                                                {historySelectedFilters['semana']?.includes(s) && <CheckCircle2 size={12} />}
-                                                            </button>
-                                                        ))}
-                                                    </div>
-                                                </div>
+                                                <HistoryFilterDropdown
+                                                    col="semana"
+                                                    values={getHistoryColUniqueValues('semana')}
+                                                    colFilter={historyColFilters['semana'] || ''}
+                                                    setColFilter={(v: string) => setHistoryColFilters({ ...historyColFilters, semana: v })}
+                                                    selected={historySelectedFilters['semana'] || []}
+                                                    setSelected={(v: string[]) => setHistorySelectedFilters({ ...historySelectedFilters, semana: v })}
+                                                    onClose={() => { setHistoryActiveFilterCol(null); setHistoryFilterAnchorEl(null); }}
+                                                    dropdownRef={historyFilterDropdownRef}
+                                                    anchorEl={historyFilterAnchorEl}
+                                                />
                                               )}
                                           </th>
                                           <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center">Data</th>
@@ -3536,7 +3608,15 @@ const RouteDepartureView: React.FC<{
                                               <div className="flex items-center justify-between">
                                                   <span>Rota</span>
                                                   <button
-                                                    onClick={() => setHistoryActiveFilterCol(historyActiveFilterCol === 'rota' ? null : 'rota')}
+                                                    ref={(el) => { if (historyActiveFilterCol === 'rota') setHistoryFilterAnchorEl(el); }}
+                                                    onClick={() => {
+                                                        if (historyActiveFilterCol === 'rota') {
+                                                            setHistoryActiveFilterCol(null);
+                                                            setHistoryFilterAnchorEl(null);
+                                                        } else {
+                                                            setHistoryActiveFilterCol('rota');
+                                                        }
+                                                    }}
                                                     className={`p-1 rounded transition-all opacity-0 group-hover:opacity-100 ${
                                                       historyActiveFilterCol === 'rota' || historySelectedFilters['rota']?.length > 0
                                                         ? 'opacity-100 bg-primary-600 text-white'
@@ -3547,35 +3627,17 @@ const RouteDepartureView: React.FC<{
                                                   </button>
                                               </div>
                                               {historyActiveFilterCol === 'rota' && (
-                                                <div className="absolute top-full left-0 mt-1 w-56 bg-white dark:bg-slate-700 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-600 overflow-hidden z-[100] animate-in fade-in slide-in-from-top-2">
-                                                    <div className="p-2 border-b dark:border-slate-600 flex justify-between items-center">
-                                                        <span className="text-[9px] font-black uppercase text-slate-600 dark:text-slate-400 px-2">Rota</span>
-                                                        {historySelectedFilters['rota']?.length > 0 && (
-                                                            <button
-                                                                onClick={() => setHistorySelectedFilters(prev => ({ ...prev, rota: [] }))}
-                                                                className="text-[8px] font-bold text-primary-600 hover:text-primary-700 uppercase px-2"
-                                                            >
-                                                                Limpar
-                                                            </button>
-                                                        )}
-                                                    </div>
-                                                    <div className="max-h-48 overflow-y-auto p-2 space-y-1">
-                                                        {getHistoryColUniqueValues('rota').map(r => (
-                                                            <button
-                                                                key={r}
-                                                                onClick={() => toggleHistoryColFilter('rota', r)}
-                                                                className={`w-full text-left px-3 py-2 rounded-lg text-[10px] font-bold transition-all flex items-center justify-between ${
-                                                                    historySelectedFilters['rota']?.includes(r)
-                                                                        ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400'
-                                                                        : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-600'
-                                                                }`}
-                                                            >
-                                                                {r}
-                                                                {historySelectedFilters['rota']?.includes(r) && <CheckCircle2 size={12} />}
-                                                            </button>
-                                                        ))}
-                                                    </div>
-                                                </div>
+                                                <HistoryFilterDropdown
+                                                    col="rota"
+                                                    values={getHistoryColUniqueValues('rota')}
+                                                    colFilter={historyColFilters['rota'] || ''}
+                                                    setColFilter={(v: string) => setHistoryColFilters({ ...historyColFilters, rota: v })}
+                                                    selected={historySelectedFilters['rota'] || []}
+                                                    setSelected={(v: string[]) => setHistorySelectedFilters({ ...historySelectedFilters, rota: v })}
+                                                    onClose={() => { setHistoryActiveFilterCol(null); setHistoryFilterAnchorEl(null); }}
+                                                    dropdownRef={historyFilterDropdownRef}
+                                                    anchorEl={historyFilterAnchorEl}
+                                                />
                                               )}
                                           </th>
                                           <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center">Início</th>
@@ -3583,7 +3645,15 @@ const RouteDepartureView: React.FC<{
                                               <div className="flex items-center justify-between">
                                                   <span>Motorista</span>
                                                   <button
-                                                    onClick={() => setHistoryActiveFilterCol(historyActiveFilterCol === 'motorista' ? null : 'motorista')}
+                                                    ref={(el) => { if (historyActiveFilterCol === 'motorista') setHistoryFilterAnchorEl(el); }}
+                                                    onClick={() => {
+                                                        if (historyActiveFilterCol === 'motorista') {
+                                                            setHistoryActiveFilterCol(null);
+                                                            setHistoryFilterAnchorEl(null);
+                                                        } else {
+                                                            setHistoryActiveFilterCol('motorista');
+                                                        }
+                                                    }}
                                                     className={`p-1 rounded transition-all opacity-0 group-hover:opacity-100 ${
                                                       historyActiveFilterCol === 'motorista' || historySelectedFilters['motorista']?.length > 0
                                                         ? 'opacity-100 bg-primary-600 text-white'
@@ -3594,42 +3664,32 @@ const RouteDepartureView: React.FC<{
                                                   </button>
                                               </div>
                                               {historyActiveFilterCol === 'motorista' && (
-                                                <div className="absolute top-full left-0 mt-1 w-56 bg-white dark:bg-slate-700 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-600 overflow-hidden z-[100] animate-in fade-in slide-in-from-top-2">
-                                                    <div className="p-2 border-b dark:border-slate-600 flex justify-between items-center">
-                                                        <span className="text-[9px] font-black uppercase text-slate-600 dark:text-slate-400 px-2">Motorista</span>
-                                                        {historySelectedFilters['motorista']?.length > 0 && (
-                                                            <button
-                                                                onClick={() => setHistorySelectedFilters(prev => ({ ...prev, motorista: [] }))}
-                                                                className="text-[8px] font-bold text-primary-600 hover:text-primary-700 uppercase px-2"
-                                                            >
-                                                                Limpar
-                                                            </button>
-                                                        )}
-                                                    </div>
-                                                    <div className="max-h-48 overflow-y-auto p-2 space-y-1">
-                                                        {getHistoryColUniqueValues('motorista').map(m => (
-                                                            <button
-                                                                key={m}
-                                                                onClick={() => toggleHistoryColFilter('motorista', m)}
-                                                                className={`w-full text-left px-3 py-2 rounded-lg text-[10px] font-bold transition-all flex items-center justify-between ${
-                                                                    historySelectedFilters['motorista']?.includes(m)
-                                                                        ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400'
-                                                                        : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-600'
-                                                                }`}
-                                                            >
-                                                                {m}
-                                                                {historySelectedFilters['motorista']?.includes(m) && <CheckCircle2 size={12} />}
-                                                            </button>
-                                                        ))}
-                                                    </div>
-                                                </div>
+                                                <HistoryFilterDropdown
+                                                    col="motorista"
+                                                    values={getHistoryColUniqueValues('motorista')}
+                                                    colFilter={historyColFilters['motorista'] || ''}
+                                                    setColFilter={(v: string) => setHistoryColFilters({ ...historyColFilters, motorista: v })}
+                                                    selected={historySelectedFilters['motorista'] || []}
+                                                    setSelected={(v: string[]) => setHistorySelectedFilters({ ...historySelectedFilters, motorista: v })}
+                                                    onClose={() => { setHistoryActiveFilterCol(null); setHistoryFilterAnchorEl(null); }}
+                                                    dropdownRef={historyFilterDropdownRef}
+                                                    anchorEl={historyFilterAnchorEl}
+                                                />
                                               )}
                                           </th>
                                           <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center relative group">
                                               <div className="flex items-center justify-center gap-1">
                                                   <span>Placa</span>
                                                   <button
-                                                    onClick={() => setHistoryActiveFilterCol(historyActiveFilterCol === 'placa' ? null : 'placa')}
+                                                    ref={(el) => { if (historyActiveFilterCol === 'placa') setHistoryFilterAnchorEl(el); }}
+                                                    onClick={() => {
+                                                        if (historyActiveFilterCol === 'placa') {
+                                                            setHistoryActiveFilterCol(null);
+                                                            setHistoryFilterAnchorEl(null);
+                                                        } else {
+                                                            setHistoryActiveFilterCol('placa');
+                                                        }
+                                                    }}
                                                     className={`p-1 rounded transition-all opacity-0 group-hover:opacity-100 ${
                                                       historyActiveFilterCol === 'placa' || historySelectedFilters['placa']?.length > 0
                                                         ? 'opacity-100 bg-primary-600 text-white'
@@ -3640,35 +3700,17 @@ const RouteDepartureView: React.FC<{
                                                   </button>
                                               </div>
                                               {historyActiveFilterCol === 'placa' && (
-                                                <div className="absolute top-full left-0 mt-1 w-40 bg-white dark:bg-slate-700 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-600 overflow-hidden z-[100] animate-in fade-in slide-in-from-top-2">
-                                                    <div className="p-2 border-b dark:border-slate-600 flex justify-between items-center">
-                                                        <span className="text-[9px] font-black uppercase text-slate-600 dark:text-slate-400 px-2">Placa</span>
-                                                        {historySelectedFilters['placa']?.length > 0 && (
-                                                            <button
-                                                                onClick={() => setHistorySelectedFilters(prev => ({ ...prev, placa: [] }))}
-                                                                className="text-[8px] font-bold text-primary-600 hover:text-primary-700 uppercase px-2"
-                                                            >
-                                                                Limpar
-                                                            </button>
-                                                        )}
-                                                    </div>
-                                                    <div className="max-h-48 overflow-y-auto p-2 space-y-1">
-                                                        {getHistoryColUniqueValues('placa').map(p => (
-                                                            <button
-                                                                key={p}
-                                                                onClick={() => toggleHistoryColFilter('placa', p)}
-                                                                className={`w-full text-left px-3 py-2 rounded-lg text-[10px] font-bold transition-all flex items-center justify-between ${
-                                                                    historySelectedFilters['placa']?.includes(p)
-                                                                        ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400'
-                                                                        : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-600'
-                                                                }`}
-                                                            >
-                                                                {p}
-                                                                {historySelectedFilters['placa']?.includes(p) && <CheckCircle2 size={12} />}
-                                                            </button>
-                                                        ))}
-                                                    </div>
-                                                </div>
+                                                <HistoryFilterDropdown
+                                                    col="placa"
+                                                    values={getHistoryColUniqueValues('placa')}
+                                                    colFilter={historyColFilters['placa'] || ''}
+                                                    setColFilter={(v: string) => setHistoryColFilters({ ...historyColFilters, placa: v })}
+                                                    selected={historySelectedFilters['placa'] || []}
+                                                    setSelected={(v: string[]) => setHistorySelectedFilters({ ...historySelectedFilters, placa: v })}
+                                                    onClose={() => { setHistoryActiveFilterCol(null); setHistoryFilterAnchorEl(null); }}
+                                                    dropdownRef={historyFilterDropdownRef}
+                                                    anchorEl={historyFilterAnchorEl}
+                                                />
                                               )}
                                           </th>
                                           <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center">Saída</th>
@@ -3676,7 +3718,15 @@ const RouteDepartureView: React.FC<{
                                               <div className="flex items-center justify-between">
                                                   <span>Motivo</span>
                                                   <button
-                                                    onClick={() => setHistoryActiveFilterCol(historyActiveFilterCol === 'motivo' ? null : 'motivo')}
+                                                    ref={(el) => { if (historyActiveFilterCol === 'motivo') setHistoryFilterAnchorEl(el); }}
+                                                    onClick={() => {
+                                                        if (historyActiveFilterCol === 'motivo') {
+                                                            setHistoryActiveFilterCol(null);
+                                                            setHistoryFilterAnchorEl(null);
+                                                        } else {
+                                                            setHistoryActiveFilterCol('motivo');
+                                                        }
+                                                    }}
                                                     className={`p-1 rounded transition-all opacity-0 group-hover:opacity-100 ${
                                                       historyActiveFilterCol === 'motivo' || historySelectedFilters['motivo']?.length > 0
                                                         ? 'opacity-100 bg-primary-600 text-white'
@@ -3687,35 +3737,17 @@ const RouteDepartureView: React.FC<{
                                                   </button>
                                               </div>
                                               {historyActiveFilterCol === 'motivo' && (
-                                                <div className="absolute top-full left-0 mt-1 w-56 bg-white dark:bg-slate-700 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-600 overflow-hidden z-[100] animate-in fade-in slide-in-from-top-2">
-                                                    <div className="p-2 border-b dark:border-slate-600 flex justify-between items-center">
-                                                        <span className="text-[9px] font-black uppercase text-slate-600 dark:text-slate-400 px-2">Motivo</span>
-                                                        {historySelectedFilters['motivo']?.length > 0 && (
-                                                            <button
-                                                                onClick={() => setHistorySelectedFilters(prev => ({ ...prev, motivo: [] }))}
-                                                                className="text-[8px] font-bold text-primary-600 hover:text-primary-700 uppercase px-2"
-                                                            >
-                                                                Limpar
-                                                            </button>
-                                                        )}
-                                                    </div>
-                                                    <div className="max-h-48 overflow-y-auto p-2 space-y-1">
-                                                        {getHistoryColUniqueValues('motivo').map(m => (
-                                                            <button
-                                                                key={m}
-                                                                onClick={() => toggleHistoryColFilter('motivo', m)}
-                                                                className={`w-full text-left px-3 py-2 rounded-lg text-[10px] font-bold transition-all flex items-center justify-between ${
-                                                                    historySelectedFilters['motivo']?.includes(m)
-                                                                        ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400'
-                                                                        : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-600'
-                                                                }`}
-                                                            >
-                                                                {m}
-                                                                {historySelectedFilters['motivo']?.includes(m) && <CheckCircle2 size={12} />}
-                                                            </button>
-                                                        ))}
-                                                    </div>
-                                                </div>
+                                                <HistoryFilterDropdown
+                                                    col="motivo"
+                                                    values={getHistoryColUniqueValues('motivo')}
+                                                    colFilter={historyColFilters['motivo'] || ''}
+                                                    setColFilter={(v: string) => setHistoryColFilters({ ...historyColFilters, motivo: v })}
+                                                    selected={historySelectedFilters['motivo'] || []}
+                                                    setSelected={(v: string[]) => setHistorySelectedFilters({ ...historySelectedFilters, motivo: v })}
+                                                    onClose={() => { setHistoryActiveFilterCol(null); setHistoryFilterAnchorEl(null); }}
+                                                    dropdownRef={historyFilterDropdownRef}
+                                                    anchorEl={historyFilterAnchorEl}
+                                                />
                                               )}
                                           </th>
                                           <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-left">Observação</th>
@@ -3723,7 +3755,15 @@ const RouteDepartureView: React.FC<{
                                               <div className="flex items-center justify-center gap-1">
                                                   <span>Operação</span>
                                                   <button
-                                                    onClick={() => setHistoryActiveFilterCol(historyActiveFilterCol === 'operacao' ? null : 'operacao')}
+                                                    ref={(el) => { if (historyActiveFilterCol === 'operacao') setHistoryFilterAnchorEl(el); }}
+                                                    onClick={() => {
+                                                        if (historyActiveFilterCol === 'operacao') {
+                                                            setHistoryActiveFilterCol(null);
+                                                            setHistoryFilterAnchorEl(null);
+                                                        } else {
+                                                            setHistoryActiveFilterCol('operacao');
+                                                        }
+                                                    }}
                                                     className={`p-1 rounded transition-all opacity-0 group-hover:opacity-100 ${
                                                       historyActiveFilterCol === 'operacao' || historySelectedFilters['operacao']?.length > 0
                                                         ? 'opacity-100 bg-primary-600 text-white'
@@ -3734,42 +3774,32 @@ const RouteDepartureView: React.FC<{
                                                   </button>
                                               </div>
                                               {historyActiveFilterCol === 'operacao' && (
-                                                <div className="absolute top-full left-0 mt-1 w-40 bg-white dark:bg-slate-700 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-600 overflow-hidden z-[100] animate-in fade-in slide-in-from-top-2">
-                                                    <div className="p-2 border-b dark:border-slate-600 flex justify-between items-center">
-                                                        <span className="text-[9px] font-black uppercase text-slate-600 dark:text-slate-400 px-2">Operação</span>
-                                                        {historySelectedFilters['operacao']?.length > 0 && (
-                                                            <button
-                                                                onClick={() => setHistorySelectedFilters(prev => ({ ...prev, operacao: [] }))}
-                                                                className="text-[8px] font-bold text-primary-600 hover:text-primary-700 uppercase px-2"
-                                                            >
-                                                                Limpar
-                                                            </button>
-                                                        )}
-                                                    </div>
-                                                    <div className="max-h-48 overflow-y-auto p-2 space-y-1">
-                                                        {getHistoryColUniqueValues('operacao').map(op => (
-                                                            <button
-                                                                key={op}
-                                                                onClick={() => toggleHistoryColFilter('operacao', op)}
-                                                                className={`w-full text-left px-3 py-2 rounded-lg text-[10px] font-bold transition-all flex items-center justify-between ${
-                                                                    historySelectedFilters['operacao']?.includes(op)
-                                                                        ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400'
-                                                                        : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-600'
-                                                                }`}
-                                                            >
-                                                                {op}
-                                                                {historySelectedFilters['operacao']?.includes(op) && <CheckCircle2 size={12} />}
-                                                            </button>
-                                                        ))}
-                                                    </div>
-                                                </div>
+                                                <HistoryFilterDropdown
+                                                    col="operacao"
+                                                    values={getHistoryColUniqueValues('operacao')}
+                                                    colFilter={historyColFilters['operacao'] || ''}
+                                                    setColFilter={(v: string) => setHistoryColFilters({ ...historyColFilters, operacao: v })}
+                                                    selected={historySelectedFilters['operacao'] || []}
+                                                    setSelected={(v: string[]) => setHistorySelectedFilters({ ...historySelectedFilters, operacao: v })}
+                                                    onClose={() => { setHistoryActiveFilterCol(null); setHistoryFilterAnchorEl(null); }}
+                                                    dropdownRef={historyFilterDropdownRef}
+                                                    anchorEl={historyFilterAnchorEl}
+                                                />
                                               )}
                                           </th>
                                           <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center relative group">
                                               <div className="flex items-center justify-center gap-1">
                                                   <span>Status</span>
                                                   <button
-                                                    onClick={() => setHistoryActiveFilterCol(historyActiveFilterCol === 'status' ? null : 'status')}
+                                                    ref={(el) => { if (historyActiveFilterCol === 'status') setHistoryFilterAnchorEl(el); }}
+                                                    onClick={() => {
+                                                        if (historyActiveFilterCol === 'status') {
+                                                            setHistoryActiveFilterCol(null);
+                                                            setHistoryFilterAnchorEl(null);
+                                                        } else {
+                                                            setHistoryActiveFilterCol('status');
+                                                        }
+                                                    }}
                                                     className={`p-1 rounded transition-all opacity-0 group-hover:opacity-100 ${
                                                       historyActiveFilterCol === 'status' || historySelectedFilters['status']?.length > 0
                                                         ? 'opacity-100 bg-primary-600 text-white'
@@ -3780,35 +3810,17 @@ const RouteDepartureView: React.FC<{
                                                   </button>
                                               </div>
                                               {historyActiveFilterCol === 'status' && (
-                                                <div className="absolute top-full left-0 mt-1 w-40 bg-white dark:bg-slate-700 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-600 overflow-hidden z-[100] animate-in fade-in slide-in-from-top-2">
-                                                    <div className="p-2 border-b dark:border-slate-600 flex justify-between items-center">
-                                                        <span className="text-[9px] font-black uppercase text-slate-600 dark:text-slate-400 px-2">Status</span>
-                                                        {historySelectedFilters['status']?.length > 0 && (
-                                                            <button
-                                                                onClick={() => setHistorySelectedFilters(prev => ({ ...prev, status: [] }))}
-                                                                className="text-[8px] font-bold text-primary-600 hover:text-primary-700 uppercase px-2"
-                                                            >
-                                                                Limpar
-                                                            </button>
-                                                        )}
-                                                    </div>
-                                                    <div className="max-h-48 overflow-y-auto p-2 space-y-1">
-                                                        {getHistoryColUniqueValues('status').map(s => (
-                                                            <button
-                                                                key={s}
-                                                                onClick={() => toggleHistoryColFilter('status', s)}
-                                                                className={`w-full text-left px-3 py-2 rounded-lg text-[10px] font-bold transition-all flex items-center justify-between ${
-                                                                    historySelectedFilters['status']?.includes(s)
-                                                                        ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400'
-                                                                        : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-600'
-                                                                }`}
-                                                            >
-                                                                {s}
-                                                                {historySelectedFilters['status']?.includes(s) && <CheckCircle2 size={12} />}
-                                                            </button>
-                                                        ))}
-                                                    </div>
-                                                </div>
+                                                <HistoryFilterDropdown
+                                                    col="status"
+                                                    values={getHistoryColUniqueValues('status')}
+                                                    colFilter={historyColFilters['status'] || ''}
+                                                    setColFilter={(v: string) => setHistoryColFilters({ ...historyColFilters, status: v })}
+                                                    selected={historySelectedFilters['status'] || []}
+                                                    setSelected={(v: string[]) => setHistorySelectedFilters({ ...historySelectedFilters, status: v })}
+                                                    onClose={() => { setHistoryActiveFilterCol(null); setHistoryFilterAnchorEl(null); }}
+                                                    dropdownRef={historyFilterDropdownRef}
+                                                    anchorEl={historyFilterAnchorEl}
+                                                />
                                               )}
                                           </th>
                                           <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center">Tempo</th>

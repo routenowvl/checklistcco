@@ -1012,8 +1012,27 @@ const NonCollectionsView: React.FC<{
                       );
                     }
 
-                    // AÇÃO - Textarea editável
+                    // AÇÃO - Campo automático baseado no MOTIVO
                     if (key === 'acao') {
+                      // Calcula o valor automático da ação baseado no motivo
+                      const getAcaoAutomatica = () => {
+                        const motivo = (row.motivo || '').trim();
+                        const rota = (row.rota || '').trim();
+
+                        if (motivo === 'Parou de fornecer') {
+                          return 'Retirado da roteirização';
+                        }
+                        if (motivo === 'Produtor suspenso') {
+                          return 'Aguardando autorização';
+                        }
+                        if (rota) {
+                          return `Será coletado na rota ${rota}`;
+                        }
+                        return '';
+                      };
+
+                      const acaoValue = row.acao || getAcaoAutomatica();
+
                       return (
                         <td
                           key={key}
@@ -1023,7 +1042,7 @@ const NonCollectionsView: React.FC<{
                           style={{ minWidth: colWidths[key] }}
                         >
                           <textarea
-                            value={row.acao}
+                            value={acaoValue}
                             onChange={(e) => {
                               const updated = { ...row, acao: e.target.value };
                               setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
@@ -1037,7 +1056,9 @@ const NonCollectionsView: React.FC<{
                             }}
                             placeholder="Ação..."
                             rows={1}
-                            className={`${inputClass} resize-none whitespace-pre-wrap break-words min-h-[48px]`}
+                            className={`${inputClass} resize-none whitespace-pre-wrap break-words min-h-[48px] ${
+                              !row.acao ? 'text-slate-500 dark:text-slate-400 italic' : ''
+                            }`}
                           />
                         </td>
                       );
@@ -1370,22 +1391,64 @@ const NonCollectionsView: React.FC<{
                     );
                   }
 
-                  if (key === 'observacao' || key === 'acao') {
+                  if (key === 'observacao') {
                     return (
                       <td key={`ghost-${key}`} className="p-0 border border-slate-200/30 dark:border-slate-800/30" style={{ verticalAlign: 'middle' }}>
                         <textarea
-                          value={ghostRow[key] || ''}
-                          onChange={(e) => updateGhostCell(key, e.target.value)}
+                          value={ghostRow.observacao || ''}
+                          onChange={(e) => updateGhostCell('observacao', e.target.value)}
                           onPaste={(e) => {
                             const val = e.clipboardData.getData('text');
                             if (val.includes('\n')) {
                               e.preventDefault();
-                              handleBulkPaste(key, val);
+                              handleBulkPaste('observacao', val);
                             }
                           }}
-                          placeholder={key === 'observacao' ? 'Detalhes + causa raiz...' : 'Ação...'}
+                          placeholder="Detalhes + causa raiz..."
                           rows={1}
                           className={`${inputClass} resize-none whitespace-pre-wrap break-words min-h-[48px]`}
+                        />
+                      </td>
+                    );
+                  }
+
+                  if (key === 'acao') {
+                    // Calcula o valor automático da ação baseado no motivo (ghost row)
+                    const getAcaoAutomatica = () => {
+                      const motivo = (ghostRow.motivo || '').trim();
+                      const rota = (ghostRow.rota || '').trim();
+
+                      if (motivo === 'Parou de fornecer') {
+                        return 'Retirado da roteirização';
+                      }
+                      if (motivo === 'Produtor suspenso') {
+                        return 'Aguardando autorização';
+                      }
+                      if (rota) {
+                        return `Será coletado na rota ${rota}`;
+                      }
+                      return '';
+                    };
+
+                    const acaoValue = ghostRow.acao || getAcaoAutomatica();
+
+                    return (
+                      <td key={`ghost-${key}`} className="p-0 border border-slate-200/30 dark:border-slate-800/30" style={{ verticalAlign: 'middle' }}>
+                        <textarea
+                          value={acaoValue}
+                          onChange={(e) => updateGhostCell('acao', e.target.value)}
+                          onPaste={(e) => {
+                            const val = e.clipboardData.getData('text');
+                            if (val.includes('\n')) {
+                              e.preventDefault();
+                              handleBulkPaste('acao', val);
+                            }
+                          }}
+                          placeholder="Ação..."
+                          rows={1}
+                          className={`${inputClass} resize-none whitespace-pre-wrap break-words min-h-[48px] ${
+                            !ghostRow.acao ? 'text-slate-500 dark:text-slate-400 italic' : ''
+                          }`}
                         />
                       </td>
                     );
