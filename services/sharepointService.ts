@@ -1332,30 +1332,33 @@ export const SharePointService = {
 
   /**
    * Busca não coletas da lista do SharePoint
-   * Lista ID: 83e8cfb9-1982-47ae-b515-3fec112da457
+   * Lista: Dados_Nao_Coletas (ID: 83e8cfb9-1982-47ae-b515-3fec112da457)
    */
   async getNonCollections(token: string, userEmail: string): Promise<NonCollection[]> {
     try {
       const siteId = await getResolvedSiteId(token);
       const listId = '83e8cfb9-1982-47ae-b515-3fec112da457';
-      
+
       const data = await graphFetch(`/sites/${siteId}/lists/${listId}/items?expand=fields`, token);
-      
-      return (data.value || []).map((item: any) => ({
-        id: item.id.toString(),
-        semana: item.fields.Title || '',
-        rota: item.fields.Rota || '',
-        data: item.fields.Data ? formatDateFromSharePoint(item.fields.Data) : '',
-        codigo: item.fields.Codigo || '',
-        produtor: item.fields.Produtor || '',
-        motivo: item.fields.Motivo || '',
-        observacao: item.fields.Observacao || '',
-        acao: item.fields.Acao || '',
-        dataAcao: item.fields.DataAcao ? formatDateFromSharePoint(item.fields.DataAcao) : '',
-        ultimaColeta: item.fields._x00da_ltimaColeta ? formatDateFromSharePoint(item.fields._x00da_ltimaColeta) : '',
-        culpabilidade: item.fields.Culpabilidade || '',
-        operacao: item.fields.Opera_x00e7__x00e3_o || ''
-      }));
+
+      return (data.value || []).map((item: any) => {
+        const f = item.fields || {};
+        return {
+          id: item.id.toString(),
+          semana: f.Title || '',
+          rota: f.Rota || '',
+          data: f.Data ? formatDateFromSharePoint(f.Data) : '',
+          codigo: f.C_x00f3_digo || '',
+          produtor: f.Produtor || '',
+          motivo: f.Motivo || '',
+          observacao: f.Observa_x00e7__x00e3_o || '',
+          acao: f.A_x00e7__x00e3_o || '',
+          dataAcao: f.DataA_x00e7__x00e3_o ? formatDateFromSharePoint(f.DataA_x00e7__x00e3_o) : '',
+          ultimaColeta: f._x00da_ltimaColeta ? formatDateFromSharePoint(f._x00da_ltimaColeta) : '',
+          culpabilidade: f.Culpabilidade || '',
+          operacao: f.Opera_x00e7__x00e3_o || ''
+        };
+      });
     } catch (e: any) {
       console.error('[NonCollections] Erro ao buscar não coletas:', e.message);
       return [];
@@ -1364,44 +1367,90 @@ export const SharePointService = {
 
   /**
    * Salva não coleta na lista do SharePoint
+   * Lista: Dados_Nao_Coletas (ID: 83e8cfb9-1982-47ae-b515-3fec112da457)
+   * Nomes internos conforme schema XML:
+   * - Semana → Title
+   * - Rota → Rota
+   * - Data → Data (DateTime)
+   * - Código → C_x00f3_digo
+   * - Produtor → Produtor
+   * - Motivo → Motivo
+   * - Observação → Observa_x00e7__x00e3_o
+   * - Ação → A_x00e7__x00e3_o
+   * - Data Ação → DataA_x00e7__x00e3_o
+   * - Última Coleta → _x00da_ltimaColeta
+   * - Culpabilidade → Culpabilidade
+   * - Operação → Opera_x00e7__x00e3_o
    */
-  async saveNonCollection(token: string, nonCollection: NonCollection): Promise<void> {
+  async saveNonCollection(token: string, nonCollection: NonCollection): Promise<string> {
     try {
       const siteId = await getResolvedSiteId(token);
       const listId = '83e8cfb9-1982-47ae-b515-3fec112da457';
-      const { mapping, internalNames } = await getListColumnMapping(siteId, listId, token);
 
-      const fields: any = {
-        Title: nonCollection.semana,
-        Rota: nonCollection.rota,
-        Data: parseDateForSharePoint(nonCollection.data),
-        Codigo: nonCollection.codigo,
-        Produtor: nonCollection.produtor,
-        Motivo: nonCollection.motivo,
-        Observacao: nonCollection.observacao,
-        Acao: nonCollection.acao,
-        DataAcao: parseDateForSharePoint(nonCollection.dataAcao),
-        UltimaColeta: parseDateForSharePoint(nonCollection.ultimaColeta),
-        Culpabilidade: nonCollection.culpabilidade,
-        Opera_x00e7__x00e3_o: nonCollection.operacao
-      };
-
+      // Constrói payload removendo campos vazios (SharePoint rejeita DateTime com "")
       const payload: any = {};
-      Object.keys(fields).forEach(key => {
-        const internalName = resolveFieldName(mapping, key);
-        if (internalNames.has(internalName) && fields[key] !== undefined) {
-          payload[internalName] = fields[key];
-        }
-      });
 
-      await graphFetch(`/sites/${siteId}/lists/${listId}/items`, token, {
+      if (nonCollection.semana) payload.Title = nonCollection.semana;
+      if (nonCollection.rota) payload.Rota = nonCollection.rota;
+      if (nonCollection.data) payload.Data = parseDateForSharePoint(nonCollection.data);
+      if (nonCollection.codigo) payload.C_x00f3_digo = nonCollection.codigo;
+      if (nonCollection.produtor) payload.Produtor = nonCollection.produtor;
+      if (nonCollection.motivo) payload.Motivo = nonCollection.motivo;
+      if (nonCollection.observacao) payload.Observa_x00e7__x00e3_o = nonCollection.observacao;
+      if (nonCollection.acao) payload.A_x00e7__x00e3_o = nonCollection.acao;
+      if (nonCollection.dataAcao) payload.DataA_x00e7__x00e3_o = parseDateForSharePoint(nonCollection.dataAcao);
+      if (nonCollection.ultimaColeta) payload._x00da_ltimaColeta = parseDateForSharePoint(nonCollection.ultimaColeta);
+      if (nonCollection.culpabilidade) payload.Culpabilidade = nonCollection.culpabilidade;
+      if (nonCollection.operacao) payload.Opera_x00e7__x00e3_o = nonCollection.operacao;
+
+      console.log('[NonCollections] Salvando payload:', JSON.stringify(payload));
+
+      const response = await graphFetch(`/sites/${siteId}/lists/${listId}/items`, token, {
         method: 'POST',
         body: JSON.stringify({ fields: payload })
       });
 
-      console.log('[NonCollections] ✅ Não coleta salva com sucesso');
+      const spId = response.id?.toString();
+      console.log('[NonCollections] ✅ Não coleta salva com sucesso, ID:', spId);
+      return spId;
     } catch (e: any) {
       console.error('[NonCollections] Erro ao salvar não coleta:', e.message);
+      throw e;
+    }
+  },
+
+  /**
+   * Atualiza não coleta existente na lista do SharePoint
+   * Lista: Dados_Nao_Coletas (ID: 83e8cfb9-1982-47ae-b515-3fec112da457)
+   */
+  async updateNonCollection(token: string, nonCollection: NonCollection): Promise<void> {
+    try {
+      const siteId = await getResolvedSiteId(token);
+      const listId = '83e8cfb9-1982-47ae-b515-3fec112da457';
+
+      const payload = {
+        Title: nonCollection.semana || '',
+        Rota: nonCollection.rota || '',
+        Data: nonCollection.data ? parseDateForSharePoint(nonCollection.data) : '',
+        C_x00f3_digo: nonCollection.codigo || '',
+        Produtor: nonCollection.produtor || '',
+        Motivo: nonCollection.motivo || '',
+        Observa_x00e7__x00e3_o: nonCollection.observacao || '',
+        A_x00e7__x00e3_o: nonCollection.acao || '',
+        DataA_x00e7__x00e3_o: nonCollection.dataAcao ? parseDateForSharePoint(nonCollection.dataAcao) : '',
+        _x00da_ltimaColeta: nonCollection.ultimaColeta ? parseDateForSharePoint(nonCollection.ultimaColeta) : '',
+        Culpabilidade: nonCollection.culpabilidade || '',
+        Opera_x00e7__x00e3_o: nonCollection.operacao || ''
+      };
+
+      await graphFetch(`/sites/${siteId}/lists/${listId}/items/${nonCollection.id}`, token, {
+        method: 'PATCH',
+        body: JSON.stringify({ fields: payload })
+      });
+
+      console.log('[NonCollections] ✅ Não coleta atualizada com sucesso:', nonCollection.rota, '-', nonCollection.codigo);
+    } catch (e: any) {
+      console.error('[NonCollections] Erro ao atualizar não coleta:', e.message);
       throw e;
     }
   }

@@ -317,6 +317,10 @@ const RouteDepartureView: React.FC<{
   // Estado para alertas de rotas com histórico de problemas
   const [routeAlerts, setRouteAlerts] = useState<Record<string, { count: number; history: RouteDeparture[] }>>({});
   const [selectedRouteAlert, setSelectedRouteAlert] = useState<{ rota: string; history: RouteDeparture[] } | null>(null);
+
+  // Estado para modal de aviso quando tentar adicionar rota com filtros/ordenação ativos
+  const [isFilterBlockModalOpen, setIsFilterBlockModalOpen] = useState(false);
+  const [filterBlockReason, setFilterBlockReason] = useState<'single' | 'bulk' | 'ghost'>('ghost');
   
   // Estados para filtros do histórico
   const [historyColFilters, setHistoryColFilters] = useState<Record<string, string[]>>({});
@@ -1638,6 +1642,16 @@ const RouteDepartureView: React.FC<{
         return;
     }
 
+    // BLOQUEIO: Não permite criar rotas em massa se há filtros ou ordenação ativos
+    if (hasActiveFiltersOrSort) {
+        console.warn('[BULK_CREATE_BLOCKED] Filtros ou ordenação ativos');
+        setFilterBlockReason('bulk');
+        setIsBulkMappingModalOpen(false);
+        setPendingBulkRoutes([]);
+        setIsFilterBlockModalOpen(true);
+        return;
+    }
+
     const token = await getAccessToken();
     const total = pendingBulkRoutes.length;
     setIsBulkMappingModalOpen(false);
@@ -1780,6 +1794,16 @@ const RouteDepartureView: React.FC<{
         // Se é campo 'rota' e tem valor, abre popup de mapeamento SEMPRE
         if (field === 'rota' && value !== "" && value.trim() !== "") {
             console.log('[GHOST_ROTA] Buscando mapeamento para:', value, 'Mappings disponíveis:', routeMappings.map(m => m.Title));
+            
+            // BLOQUEIO: Não permite adicionar rota se há filtros ou ordenação ativos
+            if (hasActiveFiltersOrSort) {
+                console.warn('[GHOST_ROTA] Bloqueado - filtros ou ordenação ativos');
+                setFilterBlockReason('ghost');
+                setGhostRow({ id: 'ghost', rota: '', data: getRouteDateForCurrentTime(), inicio: '', saida: '', motorista: '', placa: '', statusGeral: '', aviso: 'NÃO', operacao: '', statusOp: 'Previsto', tempo: '' });
+                setIsFilterBlockModalOpen(true);
+                return;
+            }
+            
             const mapping = routeMappings.find(m => m.Title === value);
             if (mapping) {
                 // Já tem mapeamento, aplica diretamente
@@ -2366,6 +2390,18 @@ const RouteDepartureView: React.FC<{
     return isDarkMode ? "bg-slate-800 border-l-4 border-transparent" : "bg-white border-l-4 border-transparent text-slate-800";
   };
 
+  // Verifica se há filtros ou ordenação ativos (para bloquear adição de rotas)
+  const hasActiveFiltersOrSort = useMemo(() => {
+    // Verifica se há filtros de texto ativos
+    const hasTextFilters = Object.values(colFilters).some(val => val && val.length > 0);
+    // Verifica se há filtros de seleção ativos
+    const hasSelectionFilters = Object.values(selectedFilters).some(vals => vals && vals.length > 0);
+    // Verifica se ordenação por data/horário está ativada
+    const hasSortEnabled = isSortByTimeEnabled;
+
+    return hasTextFilters || hasSelectionFilters || hasSortEnabled;
+  }, [colFilters, selectedFilters, isSortByTimeEnabled]);
+
   const filteredRoutes = useMemo(() => {
     // Mapeia o nome da coluna para o campo real no objeto RouteDeparture
     const fieldMap: Record<string, string> = {
@@ -2521,7 +2557,19 @@ const RouteDepartureView: React.FC<{
             {isDarkMode ? <Sun size={18} /> : <Moon size={18} />}
           </button>
           <button onClick={() => setIsSortByTimeEnabled(!isSortByTimeEnabled)} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] transition-all shadow-sm ${isSortByTimeEnabled ? 'bg-primary-600 text-white border-primary-600' : isDarkMode ? 'bg-slate-800 text-slate-300 border-slate-700' : 'bg-white text-slate-800 border-slate-400 hover:bg-slate-50 hover:border-slate-500'}`}><SortAsc size={16} /> Horário</button>
-          <button onClick={() => setIsAddRouteModalOpen(true)} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] tracking-wide transition-all shadow-sm ${isDarkMode ? 'bg-slate-800 text-slate-300 hover:bg-slate-700 border-slate-700' : 'bg-white text-slate-800 hover:bg-slate-50 hover:border-slate-500 border-slate-400'}`}><CheckCircle2 size={16} /> Adicionar Rota</button>
+          <button
+            onClick={() => {
+              if (hasActiveFiltersOrSort) {
+                setFilterBlockReason('single');
+                setIsFilterBlockModalOpen(true);
+              } else {
+                setIsAddRouteModalOpen(true);
+              }
+            }}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] tracking-wide transition-all shadow-sm ${isDarkMode ? 'bg-slate-800 text-slate-300 hover:bg-slate-700 border-slate-700' : 'bg-white text-slate-800 hover:bg-slate-50 hover:border-slate-500 border-slate-400'}`}
+          >
+            <CheckCircle2 size={16} /> Adicionar Rota
+          </button>
           <button onClick={() => setIsHistoryModalOpen(true)} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] tracking-wide transition-all shadow-sm ${isDarkMode ? 'bg-slate-800 text-slate-300 hover:bg-slate-700 border-slate-700' : 'bg-white text-slate-800 hover:bg-slate-50 hover:border-slate-500 border-slate-400'}`}><Database size={16} /> Histórico</button>
           <button onClick={handleArchiveAll} disabled={isSyncing || filteredRoutes.length === 0} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] tracking-wide transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed ${isDarkMode ? 'bg-slate-800 text-slate-300 hover:bg-slate-700 border-slate-700' : 'bg-white text-slate-800 hover:bg-slate-50 hover:border-slate-500 border-slate-400'}`}><Archive size={16} /> Arquivar</button>
         </div>
@@ -3327,6 +3375,98 @@ const RouteDepartureView: React.FC<{
                   <button onClick={() => { setIsMappingModalOpen(false); setGhostRow(prev => ({...prev, rota: ''})); }} className="w-full mt-6 py-4 text-[10px] font-black uppercase text-slate-400">Cancelar</button>
               </div>
           </div>
+      )}
+
+      {/* Modal de Bloqueio - Filtros/Ordenação Ativos */}
+      {isFilterBlockModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[250] flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-[2.5rem] shadow-2xl w-full max-w-lg">
+            <div className="bg-gradient-to-r from-amber-500 to-orange-500 p-6 flex justify-between items-center text-white">
+              <div className="flex items-center gap-3">
+                <AlertTriangle size={28} />
+                <h3 className="font-black uppercase tracking-widest text-base">Atenção</h3>
+              </div>
+              <button
+                onClick={() => setIsFilterBlockModalOpen(false)}
+                className="p-2 hover:bg-white/20 rounded-lg transition-colors"
+              >
+                <X size={24} />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="flex items-start gap-4">
+                <div className="w-14 h-14 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center shrink-0">
+                  <Filter size={28} className="text-amber-600 dark:text-amber-400" />
+                </div>
+                <div className="flex-1">
+                  <h4 className="text-sm font-black uppercase text-slate-800 dark:text-white mb-2">
+                    {filterBlockReason === 'single' && 'Adição de Rota Bloqueada'}
+                    {filterBlockReason === 'bulk' && 'Criação em Lote Bloqueada'}
+                    {filterBlockReason === 'ghost' && 'Criação de Rota Bloqueada'}
+                  </h4>
+                  <p className="text-xs text-slate-600 dark:text-slate-300 font-medium leading-relaxed">
+                    {filterBlockReason === 'single' && 'O botão "Adicionar Rota" está desabilitado porque há filtros ou ordenação ativos.'}
+                    {filterBlockReason === 'bulk' && 'A criação de múltiplas rotas foi bloqueada porque há filtros ou ordenação ativos.'}
+                    {filterBlockReason === 'ghost' && 'A criação automática de rota foi bloqueada porque há filtros ou ordenação ativos.'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-xl p-4">
+                <p className="text-[10px] font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wide mb-3">
+                  Filtros/Ordenação detectados:
+                </p>
+                <div className="space-y-2">
+                  {Object.values(colFilters).some(val => val && val.length > 0) && (
+                    <div className="flex items-center gap-2 text-xs text-red-600 dark:text-red-400">
+                      <X size={14} className="shrink-0" />
+                      <span className="font-medium">Filtros de texto ativos nas colunas</span>
+                    </div>
+                  )}
+                  {Object.values(selectedFilters).some(vals => vals && vals.length > 0) && (
+                    <div className="flex items-center gap-2 text-xs text-red-600 dark:text-red-400">
+                      <X size={14} className="shrink-0" />
+                      <span className="font-medium">Filtros de seleção ativos nas colunas</span>
+                    </div>
+                  )}
+                  {isSortByTimeEnabled && (
+                    <div className="flex items-center gap-2 text-xs text-red-600 dark:text-red-400">
+                      <X size={14} className="shrink-0" />
+                      <span className="font-medium">Ordenação por Horário ativada</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl p-4">
+                <p className="text-[10px] font-bold text-amber-700 dark:text-amber-300 uppercase tracking-wide mb-3">
+                  Como liberar:
+                </p>
+                <ul className="text-[11px] font-medium text-amber-800 dark:text-amber-200 space-y-2">
+                  <li className="flex items-start gap-2">
+                    <span className="bg-amber-200 dark:bg-amber-800 text-amber-800 dark:text-amber-200 w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-black shrink-0">1</span>
+                    <span>Clique nos ícones amarelos de filtro no cabeçalho da tabela e limpe os filtros</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="bg-amber-200 dark:bg-amber-800 text-amber-800 dark:text-amber-200 w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-black shrink-0">2</span>
+                    <span>Clique no botão "HORÁRIO" para desativar a ordenação por data/horário</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="bg-amber-200 dark:bg-amber-800 text-amber-800 dark:text-amber-200 w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-black shrink-0">3</span>
+                    <span>Tente adicionar a rota novamente</span>
+                  </li>
+                </ul>
+              </div>
+
+              <button
+                onClick={() => setIsFilterBlockModalOpen(false)}
+                className="w-full py-4 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white rounded-xl font-black uppercase text-xs tracking-wider transition-all shadow-lg shadow-amber-500/20"
+              >
+                Entendi, vou remover os filtros
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Modal de Adicionar Rota */}
