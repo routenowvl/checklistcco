@@ -261,6 +261,9 @@ const RouteDepartureView: React.FC<{
   const [selectedOperacaoConfig, setSelectedOperacaoConfig] = useState<string>('');
   const [configEnvio, setConfigEnvio] = useState<string>('');
   const [configCopia, setConfigCopia] = useState<string>('');
+
+  // Estado para filtro de email - busca email em todas as operações
+  const [emailFilter, setEmailFilter] = useState<string>('');
   const [isSavingConfig, setIsSavingConfig] = useState(false);
 
   // Funções auxiliares para manipular emails
@@ -286,6 +289,59 @@ const RouteDepartureView: React.FC<{
     const emails = parseEmails(currentText);
     const filtered = emails.filter(e => e !== emailToRemove);
     return formatEmails(filtered);
+  };
+
+  // Busca um email em todas as operações (campos Envio e Copia)
+  const findEmailInAllOperations = (email: string): { operacao: string; nomeExibicao: string; campo: 'Envio' | 'Copia' }[] => {
+    if (!email.trim()) return [];
+    const results: { operacao: string; nomeExibicao: string; campo: 'Envio' | 'Copia' }[] = [];
+    userConfigs.forEach(config => {
+      const emailsEnvio = parseEmails(config.Envio || '');
+      const emailsCopia = parseEmails(config.Copia || '');
+      if (emailsEnvio.includes(email.trim().toLowerCase()) || emailsEnvio.includes(email.trim())) {
+        results.push({ operacao: config.operacao, nomeExibicao: config.nomeExibicao, campo: 'Envio' });
+      }
+      if (emailsCopia.includes(email.trim().toLowerCase()) || emailsCopia.includes(email.trim())) {
+        results.push({ operacao: config.operacao, nomeExibicao: config.nomeExibicao, campo: 'Copia' });
+      }
+    });
+    return results;
+  };
+
+  // Remove um email de uma operação específica (Envio ou Copia)
+  const removeEmailFromOperation = async (operacao: string, campo: 'Envio' | 'Copia', email: string) => {
+    const token = await getValidToken();
+    if (!token) return;
+
+    try {
+      const config = userConfigs.find(c => c.operacao === operacao);
+      if (!config) return;
+
+      const currentValue = campo === 'Envio' ? (config.Envio || '') : (config.Copia || '');
+      const newValue = removeEmail(currentValue, email);
+
+      await SharePointService.updateRouteConfigEmails(
+        token,
+        operacao,
+        campo === 'Envio' ? newValue : (config.Envio || ''),
+        campo === 'Copia' ? newValue : (config.Copia || '')
+      );
+
+      // Atualiza estado local
+      setUserConfigs(prev => prev.map(c =>
+        c.operacao === operacao
+          ? { ...c, [campo]: newValue }
+          : c
+      ));
+
+      // Se a operação atual do modal foi afetada, atualiza os campos
+      if (operacao === selectedOperacaoConfig) {
+        if (campo === 'Envio') setConfigEnvio(newValue);
+        else setConfigCopia(newValue);
+      }
+    } catch (err: any) {
+      console.error(`[EMAIL_FILTER] Erro ao remover email de ${operacao} (${campo}):`, err.message);
+    }
   };
 
   // Estado para o popup de edição do checklist (GERAL)
@@ -4494,7 +4550,85 @@ const RouteDepartureView: React.FC<{
             </div>
 
             <div className="p-6 bg-slate-50 dark:bg-slate-950 overflow-y-auto flex-1 scrollbar-thin">
-              <div className="space-y-4">
+              <div className="space-y-6">
+                {/* 🔍 Filtro por Email - busca email em todas as operações */}
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Filter size={16} className="text-blue-500" />
+                    <label className="text-[10px] font-black uppercase text-slate-400">Buscar Email em Todas as Operações</label>
+                  </div>
+                  <input
+                    type="email"
+                    value={emailFilter}
+                    onChange={(e) => setEmailFilter(e.target.value)}
+                    placeholder="Digite um email para buscar..."
+                    className="w-full p-4 border border-slate-200 dark:border-slate-700 rounded-2xl bg-white dark:bg-slate-900 text-sm font-bold outline-none dark:text-white shadow-sm focus:ring-2 focus:ring-blue-500"
+                  />
+
+                  {/* Resultados da busca */}
+                  {emailFilter.trim().length > 0 && (
+                    <div className="space-y-2">
+                      {(() => {
+                        const results = findEmailInAllOperations(emailFilter.trim());
+                        if (results.length === 0) {
+                          return (
+                            <div className="p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-2xl text-center">
+                              <p className="text-sm font-bold text-amber-600 dark:text-amber-400">
+                                Email não encontrado em nenhuma operação
+                              </p>
+                            </div>
+                          );
+                        }
+
+                        return (
+                          <div className="space-y-2">
+                            <p className="text-[10px] font-black uppercase text-slate-400">
+                              Encontrado em {results.length} operação(ões):
+                            </p>
+                            {results.map((result, index) => (
+                              <div
+                                key={`${result.operacao}-${result.campo}-${index}`}
+                                className="flex items-center justify-between p-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-sm"
+                              >
+                                <div className="flex items-center gap-3 flex-1 min-w-0">
+                                  <div className="flex flex-col flex-1 min-w-0">
+                                    <span className="text-sm font-bold dark:text-white truncate">
+                                      {result.nomeExibicao}
+                                    </span>
+                                    <span className="text-[10px] font-bold uppercase text-slate-400">
+                                      {emailFilter.trim()}
+                                    </span>
+                                  </div>
+                                  <span className={`inline-flex px-2 py-1 rounded-full text-[9px] font-black uppercase tracking-wide ${
+                                    result.campo === 'Envio'
+                                      ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800'
+                                      : 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800'
+                                  }`}>
+                                    {result.campo === 'Envio' ? '📤 Envio' : '📋 Cópia'}
+                                  </span>
+                                </div>
+                                <button
+                                  onClick={async () => {
+                                    await removeEmailFromOperation(result.operacao, result.campo, emailFilter.trim());
+                                    // Não limpa o filtro para permitir ver o resultado da remoção
+                                  }}
+                                  className="ml-3 p-2 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-full transition-colors group"
+                                  title={`Remover email de ${result.nomeExibicao} (${result.campo})`}
+                                >
+                                  <X size={14} className="text-red-500 group-hover:text-red-700 dark:group-hover:text-red-400" />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
+                </div>
+
+                {/* Separador */}
+                <div className="border-t border-slate-200 dark:border-slate-700"></div>
+
                 {/* Seleção de Operação */}
                 <div className="space-y-2">
                   <label className="text-[10px] font-black uppercase text-slate-400">Operação</label>
