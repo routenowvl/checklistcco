@@ -2,7 +2,7 @@
 // @google/genai guidelines: Use direct process.env.API_KEY, no UI for keys, use correct model names.
 // Correct models: 'gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-2.5-flash-image', etc.
 
-import { SPTask, SPOperation, SPStatus, Task, OperationStatus, HistoryRecord, RouteDeparture, RouteOperationMapping, RouteConfig, NonCollection } from '../types';
+import { SPTask, SPOperation, SPStatus, Task, OperationStatus, HistoryRecord, RouteDeparture, RouteOperationMapping, RouteConfig, NonCollection, ColetaPrevista } from '../types';
 import { getBrazilDate, getBrazilISOString, getWeekString } from '../utils/dateUtils';
 
 export interface DailyWarning {
@@ -418,7 +418,8 @@ export const SharePointService = {
             Envio: String(f[resolveFieldName(mapping, 'Envio')] || ""), // Emails para envio principal
             Copia: String(f[resolveFieldName(mapping, 'Copia')] || ""), // Emails para cópia
             UltimoEnvioResumoSaida: String(f[resolveFieldName(mapping, 'UltimoEnvioResumoSaida')] || ""), // Último envio de resumo
-            StatusResumoSaida: String(f[resolveFieldName(mapping, 'StatusResumoSaida')] || "") // Status do resumo
+            StatusResumoSaida: String(f[resolveFieldName(mapping, 'StatusResumoSaida')] || ""), // Status do resumo
+            CodigoKmm: String(f[resolveFieldName(mapping, 'CodigoKmm')] || "") // Código KMM da operação
           };
           console.log('[DEBUG_SHAREPOINT] Config item:', {
             operacao: config.operacao,
@@ -427,6 +428,7 @@ export const SharePointService = {
             Status: config.Status,
             Envio: config.Envio,
             Copia: config.Copia,
+            CodigoKmm: config.CodigoKmm,
             UltimoEnvioResumoSaida: config.UltimoEnvioResumoSaida,
             StatusResumoSaida: config.StatusResumoSaida
           });
@@ -748,7 +750,7 @@ export const SharePointService = {
   async getDepartures(token: string, forceRefresh: boolean = false): Promise<RouteDeparture[]> {
     try {
       const cacheKey = 'departures';
-      
+
       // Se forceRefresh for true, limpa o cache antes de buscar
       if (forceRefresh) {
         clearCache(cacheKey);
@@ -760,16 +762,30 @@ export const SharePointService = {
       const siteId = await getResolvedSiteId(token);
       const list = await findListByIdOrName(siteId, 'Dados_Saida_de_rotas', token);
       const { mapping } = await getListColumnMapping(siteId, list.id, token);
-      
+
       // Adiciona timestamp para evitar cache do browser
       const timestamp = Date.now();
-      const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&t=${timestamp}`, token);
 
-      const result = (data.value || []).map((item: any) => {
+      console.log('[GET_DEPARTURES] Buscando todas as rotas com paginação...');
+
+      // Busca todos os itens com paginação (SharePoint retorna max ~200 por página)
+      let allItems: any[] = [];
+      let nextUrl: string | null = `/sites/${siteId}/lists/${list.id}/items?expand=fields&$top=100&t=${timestamp}`;
+
+      while (nextUrl) {
+        const data = await graphFetch(nextUrl, token);
+        allItems = allItems.concat(data.value || []);
+        nextUrl = data['@odata.nextLink'] || null;
+        console.log(`[GET_DEPARTURES] Página carregada. Total acumulado: ${allItems.length}`);
+      }
+
+      console.log(`[GET_DEPARTURES] Total de rotas carregadas: ${allItems.length}`);
+
+      const result = allItems.map((item: any) => {
         const f = item.fields;
         const dataStr = f[resolveFieldName(mapping, 'DataOperacao')] ? f[resolveFieldName(mapping, 'DataOperacao')].split('T')[0] : "";
         const semanaFromSharePoint = f[resolveFieldName(mapping, 'Semana')] || "";
-        
+
         return {
           id: String(item.id),
           semana: semanaFromSharePoint || getWeekString(dataStr), // Calcula se não vier do SharePoint
@@ -1485,6 +1501,230 @@ export const SharePointService = {
       console.error('[NonCollections] Erro ao excluir não coleta:', e.message);
       throw e;
     }
+  },
+
+  /**
+   * Busca não coletas arquivadas no histórico.
+   * Lista: nao_coletas_web_hist (ID: 1702fe62-6a47-4fd1-b935-0e3258073bb6)
+   */
+  async getArchivedNonCollections(token: string, userEmail: string, startDate: string, endDate: string): Promise<NonCollection[]> {
+    try {
+      const siteId = await getResolvedSiteId(token);
+      const historyListId = '1702fe62-6a47-4fd1-b935-0e3258073bb6';
+      const { mapping } = await getListColumnMapping(siteId, historyListId, token);
+
+      const colData = resolveFieldName(mapping, 'Data');
+      const colOp = resolveFieldName(mapping, 'Operação');
+
+      let filter = `fields/${colData} ge '${startDate}T00:00:00Z' and fields/${colData} le '${endDate}T23:59:59Z'`;
+
+      console.log(`[NC_ARCHIVE_QUERY] URL: /sites/${siteId}/lists/${historyListId}/items Filter: ${filter}`);
+
+      // Busca todos os itens com paginação
+      let allItems: any[] = [];
+      let nextUrl: string | null = `/sites/${siteId}/lists/${historyListId}/items?expand=fields&$filter=${filter}&$top=100`;
+
+      while (nextUrl) {
+        const data = await graphFetch(nextUrl, token);
+        allItems = allItems.concat(data.value || []);
+        nextUrl = data['@odata.nextLink'] || null;
+        console.log(`[NC_ARCHIVE_QUERY] Página carregada. Total acumulado: ${allItems.length}`);
+      }
+
+      const results = allItems.map((item: any) => {
+        const f = item.fields;
+        const dataStr = f[colData] ? f[colData].split('T')[0] : "";
+        const ultimaColetaStr = f[resolveFieldName(mapping, 'ÚltimaColeta')] ? f[resolveFieldName(mapping, 'ÚltimaColeta')].split('T')[0] : "";
+        const dataAcaoStr = f[resolveFieldName(mapping, 'DataAção')] ? f[resolveFieldName(mapping, 'DataAção')].split('T')[0] : "";
+
+        // "Semana" é mapeada para LinkTitle que é computado (= Title/Rota).
+        // Calculamos a semana a partir da data real.
+        const semanaCalc = dataStr ? getWeekString(dataStr) : "";
+
+        return {
+          id: String(item.id),
+          semana: semanaCalc,
+          rota: f[resolveFieldName(mapping, 'Rota')] || f.Title || "",
+          data: dataStr,
+          codigo: f[resolveFieldName(mapping, 'Código')] || "",
+          produtor: f[resolveFieldName(mapping, 'Produtor')] || "",
+          motivo: f[resolveFieldName(mapping, 'Motivo')] || "",
+          observacao: f[resolveFieldName(mapping, 'Observação')] || "",
+          acao: f[resolveFieldName(mapping, 'Ação')] || "",
+          dataAcao: dataAcaoStr,
+          ultimaColeta: ultimaColetaStr,
+          Culpabilidade: f[resolveFieldName(mapping, 'Culpabilidade')] || "",
+          operacao: f[colOp] || ""
+        };
+      });
+
+      console.log(`[NC_ARCHIVE_QUERY] Search success. Found ${results.length} records.`);
+      return results;
+    } catch (e: any) {
+      console.error("[NC_ARCHIVE_FETCH_ERROR] Error fetching archived non-collections:", e.message);
+      throw e;
+    }
+  },
+
+  /**
+   * Busca coletas previstas da lista Coletas_previstas_cco.
+   * Filtra por data e retorna operação + quantidade.
+   */
+  async getColetasPrevistas(token: string, date: string, userEmail: string): Promise<ColetaPrevista[]> {
+    try {
+      const cacheKey = `coletasPrevistas_${date}_${userEmail}`;
+      const cached = getCachedData<ColetaPrevista[]>(cacheKey);
+      if (cached) return cached;
+
+      const siteId = await getResolvedSiteId(token);
+      const list = await findListByIdOrName(siteId, 'Coletas_previstas_cco', token);
+      const { mapping } = await getListColumnMapping(siteId, list.id, token);
+
+      // Data em formato ISO para filtro
+      const startISO = `${date}T00:00:00Z`;
+      const endISO = `${date}T23:59:59Z`;
+      const colData = resolveFieldName(mapping, 'Data');
+
+      const filter = `fields/${colData} ge '${startISO}' and fields/${colData} le '${endISO}'`;
+      console.log(`[COLETAS_PREVISTAS] URL: /sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}`);
+      const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}&$top=999`, token);
+
+      console.log(`[COLETAS_PREVISTAS] Raw data count: ${data.value?.length || 0}`);
+      if (data.value?.length > 0) {
+        console.log(`[COLETAS_PREVISTAS] Primeiro item raw:`, JSON.stringify(data.value[0], null, 2));
+      }
+
+      // Busca configurações do usuário para filtrar pelas operações dele
+      const userConfigs = await this.getRouteConfigs(token, userEmail, false);
+      const myOps = new Set(userConfigs.map(c => c.operacao));
+
+      console.log(`[COLETAS_PREVISTAS] Operações do usuário (${userEmail}):`, Array.from(myOps));
+
+      const result = (data.value || [])
+        .map((item: any): ColetaPrevista => {
+          const f = item.fields;
+          const dataRaw = f[colData];
+          const dataISO = dataRaw ? (dataRaw.includes('T') ? dataRaw : `${dataRaw}T12:00:00Z`) : '';
+
+          return {
+            id: String(item.id),
+            Title: f.Title || '',
+            QntColeta: Number(f[resolveFieldName(mapping, 'QntColeta')] || 0),
+            Data: dataISO
+          };
+        });
+
+      console.log(`[COLETAS_PREVISTAS] Antes do filtro:`, result.map(c => `${c.Title}=${c.QntColeta}`));
+
+      const filtered = result.filter(c => myOps.size === 0 || myOps.has(c.Title));
+
+      console.log(`[COLETAS_PREVISTAS] Depois do filtro:`, filtered.map(c => `${c.Title}=${c.QntColeta}`));
+      console.log(`[COLETAS_PREVISTAS] Total: ${filtered.length}, Soma QntColeta: ${filtered.reduce((sum, c) => sum + c.QntColeta, 0)}`);
+
+      setCachedData(cacheKey, filtered);
+      return filtered;
+    } catch (e: any) {
+      console.error('[COLETAS_PREVISTAS] Erro ao buscar:', e.message);
+      return [];
+    }
+  },
+
+  /**
+   * Move não coletas para a lista de histórico permanente.
+   * Lista origem: Dados_Nao_Coletas (ID: 83e8cfb9-1982-47ae-b515-3fec112da457)
+   * Lista destino: nao_coletas_web_hist (ID: 1702fe62-6a47-4fd1-b935-0e3258073bb6)
+   */
+  async moveNonCollectionsToHistory(token: string, items: NonCollection[]): Promise<{ success: number, failed: number, lastError?: string }> {
+    console.log(`[NC_ARCHIVE_START] Starting migration of ${items.length} items to permanent history.`);
+    const siteId = await getResolvedSiteId(token);
+    const sourceListId = '83e8cfb9-1982-47ae-b515-3fec112da457';
+    const historyListId = '1702fe62-6a47-4fd1-b935-0e3258073bb6';
+    const { mapping: histMapping, internalNames: histInternals } = await getListColumnMapping(siteId, historyListId, token);
+
+    console.log('[NC_ARCHIVE] histMapping:', histMapping);
+    console.log('[NC_ARCHIVE] histInternals:', Array.from(histInternals));
+
+    // Função segura para converter data DD/MM/YYYY ou YYYY-MM-DD para ISO
+    const safeToISO = (dateStr: string | undefined): string | null => {
+      if (!dateStr || dateStr.trim() === '') return null;
+      // Já está em formato YYYY-MM-DD
+      if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+        return dateStr + 'T12:00:00Z';
+      }
+      // Formato DD/MM/YYYY
+      if (/^\d{2}\/\d{2}\/\d{4}$/.test(dateStr)) {
+        const [d, m, y] = dateStr.split('/');
+        return `${y}-${m}-${d}T12:00:00Z`;
+      }
+      // Tenta parse genérico
+      const parsed = new Date(dateStr);
+      if (isNaN(parsed.getTime())) return null;
+      return parsed.toISOString();
+    };
+
+    let successCount = 0;
+    let failedCount = 0;
+    let lastErrorMessage = "";
+
+    for (const item of items) {
+      try {
+        const semana = item.semana || getWeekString(item.data);
+
+        // Tenta resolver cada campo usando o mapping
+        const fieldMap: Record<string, any> = {
+          Semana: semana,
+          Rota: item.rota,
+          Data: safeToISO(item.data),
+          'Código': item.codigo,
+          Produtor: item.produtor,
+          Motivo: item.motivo,
+          'Observação': item.observacao,
+          Ação: item.acao,
+          'DataAção': safeToISO(item.dataAcao),
+          'ÚltimaColeta': safeToISO(item.ultimaColeta),
+          Culpabilidade: item.Culpabilidade,
+          'Operação': item.operacao
+        };
+
+        // Campos read-only que NÃO podem ser escritos via Graph API
+        const readOnlyFields = new Set([
+          'LinkTitle', 'LinkTitleNoMenu', 'ID', 'ContentType', 'Modified', 'Created',
+          'Author', 'Editor', '_UIVersionString', 'Attachments', 'Edit', 'DocIcon',
+          'ItemChildCount', 'FolderChildCount', '_ComplianceFlags', '_ComplianceTag',
+          '_ComplianceTagWrittenTime', '_ComplianceTagUserId', '_IsRecord', 'AppAuthor',
+          'AppEditor', 'Title'
+        ]);
+
+        const histFields: any = { Title: item.rota };
+        Object.entries(fieldMap).forEach(([displayName, value]) => {
+          const intName = resolveFieldName(histMapping, displayName);
+          console.log(`[NC_ARCHIVE] resolveFieldName("${displayName}") -> "${intName}" | readOnly: ${readOnlyFields.has(intName)}`);
+          if (intName && histInternals.has(intName) && !readOnlyFields.has(intName)) {
+            histFields[intName] = value;
+          }
+        });
+
+        console.log('[NC_ARCHIVE] histFields final:', histFields);
+
+        const postRes = await graphFetch(`/sites/${siteId}/lists/${historyListId}/items`, token, { method: 'POST', body: JSON.stringify({ fields: histFields }) });
+        console.log('[NC_ARCHIVE] POST result:', postRes);
+        if (postRes && postRes.id) {
+          await graphFetch(`/sites/${siteId}/lists/${sourceListId}/items/${item.id}`, token, { method: 'DELETE' });
+          successCount++;
+          console.log(`[NC_ARCHIVE] ✅ Item ${item.id} arquivado com sucesso`);
+        } else {
+          failedCount++;
+          lastErrorMessage = "Failed to confirm archived NC ID.";
+          console.error('[NC_ARCHIVE] ❌ Falha ao confirmar ID arquivado:', postRes);
+        }
+      } catch (err: any) {
+        failedCount++;
+        lastErrorMessage = err.message;
+        console.error(`[NC_ARCHIVE] ❌ Erro ao arquivar item ${item.id}:`, err.message);
+      }
+    }
+    console.log(`[NC_ARCHIVE] Final: success=${successCount}, failed=${failedCount}`);
+    return { success: successCount, failed: failedCount, lastError: lastErrorMessage };
   }
 };
 

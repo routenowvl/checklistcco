@@ -81,6 +81,7 @@ export interface RouteConfig {
   Copia?: string; // Emails para cópia (separados por ";")
   UltimoEnvioResumoSaida?: string; // Último envio de resumo
   StatusResumoSaida?: string; // Status do resumo: "OK", "Atualizar" ou vazio
+  CodigoKmm?: string; // Código KMM da operação para busca de coletas previstas
 }
 
 export interface SPTask {
@@ -114,6 +115,13 @@ export interface NonCollection {
   ultimaColeta: string;
   Culpabilidade: string;
   operacao: string;
+}
+
+export interface ColetaPrevista {
+  id: string;
+  Title: string; // Operação (ex: BE, BRQ-TP, DEALE, etc.)
+  QntColeta: number; // Quantidade de coleta
+  Data: string; // Data ISO
 }
 
 export interface SPStatus {

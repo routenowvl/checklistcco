@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { RouteConfig, User } from '../types';
+import { RouteConfig, User, ColetaPrevista } from '../types';
 import { SharePointService } from '../services/sharepointService';
 import { getValidToken } from '../services/tokenService';
 import * as XLSX from 'xlsx';
@@ -82,6 +82,7 @@ const NonCollectionsView: React.FC<{
   currentUser: User;
 }> = ({ currentUser }) => {
   const [nonCollections, setNonCollections] = useState<NonCollection[]>([]);
+  const [coletasPrevistas, setColetasPrevistas] = useState<ColetaPrevista[]>([]);
   const [userConfigs, setUserConfigs] = useState<RouteConfig[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isDarkMode, setIsDarkMode] = useState(() => {
@@ -159,6 +160,18 @@ const NonCollectionsView: React.FC<{
   // Estados para modal de seleção de Operação (bulk paste)
   const [isOperationModalOpen, setIsOperationModalOpen] = useState(false);
   const [pendingBulkRoutes, setPendingBulkRoutes] = useState<string[]>([]);
+
+  // Estados para arquivamento e histórico
+  const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
+  const [histStart, setHistStart] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 7);
+    return d.toISOString().split('T')[0];
+  });
+  const [histEnd, setHistEnd] = useState(() => new Date().toISOString().split('T')[0]);
+  const [archivedResults, setArchivedResults] = useState<NonCollection[]>([]);
+  const [isSearchingArchive, setIsSearchingArchive] = useState(false);
+  const [isArchiving, setIsArchiving] = useState(false);
 
   const updateGhostCell = (field: keyof NonCollection, value: string) => {
     const updatedGhost = { ...ghostRow, [field]: value };
@@ -448,6 +461,21 @@ const NonCollectionsView: React.FC<{
       console.log('[NonCollections] operações nos dados filtrados:', Array.from(new Set(filtered.map(r => r.operacao))));
 
       setNonCollections(filtered);
+
+      // Busca coletas previstas da data das não coletas
+      if (filtered.length > 0) {
+        // Pega a data da primeira não coleta (todas são da mesma data)
+        const dataNC = filtered[0].data;
+        const dataISO = dataNC ? dataNC.split('/').reverse().join('-') : getBrazilDate();
+        console.log('[COLETAS_PREVISTAS] Buscando para data:', dataISO);
+
+        const coletas = await SharePointService.getColetasPrevistas(token, dataISO, currentUser.email);
+        setColetasPrevistas(coletas);
+        console.log('[COLETAS_PREVISTAS] Total:', coletas.length, 'Soma QntColeta:', coletas.reduce((sum, c) => sum + c.QntColeta, 0));
+      } else {
+        setColetasPrevistas([]);
+      }
+
       console.log('[NonCollections] âœ… Dados carregados com sucesso');
     } catch (e: any) {
       console.error('[NonCollections] Erro ao carregar dados:', e.message);
@@ -564,6 +592,102 @@ const NonCollectionsView: React.FC<{
       console.error('[ADD_NON_COLLECTION] Error:', e);
       alert('Erro ao adicionar Não coleta');
     }
+  };
+
+  // ============================================================
+  // ARQUIVAR NÃO COLETAS
+  // ============================================================
+
+  const getAccessToken = async (): Promise<string> => {
+    return await getValidToken() || currentUser.accessToken || '';
+  };
+
+  const handleArchiveAll = async () => {
+    // VALIDAÇÃO CRÍTICA: Filtra apenas não coletas que pertencem às operações do usuário logado
+    const myOps = new Set(userConfigs.map(c => c.operacao));
+    const validNonCollections = nonCollections.filter(nc => !nc.operacao || myOps.has(nc.operacao));
+
+    if (validNonCollections.length === 0) {
+      alert("Não há não coletas das suas operações para arquivar.");
+      return;
+    }
+
+    if (!confirm(`Arquivar ${validNonCollections.length} não coleta(s) no histórico?`)) return;
+
+    const token = await getAccessToken();
+    setIsArchiving(true);
+
+    try {
+      console.log(`[NC_ARCHIVE] Movendo ${validNonCollections.length} itens para o histórico...`);
+      const archiveResult = await SharePointService.moveNonCollectionsToHistory(token, validNonCollections);
+      console.log(`[NC_ARCHIVE] Sucesso: ${archiveResult.success}, Falhas: ${archiveResult.failed}`);
+
+      // Recarregar dados com force refresh
+      await loadData(true);
+
+      alert(`${archiveResult.success} não coleta(s) arquivada(s) com sucesso!`);
+    } catch (e: any) {
+      console.error('[NC_ARCHIVE] Erro geral:', e.message);
+      alert(`Erro ao arquivar: ${e.message}`);
+    } finally {
+      setIsArchiving(false);
+    }
+  };
+
+  // ============================================================
+  // BUSCAR NO HISTÓRICO
+  // ============================================================
+
+  const handleSearchArchive = async () => {
+    setIsSearchingArchive(true);
+    try {
+      console.log('[NC_SEARCH_ARCHIVE] Requesting history from SharePoint list nao_coletas_web_hist...');
+      const results = await SharePointService.getArchivedNonCollections(await getAccessToken(), currentUser.email, histStart, histEnd);
+      console.log('[NC_SEARCH_ARCHIVE] Results received:', results.length);
+
+      const myOps = new Set(userConfigs.map(c => c.operacao));
+      const filtered = results && results.length > 0
+        ? results.filter(r => !myOps.size || myOps.has(r.operacao))
+        : [];
+
+      setArchivedResults(filtered);
+    } catch (err: any) {
+      console.error('[NC_SEARCH_ARCHIVE] Error during search:', err);
+      alert("Erro na busca: " + (err?.message || "Erro desconhecido ao acessar o SharePoint."));
+    } finally {
+      setIsSearchingArchive(false);
+    }
+  };
+
+  // Auto-busca quando o modal de histórico abre
+  useEffect(() => {
+    if (isHistoryModalOpen && userConfigs.length > 0) {
+      // NÃO faz auto-busca — usuário precisa filtrar manualmente
+      setArchivedResults([]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isHistoryModalOpen]);
+
+  // Estado para tela cheia no histórico
+  const [isHistoryFullscreen, setIsHistoryFullscreen] = useState(false);
+
+  // Função auxiliar para formatar data YYYY-MM-DD → DD/MM/YYYY
+  const formatDisplayDate = (dateStr: string | undefined): string => {
+    if (!dateStr || dateStr.trim() === '') return '-';
+    // Já está em formato DD/MM/YYYY
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(dateStr)) return dateStr;
+    // Formato YYYY-MM-DD
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+      const [y, m, d] = dateStr.split('-');
+      return `${d}/${m}/${y}`;
+    }
+    // Formato ISO com tempo
+    if (dateStr.includes('T')) {
+      const datePart = dateStr.split('T')[0];
+      const [y, m, d] = datePart.split('-');
+      return `${d}/${m}/${y}`;
+    }
+    return dateStr;
   };
 
   /**
@@ -782,6 +906,7 @@ const NonCollectionsView: React.FC<{
 
           {/* Cards de Indicadores */}
           <div className="flex items-center gap-3 ml-8">
+            {/* Card Total */}
             <div className={`flex items-center gap-3 px-6 py-3 rounded-2xl min-w-[140px] ${
               isDarkMode ? 'bg-blue-900/30 border border-blue-700/50' : 'bg-blue-100 border border-blue-300'
             }`}>
@@ -791,6 +916,71 @@ const NonCollectionsView: React.FC<{
               </div>
               <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse shrink-0"></div>
             </div>
+
+            {/* Card Coletas Previstas */}
+            <div className={`flex items-center gap-3 px-6 py-3 rounded-2xl min-w-[160px] ${
+              isDarkMode ? 'bg-emerald-900/30 border border-emerald-700/50' : 'bg-emerald-100 border border-emerald-300'
+            }`}>
+              <div className="text-center flex-1">
+                <p className={`text-[9px] font-black uppercase tracking-wider mb-1 ${isDarkMode ? 'text-emerald-400' : 'text-emerald-700'}`}>Coletas Previstas</p>
+                <p className={`text-2xl font-black leading-none ${isDarkMode ? 'text-emerald-400' : 'text-emerald-700'}`}>{coletasPrevistas.reduce((sum, c) => sum + c.QntColeta, 0)}</p>
+              </div>
+              <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse shrink-0"></div>
+            </div>
+
+            {/* Card Atendimento Interno */}
+            {(() => {
+              const totalPrevistas = coletasPrevistas.reduce((sum, c) => sum + c.QntColeta, 0);
+              const ncVia = nonCollections.filter(nc => nc.Culpabilidade === 'VIA').length;
+              const pct = totalPrevistas > 0 ? ((totalPrevistas - ncVia) / totalPrevistas * 100) : 0;
+              const cor = pct >= 90 ? 'text-amber-400' : pct >= 70 ? 'text-orange-400' : 'text-red-400';
+              const corBorder = pct >= 90 ? 'border-amber-700/50' : pct >= 70 ? 'border-orange-700/50' : 'border-red-700/50';
+              const corBg = pct >= 90 ? 'bg-amber-900/30' : pct >= 70 ? 'bg-orange-900/30' : 'bg-red-900/30';
+              const corBgLight = pct >= 90 ? 'bg-amber-100' : pct >= 70 ? 'bg-orange-100' : 'bg-red-100';
+              const corBorderLight = pct >= 90 ? 'border-amber-300' : pct >= 70 ? 'border-orange-300' : 'border-red-300';
+              const corText = pct >= 90 ? 'text-amber-400' : pct >= 70 ? 'text-orange-400' : 'text-red-400';
+              const corTextLight = pct >= 90 ? 'text-amber-700' : pct >= 70 ? 'text-orange-700' : 'text-red-700';
+              const corDot = pct >= 90 ? 'bg-amber-500' : pct >= 70 ? 'bg-orange-500' : 'bg-red-500';
+
+              return (
+                <div className={`flex items-center gap-3 px-6 py-3 rounded-2xl min-w-[160px] ${
+                  isDarkMode ? `${corBg} border ${corBorder}` : `${corBgLight} border ${corBorderLight}`
+                }`}>
+                  <div className="text-center flex-1">
+                    <p className={`text-[9px] font-black uppercase tracking-wider mb-1 ${isDarkMode ? corText : corTextLight}`}>Atend. Interno</p>
+                    <p className={`text-2xl font-black leading-none ${isDarkMode ? corText : corTextLight}`}>{pct.toFixed(1)}%</p>
+                  </div>
+                  <div className={`w-2 h-2 ${corDot} rounded-full animate-pulse shrink-0`}></div>
+                </div>
+              );
+            })()}
+
+            {/* Card Atendimento Geral */}
+            {(() => {
+              const totalPrevistas = coletasPrevistas.reduce((sum, c) => sum + c.QntColeta, 0);
+              const todasNc = nonCollections.length;
+              const pct = totalPrevistas > 0 ? ((totalPrevistas - todasNc) / totalPrevistas * 100) : 0;
+              const cor = pct >= 90 ? 'text-amber-400' : pct >= 70 ? 'text-orange-400' : 'text-red-400';
+              const corBorder = pct >= 90 ? 'border-amber-700/50' : pct >= 70 ? 'border-orange-700/50' : 'border-red-700/50';
+              const corBg = pct >= 90 ? 'bg-amber-900/30' : pct >= 70 ? 'bg-orange-900/30' : 'bg-red-900/30';
+              const corBgLight = pct >= 90 ? 'bg-amber-100' : pct >= 70 ? 'bg-orange-100' : 'bg-red-100';
+              const corBorderLight = pct >= 90 ? 'border-amber-300' : pct >= 70 ? 'border-orange-300' : 'border-red-300';
+              const corText = pct >= 90 ? 'text-amber-400' : pct >= 70 ? 'text-orange-400' : 'text-red-400';
+              const corTextLight = pct >= 90 ? 'text-amber-700' : pct >= 70 ? 'text-orange-700' : 'text-red-700';
+              const corDot = pct >= 90 ? 'bg-amber-500' : pct >= 70 ? 'bg-orange-500' : 'bg-red-500';
+
+              return (
+                <div className={`flex items-center gap-3 px-6 py-3 rounded-2xl min-w-[160px] ${
+                  isDarkMode ? `${corBg} border ${corBorder}` : `${corBgLight} border ${corBorderLight}`
+                }`}>
+                  <div className="text-center flex-1">
+                    <p className={`text-[9px] font-black uppercase tracking-wider mb-1 ${isDarkMode ? corText : corTextLight}`}>Atend. Geral</p>
+                    <p className={`text-2xl font-black leading-none ${isDarkMode ? corText : corTextLight}`}>{pct.toFixed(1)}%</p>
+                  </div>
+                  <div className={`w-2 h-2 ${corDot} rounded-full animate-pulse shrink-0`}></div>
+                </div>
+              );
+            })()}
           </div>
         </div>
 
@@ -801,6 +991,35 @@ const NonCollectionsView: React.FC<{
           >
             <Plus size={16} />
             Adicionar Não Coleta
+          </button>
+
+          <button
+            onClick={handleArchiveAll}
+            disabled={isArchiving || nonCollections.length === 0}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-black uppercase text-[10px] tracking-widest transition-all shadow-lg disabled:opacity-50 disabled:cursor-not-allowed ${
+              isDarkMode
+                ? 'bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700'
+                : 'bg-white text-slate-800 hover:bg-slate-50 hover:border-slate-500 border border-slate-400'
+            }`}
+            title="Arquivar todas as não coletas no histórico"
+          >
+            {isArchiving ? (
+              <><Loader2 size={16} className="animate-spin" /> Arquivando...</>
+            ) : (
+              <><Archive size={16} /> Arquivar</>
+            )}
+          </button>
+
+          <button
+            onClick={() => setIsHistoryModalOpen(true)}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-black uppercase text-[10px] tracking-widest transition-all shadow-lg ${
+              isDarkMode
+                ? 'bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700'
+                : 'bg-white text-slate-800 hover:bg-slate-50 hover:border-slate-500 border border-slate-400'
+            }`}
+            title="Buscar não coletas no histórico"
+          >
+            <Database size={16} /> Histórico
           </button>
 
           <button
@@ -2196,6 +2415,156 @@ const NonCollectionsView: React.FC<{
             >
               Cancelar
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Histórico de Não Coletas */}
+      {isHistoryModalOpen && (
+        <div className={`fixed inset-0 bg-black/80 backdrop-blur-md z-[110] flex items-center justify-center animate-in zoom-in duration-300 ${isHistoryFullscreen ? 'p-0' : 'p-4'}`}>
+          <div className={`rounded-[2.5rem] shadow-2xl w-full overflow-hidden border flex flex-col ${
+            isHistoryFullscreen ? 'max-w-none w-full h-full rounded-none' : 'max-w-7xl max-h-[90vh]'
+          } ${isDarkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'}`}>
+            {/* Header */}
+            <div className={`p-6 flex justify-between items-center shrink-0 ${
+              isDarkMode ? 'bg-slate-800' : 'bg-slate-100'
+            }`}>
+              <div className="flex items-center gap-4">
+                <Database size={32} className={isDarkMode ? 'text-blue-400' : 'text-blue-600'} />
+                <div>
+                  <h3 className={`text-xl font-black uppercase tracking-tight ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Histórico de Não Coletas</h3>
+                  <p className={`text-xs font-bold uppercase tracking-widest ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Busca na lista nao_coletas_web_hist</p>
+                </div>
+                {archivedResults.length > 0 && (
+                  <span className={`text-[10px] font-bold px-3 py-1 rounded-full ${
+                    isDarkMode ? 'text-slate-400 bg-slate-700' : 'text-slate-500 bg-slate-200'
+                  }`}>
+                    {archivedResults.length} registro(s)
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setIsHistoryFullscreen(!isHistoryFullscreen)}
+                  className={`p-2 rounded-lg transition-all ${isDarkMode ? 'hover:bg-slate-700' : 'hover:bg-slate-200'}`}
+                  title={isHistoryFullscreen ? 'Sair da tela cheia' : 'Tela cheia'}
+                >
+                  {isHistoryFullscreen ? <Minimize2 size={20} className={isDarkMode ? 'text-slate-400' : 'text-slate-600'} /> : <Maximize2 size={20} className={isDarkMode ? 'text-slate-400' : 'text-slate-600'} />}
+                </button>
+                <button
+                  onClick={() => { setIsHistoryModalOpen(false); setIsHistoryFullscreen(false); setArchivedResults([]); }}
+                  className={`p-2 rounded-full transition-all ${isDarkMode ? 'hover:bg-slate-700' : 'hover:bg-slate-200'}`}
+                >
+                  <X size={24} className={isDarkMode ? 'text-slate-400' : 'text-slate-600'} />
+                </button>
+              </div>
+            </div>
+
+            {/* Filtros */}
+            <div className={`p-4 border-b shrink-0 ${isDarkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'}`}>
+              <div className="flex items-center gap-4 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <label className={`text-[10px] font-black uppercase ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Início:</label>
+                  <input
+                    type="date"
+                    value={histStart}
+                    onChange={(e) => setHistStart(e.target.value)}
+                    className={`p-2 border rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500 ${
+                      isDarkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-white border-slate-300 text-slate-800'
+                    }`}
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <label className={`text-[10px] font-black uppercase ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Fim:</label>
+                  <input
+                    type="date"
+                    value={histEnd}
+                    onChange={(e) => setHistEnd(e.target.value)}
+                    className={`p-2 border rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500 ${
+                      isDarkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-white border-slate-300 text-slate-800'
+                    }`}
+                  />
+                </div>
+                <button
+                  onClick={handleSearchArchive}
+                  disabled={isSearchingArchive}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-black uppercase text-[10px] tracking-widest transition-all shadow-lg disabled:opacity-60"
+                >
+                  {isSearchingArchive ? <><Loader2 size={16} className="animate-spin" /> Buscando...</> : <><Search size={16} /> Buscar</>}
+                </button>
+                <span className={`text-[10px] font-bold ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>
+                  {archivedResults.length} resultado(s)
+                </span>
+              </div>
+            </div>
+
+            {/* Tabela de Resultados */}
+            <div className={`overflow-auto flex-1 ${isDarkMode ? 'bg-slate-950' : 'bg-slate-50'}`}>
+              {archivedResults.length === 0 && !isSearchingArchive ? (
+                <div className="flex items-center justify-center h-40">
+                  <p className={`text-sm font-bold ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>
+                    Nenhum resultado encontrado. Ajuste o período e clique em Buscar.
+                  </p>
+                </div>
+              ) : (
+                <table className="w-full text-xs">
+                  <thead className={`sticky top-0 z-10 ${isDarkMode ? 'bg-slate-900' : 'bg-slate-200'}`}>
+                    <tr>
+                      <th className={`px-3 py-2 text-left font-black uppercase text-[9px] tracking-wider ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>Semana</th>
+                      <th className={`px-3 py-2 text-left font-black uppercase text-[9px] tracking-wider ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>Rota</th>
+                      <th className={`px-3 py-2 text-left font-black uppercase text-[9px] tracking-wider ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>Data</th>
+                      <th className={`px-3 py-2 text-left font-black uppercase text-[9px] tracking-wider ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>Código</th>
+                      <th className={`px-3 py-2 text-left font-black uppercase text-[9px] tracking-wider ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>Produtor</th>
+                      <th className={`px-3 py-2 text-left font-black uppercase text-[9px] tracking-wider ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>Motivo</th>
+                      <th className={`px-3 py-2 text-left font-black uppercase text-[9px] tracking-wider ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>Ação</th>
+                      <th className={`px-3 py-2 text-left font-black uppercase text-[9px] tracking-wider ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>Data Ação</th>
+                      <th className={`px-3 py-2 text-left font-black uppercase text-[9px] tracking-wider ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>Última Coleta</th>
+                      <th className={`px-3 py-2 text-left font-black uppercase text-[9px] tracking-wider ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>Culpabilidade</th>
+                      <th className={`px-3 py-2 text-left font-black uppercase text-[9px] tracking-wider ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>Operação</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {archivedResults.map((nc) => (
+                      <tr key={nc.id} className={`border-t ${isDarkMode ? 'border-slate-800 hover:bg-slate-900' : 'border-slate-200 hover:bg-slate-100'} transition-colors`}>
+                        <td className={`px-3 py-2 font-bold ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>{nc.semana}</td>
+                        <td className={`px-3 py-2 font-bold ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>{nc.rota}</td>
+                        <td className={`px-3 py-2 font-bold ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>{formatDisplayDate(nc.data)}</td>
+                        <td className={`px-3 py-2 font-bold ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>{nc.codigo}</td>
+                        <td className={`px-3 py-2 font-bold ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>{nc.produtor}</td>
+                        <td className={`px-3 py-2 font-bold max-w-[200px] truncate ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`} title={nc.motivo}>{nc.motivo}</td>
+                        <td className={`px-3 py-2 font-bold max-w-[150px] truncate ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`} title={nc.acao}>{nc.acao}</td>
+                        <td className={`px-3 py-2 font-bold ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>{formatDisplayDate(nc.dataAcao)}</td>
+                        <td className={`px-3 py-2 font-bold ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>{formatDisplayDate(nc.ultimaColeta)}</td>
+                        <td className="px-3 py-2">
+                          <span className={`inline-flex px-2 py-1 rounded-full text-[9px] font-black uppercase ${
+                            nc.Culpabilidade === 'VIA'
+                              ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'
+                              : nc.Culpabilidade === 'Cliente'
+                                ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'
+                                : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
+                          }`}>{nc.Culpabilidade || '-'}</span>
+                        </td>
+                        <td className={`px-3 py-2 font-bold ${isDarkMode ? 'text-blue-400' : 'text-blue-600'}`}>{nc.operacao}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className={`p-4 border-t shrink-0 flex justify-end ${isDarkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'}`}>
+              <button
+                onClick={() => { setIsHistoryModalOpen(false); setIsHistoryFullscreen(false); setArchivedResults([]); }}
+                className={`px-6 py-3 rounded-xl font-black uppercase text-[10px] tracking-widest transition-all ${
+                  isDarkMode
+                    ? 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                Fechar
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -5,6 +5,7 @@ import { SharePointService } from '../services/sharepointService';
 import { getValidToken } from '../services/tokenService';
 import * as XLSX from 'xlsx';
 import { getBrazilDate, getBrazilHours, getBrazilMinutes, toBrazilDate, getWeekString, getRouteDateForCurrentTime } from '../utils/dateUtils';
+import { isDealeUser, getDealeFilteredConfigs, getDealeAnchorOperation, getDealeRealOperations } from '../utils/dealeUtils';
 import {
   Clock, X, Loader2, RefreshCw, ShieldCheck,
   CheckCircle2, ChevronDown,
@@ -238,6 +239,9 @@ const RouteDepartureView: React.FC<{
     return saved !== 'false'; // Default: true (dark mode)
   });
 
+  // Estado para usuários DEALE (usado apenas no modal de configurar emails)
+  const [isDeale, setIsDeale] = useState(false);
+
   const [ghostRow, setGhostRow] = useState<Partial<RouteDeparture>>({
     id: 'ghost', rota: '', data: getRouteDateForCurrentTime(), inicio: '', saida: '', motorista: '', placa: '', statusGeral: '', aviso: 'NÃO', operacao: '', statusOp: 'Previsto', tempo: '', semana: ''
   });
@@ -261,6 +265,10 @@ const RouteDepartureView: React.FC<{
   const [selectedOperacaoConfig, setSelectedOperacaoConfig] = useState<string>('');
   const [configEnvio, setConfigEnvio] = useState<string>('');
   const [configCopia, setConfigCopia] = useState<string>('');
+  
+  // Ref para rastrear se as configs de email já foram carregadas manualmente
+  // Evita que o polling sobrescreva o que o usuário está digitando
+  const emailConfigLoadedRef = useRef<Record<string, boolean>>({});
 
   // Estado para filtro de email - busca email em todas as operações
   const [emailFilter, setEmailFilter] = useState<string>('');
@@ -314,7 +322,10 @@ const RouteDepartureView: React.FC<{
     if (!token) return;
 
     try {
-      const config = userConfigs.find(c => c.operacao === operacao);
+      // Se a operação for "DEALE", usa a operação âncora (ALMIRANTE)
+      const operacaoReal = (operacao === 'DEALE') ? getDealeAnchorOperation() : operacao;
+
+      const config = userConfigs.find(c => c.operacao === operacaoReal);
       if (!config) return;
 
       const currentValue = campo === 'Envio' ? (config.Envio || '') : (config.Copia || '');
@@ -322,14 +333,14 @@ const RouteDepartureView: React.FC<{
 
       await SharePointService.updateRouteConfigEmails(
         token,
-        operacao,
+        operacaoReal,
         campo === 'Envio' ? newValue : (config.Envio || ''),
         campo === 'Copia' ? newValue : (config.Copia || '')
       );
 
       // Atualiza estado local
       setUserConfigs(prev => prev.map(c =>
-        c.operacao === operacao
+        c.operacao === operacaoReal
           ? { ...c, [campo]: newValue }
           : c
       ));
@@ -598,29 +609,61 @@ const RouteDepartureView: React.FC<{
   useEffect(() => {
     if (isConfigModalOpen && userConfigs.length > 0) {
       setIsEmailConfigModalOpen(true);
-      // Seleciona a primeira operação por padrão
-      if (!selectedOperacaoConfig) {
-        setSelectedOperacaoConfig(userConfigs[0].operacao);
-        const firstConfig = userConfigs[0];
-        setConfigEnvio(firstConfig.Envio || '');
-        setConfigCopia(firstConfig.Copia || '');
-      }
-    }
-  }, [isConfigModalOpen, userConfigs]);
 
-  // Carrega dados da configuração quando seleciona operação (apenas uma vez)
-  useEffect(() => {
-    if (selectedOperacaoConfig && userConfigs.length > 0) {
-      const config = userConfigs.find(c => c.operacao === selectedOperacaoConfig);
-      if (config) {
-        console.log(`[EMAIL_CONFIG] Carregando dados iniciais para ${selectedOperacaoConfig}:`);
-        console.log(`  Envio: ${config.Envio || '(vazio)'}`);
-        console.log(`  Copia: ${config.Copia || '(vazio)'}`);
-        setConfigEnvio(config.Envio || '');
-        setConfigCopia(config.Copia || '');
+      // Para usuários DEALE, usa configs filtradas (agrupa como DEALE)
+      const modalConfigs = isDeale ? getDealeFilteredConfigs(userConfigs) : userConfigs;
+
+      // Seleciona a primeira operação por padrão e carrega configs APENAS se ainda não foi carregado
+      if (!selectedOperacaoConfig) {
+        const firstOp = modalConfigs[0].operacao;
+        setSelectedOperacaoConfig(firstOp);
+        
+        // Só carrega se ainda não foi carregado para esta operação
+        if (!emailConfigLoadedRef.current[firstOp]) {
+          const firstConfig = modalConfigs[0];
+          setConfigEnvio(firstConfig.Envio || '');
+          setConfigCopia(firstConfig.Copia || '');
+          emailConfigLoadedRef.current[firstOp] = true;
+        }
       }
     }
-  }, [selectedOperacaoConfig]); // Remove userConfigs das dependências para não recarregar no polling
+    
+    // Quando o modal fecha, reseta o flag para permitir recarregar na próxima abertura
+    if (!isConfigModalOpen) {
+      emailConfigLoadedRef.current = {};
+      setSelectedOperacaoConfig('');
+      setConfigEnvio('');
+      setConfigCopia('');
+    }
+  }, [isConfigModalOpen, userConfigs, isDeale]);
+
+  // Carrega dados da configuração quando seleciona operação
+  // SÓ executa quando o usuário TROCA a operação selecionada, NÃO quando userConfigs muda por polling
+  useEffect(() => {
+    if (!selectedOperacaoConfig || !isEmailConfigModalOpen) return;
+    if (userConfigs.length === 0) return;
+    
+    // Se já foi carregado para esta operação, ignora (evita sobrescrever durante edição)
+    if (emailConfigLoadedRef.current[selectedOperacaoConfig]) return;
+
+    // Determina qual operação buscar no userConfigs
+    // Se for "DEALE", busca na operação âncora (ALMIRANTE)
+    const operacaoParaBuscar = (isDeale && selectedOperacaoConfig === 'DEALE')
+      ? getDealeAnchorOperation()
+      : selectedOperacaoConfig;
+
+    const config = userConfigs.find(c =>
+      c.operacao.toUpperCase() === operacaoParaBuscar.toUpperCase()
+    );
+    if (config) {
+      console.log(`[EMAIL_CONFIG] Carregando dados iniciais para ${selectedOperacaoConfig} (buscando: ${operacaoParaBuscar}):`);
+      console.log(`  Envio: ${config.Envio || '(vazio)'}`);
+      console.log(`  Copia: ${config.Copia || '(vazio)'}`);
+      setConfigEnvio(config.Envio || '');
+      setConfigCopia(config.Copia || '');
+      emailConfigLoadedRef.current[selectedOperacaoConfig] = true;
+    }
+  }, [selectedOperacaoConfig, isEmailConfigModalOpen, userConfigs, isDeale]);
 
   // Função para salvar configuração de emails
   const handleSaveEmailConfig = async () => {
@@ -637,20 +680,29 @@ const RouteDepartureView: React.FC<{
         return;
       }
 
-      console.log(`[EMAIL_CONFIG] Salvando configuração para ${selectedOperacaoConfig}`);
+      // Para usuários DEALE, se a operação selecionada é "DEALE", salva na operação âncora (ALMIRANTE)
+      // Caso contrário, salva na operação selecionada normalmente
+      let operacaoParaSalvar = selectedOperacaoConfig;
+      if (isDeale && selectedOperacaoConfig === 'DEALE') {
+        operacaoParaSalvar = getDealeAnchorOperation();
+      }
+
+      console.log(`[EMAIL_CONFIG] Salvando configuração para ${operacaoParaSalvar} (selecionado: ${selectedOperacaoConfig})`);
       console.log(`[EMAIL_CONFIG] Envio: ${configEnvio}`);
       console.log(`[EMAIL_CONFIG] Copia: ${configCopia}`);
 
-      await SharePointService.updateRouteConfigEmails(token, selectedOperacaoConfig, configEnvio, configCopia);
+      await SharePointService.updateRouteConfigEmails(token, operacaoParaSalvar, configEnvio, configCopia);
 
-      // Atualiza estado local
-      setUserConfigs(prev => prev.map(c => 
-        c.operacao === selectedOperacaoConfig 
+      // Atualiza estado local — atualiza a config selecionada com os novos valores
+      setUserConfigs(prev => prev.map(c =>
+        c.operacao.toUpperCase() === operacaoParaSalvar.toUpperCase()
           ? { ...c, Envio: configEnvio, Copia: configCopia }
           : c
       ));
 
       alert('Configuração salva com sucesso!');
+      // Reseta o flag para a operação salva, permitindo recarregar dados atualizados na próxima abertura
+      delete emailConfigLoadedRef.current[selectedOperacaoConfig];
       setIsEmailConfigModalOpen(false);
       setIsConfigModalOpen(false);
     } catch (error: any) {
@@ -1303,18 +1355,36 @@ const RouteDepartureView: React.FC<{
       console.log('[LOAD_DATA] Configurações carregadas:', configs?.length || 0);
       console.log('[LOAD_DATA] Operações do usuário:', configs?.map(c => c.operacao));
       console.log('[LOAD_DATA] Total de rotas brutas do SharePoint:', spData?.length || 0);
-      
+
+      // Detecta se é usuário DEALE (para o modal de configurar emails)
+      const deale = isDealeUser(configs || []);
+      setIsDeale(deale);
+
       setUserConfigs(configs || []);
       setRouteMappings(mappings || []);
 
       // Filtra rotas APENAS das operações do usuário logado
       const myOps = new Set((configs || []).map(c => c.operacao));
+      
+      // DEBUG: Log detalhe das operações para identificar problemas de comparação
+      console.log('[LOAD_DATA] Operações configuradas (myOps):', Array.from(myOps));
+      console.log('[LOAD_DATA] Total de rotas brutas do SharePoint:', spData?.length || 0);
+      
+      // Log das primeiras 5 operações únicas nas rotas brutas
+      const uniqueOpsInRoutes = Array.from(new Set((spData || []).map(r => r.operacao)));
+      console.log('[LOAD_DATA] Operações únicas nas rotas brutas:', uniqueOpsInRoutes.slice(0, 10));
+      
       const filteredByUser = (spData || []).filter(route => {
         // Se não houver operações configuradas, retorna todas (fallback)
         if (myOps.size === 0) return true;
-        return myOps.has(route.operacao);
+        const match = myOps.has(route.operacao);
+        if (!match && myOps.size <= 3) {
+          // Log apenas para poucos configs (debug)
+          console.log(`[LOAD_DATA] Rota "${route.rota}" NÃO match: operacao="${route.operacao}" não está em myOps`);
+        }
+        return match;
       });
-      
+
       console.log('[LOAD_DATA] Rotas filtradas por usuário:', filteredByUser.length);
       console.log('[LOAD_DATA] Operações nas rotas filtradas:', Array.from(new Set(filteredByUser.map(r => r.operacao))));
 
@@ -4634,10 +4704,15 @@ const RouteDepartureView: React.FC<{
                   <label className="text-[10px] font-black uppercase text-slate-400">Operação</label>
                   <select
                     value={selectedOperacaoConfig}
-                    onChange={(e) => setSelectedOperacaoConfig(e.target.value)}
+                    onChange={(e) => {
+                      const novaOperacao = e.target.value;
+                      // Reseta o flag da operação anterior para permitir recarregar se voltar a ela
+                      delete emailConfigLoadedRef.current[selectedOperacaoConfig];
+                      setSelectedOperacaoConfig(novaOperacao);
+                    }}
                     className="w-full p-4 border border-slate-200 dark:border-slate-700 rounded-2xl bg-white dark:bg-slate-900 text-sm font-bold outline-none dark:text-white shadow-sm focus:ring-2 focus:ring-blue-500"
                   >
-                    {userConfigs.map(config => (
+                    {(isDeale ? getDealeFilteredConfigs(userConfigs) : userConfigs).map(config => (
                       <option key={config.operacao} value={config.operacao}>
                         {config.nomeExibicao}
                       </option>
