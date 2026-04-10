@@ -20,3 +20,28 @@
 - [ ] White mode: alta contraste/visibilidade
 - [ ] Dark mode: inalterado
 - [ ] UX fluida, hover states suaves
+
+---
+
+# ✅ Data Automática - NÃO COLETAS
+
+## Implementado
+- [x] Criar função `getNonCollectionDateForCurrentTime()` em dateUtils.ts
+- [x] Atualizar ghost row (estado inicial + reset após adicionar)
+- [x] Atualizar modal de adicionar (estado inicial + reset após adicionar)
+- [x] Atualizar `createBulkRecordsWithOperation` (bulk paste)
+- [x] Atualizar `handleBulkPaste` (novas linhas criadas)
+- [x] Atualizar `handleAddNonCollection` (reset do modal)
+- [x] Build aprovado
+
+## Regra de Negócio
+| Horário (Brasília) | Data Atribuída |
+|-------------------|----------------|
+| 00:00 - 11:59 | Dia anterior (D-1) |
+| 12:00 - 23:59 | Dia atual (D) |
+
+## Validação
+- [ ] Testar inserção pela manhã (antes das 12h) — data deve ser do dia anterior
+- [ ] Testar inserção à tarde/noite (após 12h) — data deve ser do dia atual
+- [ ] Testar bulk paste com múltiplas linhas — todas com mesma data
+- [ ] Testar modal de adicionar — data correta ao abrir

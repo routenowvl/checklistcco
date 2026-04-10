@@ -385,6 +385,10 @@ const RouteDepartureView: React.FC<{
   const [routeAlerts, setRouteAlerts] = useState<Record<string, { count: number; history: RouteDeparture[] }>>({});
   const [selectedRouteAlert, setSelectedRouteAlert] = useState<{ rota: string; history: RouteDeparture[] } | null>(null);
 
+  // Estado para alertas de motoristas com atrasos recorrentes por "Mão de obra"
+  const [motoristAlerts, setMotoristAlerts] = useState<Record<string, { count: number; history: RouteDeparture[] }>>({});
+  const [selectedMotoristAlert, setSelectedMotoristAlert] = useState<{ motorista: string; count: number; history: RouteDeparture[] } | null>(null);
+
   // Estado para modal de aviso quando tentar adicionar rota com filtros/ordenação ativos
   const [isFilterBlockModalOpen, setIsFilterBlockModalOpen] = useState(false);
   const [filterBlockReason, setFilterBlockReason] = useState<'single' | 'bulk' | 'ghost'>('ghost');
@@ -529,6 +533,121 @@ const RouteDepartureView: React.FC<{
       });
     } catch (e: any) {
       console.error('[ROUTE_ALERT] Erro ao analisar histórico:', e.message);
+    }
+  };
+
+  // Analisa histórico dos últimos 30 dias e identifica motoristas com atrasos recorrentes por "Mão de obra"
+  const analyzeMotoristHistory = async (motoristaNome: string, token: string): Promise<{ count: number; history: RouteDeparture[] } | null> => {
+    try {
+      if (!motoristaNome || motoristaNome.trim() === '') return null;
+
+      console.log(`[MOTORIST_ALERT] Analisando histórico de "${motoristaNome}" nos últimos 30 dias...`);
+
+      // Calcula data de 30 dias atrás
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      const startDate = thirtyDaysAgo.toISOString().split('T')[0];
+      const endDate = getBrazilDate();
+
+      // Busca histórico no SharePoint (sem filtrar por operação para pegar todas as ocorrências do motorista)
+      const history = await SharePointService.getArchivedDepartures(token, null, startDate, endDate);
+
+      // Filtra apenas registros com motivo "Mão de obra" E o motorista específico
+      const maodeObraRecords = history.filter(r =>
+        r.motivo === 'Mão de obra' &&
+        r.motorista &&
+        r.motorista.toLowerCase().trim() === motoristaNome.toLowerCase().trim()
+      );
+
+      console.log(`[MOTORIST_ALERT] ${maodeObraRecords.length} ocorrência(s) de "Mão de obra" para ${motoristaNome}`);
+
+      if (maodeObraRecords.length === 0) return null;
+
+      // Ordena por data (mais recente primeiro)
+      maodeObraRecords.sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime());
+
+      return { count: maodeObraRecords.length, history: maodeObraRecords };
+    } catch (e: any) {
+      console.error(`[MOTORIST_ALERT] Erro ao analisar histórico de "${motoristaNome}":`, e.message);
+      return null;
+    }
+  };
+
+  // Reavalia alerta de motorista para uma linha específica (chamado quando o motivo muda)
+  const reevaluateMotoristAlert = async (routeId: string, motoristaNome: string, motivoAtual: string) => {
+    // Se o motivo NÃO é "Mão de obra", remove o alerta deste motorista se existir
+    if (motivoAtual !== 'Mão de obra') {
+      setMotoristAlerts(prev => {
+        const next = { ...prev };
+        delete next[motoristaNome];
+        return next;
+      });
+      return;
+    }
+
+    // Se o motivo É "Mão de obra", busca no histórico
+    const token = await getValidToken();
+    if (!token) return;
+
+    const result = await analyzeMotoristHistory(motoristaNome, token);
+    setMotoristAlerts(prev => {
+      const next = { ...prev };
+      if (result && result.count > 0) {
+        next[motoristaNome] = result;
+      } else {
+        delete next[motoristaNome];
+      }
+      return next;
+    });
+  };
+
+  // Escaneia todas as rotas da tabela principal e carrega alertas de motoristas com "Mão de obra"
+  const scanExistingMotoristAlerts = async (token: string, routesToScan?: RouteDeparture[]) => {
+    try {
+      const routesArray = routesToScan || routes;
+
+      // Coleta motoristas únicos que têm motivo "Mão de obra" na tabela principal
+      const motoristasWithMaDeObra = new Set<string>();
+      routesArray.forEach(r => {
+        if (r.motivo === 'Mão de obra' && r.motorista && r.motorista.trim() !== '') {
+          motoristasWithMaDeObra.add(r.motorista.trim());
+        }
+      });
+
+      if (motoristasWithMaDeObra.size === 0) {
+        setMotoristAlerts({});
+        return;
+      }
+
+      console.log(`[MOTORIST_SCAN] ${motoristasWithMaDeObra.size} motorista(s) com "Mão de obra" na tabela:`, Array.from(motoristasWithMaDeObra));
+
+      // Busca histórico dos últimos 30 dias UMA VEZ (compartilhado entre todos)
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      const startDate = thirtyDaysAgo.toISOString().split('T')[0];
+      const endDate = getBrazilDate();
+
+      const history = await SharePointService.getArchivedDepartures(token, null, startDate, endDate);
+
+      // Filtra apenas "Mão de obra"
+      const maodeObraHistory = history.filter(r => r.motivo === 'Mão de obra' && r.motorista && r.motorista.trim() !== '');
+
+      // Agrupa por motorista
+      const alerts: Record<string, { count: number; history: RouteDeparture[] }> = {};
+      motoristasWithMaDeObra.forEach(motorista => {
+        const records = maodeObraHistory.filter(r =>
+          r.motorista.toLowerCase().trim() === motorista.toLowerCase().trim()
+        );
+        if (records.length > 0) {
+          records.sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime());
+          alerts[motorista] = { count: records.length, history: records };
+        }
+      });
+
+      setMotoristAlerts(alerts);
+      console.log(`[MOTORIST_SCAN] ✅ ${Object.keys(alerts).length} motorista(s) com alertas`);
+    } catch (e: any) {
+      console.error('[MOTORIST_SCAN] Erro ao escanear alertas:', e.message);
     }
   };
 
@@ -1402,6 +1521,9 @@ const RouteDepartureView: React.FC<{
       if (!isBackgroundRefresh) {
         analyzeRouteHistory(token);
       }
+      // Escaneia motoristas com "Mão de obra" na tabela e carrega alertas (sempre, incluindo refresh)
+      // Passa recalculatedRoutes diretamente para evitar stale state
+      scanExistingMotoristAlerts(token, recalculatedRoutes);
 
       // Atualiza o último checklist de motorista após carregar as rotas
       if (spData && spData.length > 0) {
@@ -2025,6 +2147,11 @@ const RouteDepartureView: React.FC<{
       if (!valid) {
         return; // Cancela a atualização
       }
+    }
+
+    // Se o campo alterado é 'motivo', reavalia o alerta de motorista
+    if (field === 'motivo' && updatedRoute.motorista) {
+      reevaluateMotoristAlert(id, updatedRoute.motorista, value);
     }
 
     // O status GERAL é apenas um marcador visual, NÃO altera o statusOp da rota
@@ -2874,19 +3001,38 @@ const RouteDepartureView: React.FC<{
                     if (col.id === 'motorista') {
                       return (
                         <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
-                          <input
-                              type="text"
-                              value={route.motorista}
-                              onChange={(e) => updateCell(route.id!, 'motorista', e.target.value)}
-                              onPaste={(e: any) => {
-                                  const val = e.clipboardData.getData('text');
-                                  if (val.includes('\n')) {
-                                      e.preventDefault();
-                                      handleMultilinePaste('motorista', rowIndex, val);
-                                  }
-                              }}
-                              className={`${inputClass} text-center`}
-                          />
+                          <div className="relative flex items-center">
+                            <input
+                                type="text"
+                                value={route.motorista}
+                                onChange={(e) => updateCell(route.id!, 'motorista', e.target.value)}
+                                onPaste={(e: any) => {
+                                    const val = e.clipboardData.getData('text');
+                                    if (val.includes('\n')) {
+                                        e.preventDefault();
+                                        handleMultilinePaste('motorista', rowIndex, val);
+                                    }
+                                }}
+                                className={`${inputClass} text-center w-full`}
+                            />
+                            {/* Indicador de alerta para motoristas com atrasos recorrentes por "Mão de obra" */}
+                            {route.motorista && route.motivo === 'Mão de obra' && motoristAlerts[route.motorista] && motoristAlerts[route.motorista].count > 0 && (
+                                <span
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedMotoristAlert({
+                                      motorista: route.motorista,
+                                      count: motoristAlerts[route.motorista].count,
+                                      history: motoristAlerts[route.motorista].history
+                                    });
+                                  }}
+                                  className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 bg-orange-500 hover:bg-orange-600 text-white text-[9px] font-black rounded-full cursor-pointer transition-colors z-10"
+                                  title={`${motoristAlerts[route.motorista].count} atraso(s) por "Mão de obra" nos últimos 30 dias. Clique para ver histórico.`}
+                                >
+                                  {motoristAlerts[route.motorista].count}
+                                </span>
+                            )}
+                          </div>
                         </td>
                       );
                     }
@@ -3338,12 +3484,31 @@ const RouteDepartureView: React.FC<{
                     if (col.id === 'motorista') {
                       return (
                         <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
-                          <input
-                              type="text"
-                              value={route.motorista}
-                              onChange={(e) => updateCell(route.id!, 'motorista', e.target.value)}
-                              className={`${inputClass} text-center`}
-                          />
+                          <div className="relative flex items-center">
+                            <input
+                                type="text"
+                                value={route.motorista}
+                                onChange={(e) => updateCell(route.id!, 'motorista', e.target.value)}
+                                className={`${inputClass} text-center w-full`}
+                            />
+                            {/* Indicador de alerta para motoristas com atrasos recorrentes por "Mão de obra" */}
+                            {route.motorista && route.motivo === 'Mão de obra' && motoristAlerts[route.motorista] && motoristAlerts[route.motorista].count > 0 && (
+                                <span
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedMotoristAlert({
+                                      motorista: route.motorista,
+                                      count: motoristAlerts[route.motorista].count,
+                                      history: motoristAlerts[route.motorista].history
+                                    });
+                                  }}
+                                  className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 bg-orange-500 hover:bg-orange-600 text-white text-[9px] font-black rounded-full cursor-pointer transition-colors z-10"
+                                  title={`${motoristAlerts[route.motorista].count} atraso(s) por "Mão de obra" nos últimos 30 dias. Clique para ver histórico.`}
+                                >
+                                  {motoristAlerts[route.motorista].count}
+                                </span>
+                            )}
+                          </div>
                         </td>
                       );
                     }
@@ -4594,6 +4759,94 @@ const RouteDepartureView: React.FC<{
             </div>
           </div>
         </div>
+      )}
+
+      {/* Modal de Alerta de Motorista com Histórico de Atrasos "Mão de obra" */}
+      {selectedMotoristAlert && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[300] flex items-center justify-center p-4" onClick={() => setSelectedMotoristAlert(null)}>
+              <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] shadow-2xl w-full max-w-2xl border dark:border-slate-800 overflow-hidden" onClick={(e) => e.stopPropagation()}>
+                  <div className="bg-orange-600 p-6 flex justify-between items-center text-white">
+                      <div className="flex items-center gap-4">
+                          <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center">
+                              <AlertTriangle size={28} />
+                          </div>
+                          <div>
+                              <h3 className="font-black uppercase tracking-widest text-lg">Histórico de Atrasos — Mão de Obra</h3>
+                              <p className="text-[10px] font-bold text-white/80 uppercase tracking-wide">Motorista: {selectedMotoristAlert.motorista}</p>
+                          </div>
+                      </div>
+                      <button onClick={() => setSelectedMotoristAlert(null)} className="p-2 hover:bg-white/20 rounded-xl transition-colors">
+                          <X size={28} />
+                      </button>
+                  </div>
+                  <div className="p-6 max-h-[60vh] overflow-y-auto scrollbar-thin">
+                      <div className="mb-4 p-4 bg-orange-50 dark:bg-orange-900/20 rounded-2xl border border-orange-200 dark:border-orange-800">
+                          <p className="text-[11px] font-black uppercase text-orange-700 dark:text-orange-400 text-center">
+                              ⚠️ {selectedMotoristAlert.count} ocorrência(s) de atraso por "Mão de obra" nos últimos 30 dias
+                          </p>
+                      </div>
+                      <div className="space-y-3">
+                          {selectedMotoristAlert.history.map((item, idx) => (
+                              <div key={idx} className="p-5 bg-white dark:bg-slate-900 rounded-2xl border-2 border-slate-200 dark:border-slate-700 shadow-sm hover:shadow-md transition-all">
+                                  {/* Cabeçalho: Data + Operação */}
+                                  <div className="flex items-center gap-2 mb-3">
+                                      <span className="inline-flex items-center gap-1.5 text-[10px] font-bold text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 px-3 py-1.5 rounded-full">
+                                          <Calendar size={12} />
+                                          {new Date(item.data).toLocaleDateString('pt-BR')}
+                                      </span>
+                                      {item.operacao && (
+                                          <span className="inline-flex items-center gap-1.5 text-[10px] font-bold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 px-3 py-1.5 rounded-full border border-blue-200 dark:border-blue-800">
+                                              {item.operacao}
+                                          </span>
+                                      )}
+                                      {item.rota && (
+                                          <span className="inline-flex items-center gap-1.5 text-[10px] font-bold text-slate-600 dark:text-slate-300 bg-slate-50 dark:bg-slate-800 px-3 py-1.5 rounded-full border border-slate-200 dark:border-slate-700">
+                                              Rota: {item.rota}
+                                          </span>
+                                      )}
+                                  </div>
+                                  {/* Observação em destaque */}
+                                  {item.observacao && (
+                                      <div className="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-200 dark:border-slate-700">
+                                          <div className="flex items-start gap-2">
+                                              <span className="text-[10px] font-black uppercase text-slate-500 dark:text-slate-400 whitespace-nowrap mt-0.5">
+                                                  📝 Observação:
+                                              </span>
+                                              <p className="text-[10px] font-normal text-slate-700 dark:text-slate-300 leading-relaxed whitespace-pre-wrap">
+                                                  {item.observacao}
+                                              </p>
+                                          </div>
+                                      </div>
+                                  )}
+                                  {/* Informações adicionais */}
+                                  <div className="mt-3 flex flex-wrap gap-3 text-[10px] text-slate-500 dark:text-slate-400">
+                                      {item.inicio && (
+                                          <span className="flex items-center gap-1">
+                                              <Clock size={12} /> Início: {item.inicio}
+                                          </span>
+                                      )}
+                                      {item.saida && (
+                                          <span className="flex items-center gap-1">
+                                              <Clock size={12} /> Saída: {item.saida}
+                                          </span>
+                                      )}
+                                      {item.placa && (
+                                          <span className="flex items-center gap-1">
+                                              Placa: {item.placa}
+                                          </span>
+                                      )}
+                                  </div>
+                              </div>
+                          ))}
+                      </div>
+                  </div>
+                  <div className="p-4 bg-slate-100 dark:bg-slate-800 border-t dark:border-slate-700 shrink-0">
+                      <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 text-center">
+                          📊 Dados dos últimos 30 dias (fuso de Brasília)
+                      </p>
+                  </div>
+              </div>
+          </div>
       )}
 
       {/* Modal de Configuração de Emails */}

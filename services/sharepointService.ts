@@ -418,6 +418,7 @@ export const SharePointService = {
             Envio: String(f[resolveFieldName(mapping, 'Envio')] || ""), // Emails para envio principal
             Copia: String(f[resolveFieldName(mapping, 'Copia')] || ""), // Emails para cópia
             UltimoEnvioResumoSaida: String(f[resolveFieldName(mapping, 'UltimoEnvioResumoSaida')] || ""), // Último envio de resumo
+            UltimoEnvioNcoletas: String(f[resolveFieldName(mapping, 'UltimoEnvioNcoletas')] || ""), // Último envio de não coletas
             StatusResumoSaida: String(f[resolveFieldName(mapping, 'StatusResumoSaida')] || ""), // Status do resumo
             CodigoKmm: String(f[resolveFieldName(mapping, 'CodigoKmm')] || "") // Código KMM da operação
           };
@@ -548,6 +549,80 @@ export const SharePointService = {
       }
     } catch (error: any) {
       console.error('[SHAREPOINT] ❌ Erro ao atualizar UltimoEnvioSaida:', error.message);
+    }
+  },
+
+  /**
+   * Atualiza o campo UltimoEnvioNcoletas na lista CONFIG_OPERACAO_SAIDA_DE_ROTAS
+   */
+  async updateUltimoEnvioNaoColetas(token: string, operacao: string, dataHoraEnvio: string): Promise<void> {
+    try {
+      const siteId = await getResolvedSiteId(token);
+      const list = await findListByIdOrName(siteId, 'CONFIG_OPERACAO_SAIDA_DE_ROTAS', token);
+      const { mapping, internalNames, readOnly } = await getListColumnMapping(siteId, list.id, token);
+
+      // Busca o item da operação específica
+      const operacaoField = resolveFieldName(mapping, 'OPERACAO');
+      const filter = `fields/${operacaoField} eq '${operacao}'`;
+      const existing = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}&$top=1`, token);
+
+      if (existing.value && existing.value.length > 0) {
+        const itemId = existing.value[0].id;
+        const ultimoEnvioField = resolveFieldName(mapping, 'UltimoEnvioNcoletas');
+
+        // Converte data/hora para ISO
+        let dataISO: string | null = dataHoraEnvio;
+
+        if (!dataHoraEnvio || dataHoraEnvio.trim() === '') {
+          dataISO = null;
+          console.log(`[DATA_CONVERSAO_NC] 🧹 Limpando campo UltimoEnvioNcoletas para ${operacao}`);
+        } else {
+          console.log(`[DATA_CONVERSAO_NC] Recebido: "${dataHoraEnvio}"`);
+
+          // Tenta formato completo: DD/MM/YYYY HH:MM:SS
+          const matchCompleto = dataHoraEnvio.match(/(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})/);
+          // Tenta formato sem segundos: DD/MM/YYYY HH:MM
+          const matchSemSegundos = dataHoraEnvio.match(/(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2})/);
+
+          if (matchCompleto) {
+            const [, dia, mes, ano, hora, minuto, segundo] = matchCompleto;
+            const localDate = new Date(Number(ano), Number(mes) - 1, Number(dia), Number(hora), Number(minuto), Number(segundo));
+            dataISO = localDate.toISOString();
+            console.log(`[DATA_CONVERSAO_NC] ✅ Formato DD/MM/YYYY HH:MM:SS: "${dataHoraEnvio}" → "${dataISO}"`);
+          } else if (matchSemSegundos) {
+            const [, dia, mes, ano, hora, minuto] = matchSemSegundos;
+            const localDate = new Date(Number(ano), Number(mes) - 1, Number(dia), Number(hora), Number(minuto), 0);
+            dataISO = localDate.toISOString();
+            console.log(`[DATA_CONVERSAO_NC] ✅ Formato DD/MM/YYYY HH:MM: "${dataHoraEnvio}" → "${dataISO}"`);
+          } else {
+            const parsed = new Date(dataHoraEnvio);
+            if (!isNaN(parsed.getTime())) {
+              dataISO = parsed.toISOString();
+              console.log(`[DATA_CONVERSAO_NC] ⚠️ Parseado como ISO genérico: "${dataHoraEnvio}" → "${dataISO}"`);
+            } else {
+              console.warn(`[DATA_CONVERSAO_NC] ❌ Formato não reconhecido: "${dataHoraEnvio}", usando data atual`);
+              dataISO = new Date().toISOString();
+            }
+          }
+        }
+
+        const fields: any = {
+          [ultimoEnvioField]: dataISO
+        };
+
+        console.log(`[SHAREPOINT_NC] Enviando PATCH para item ${itemId} campo ${ultimoEnvioField} = ${dataISO}`);
+
+        await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${itemId}/fields`, token, {
+          method: 'PATCH',
+          body: JSON.stringify(fields)
+        });
+
+        console.log(`[SHAREPOINT_NC] ✅ UltimoEnvioNcoletas atualizado para ${operacao}: ${dataISO}`);
+      } else {
+        console.warn(`[SHAREPOINT_NC] Operação "${operacao}" não encontrada na lista CONFIG_OPERACAO_SAIDA_DE_ROTAS`);
+      }
+    } catch (error: any) {
+      console.error('[SHAREPOINT_NC] ❌ Erro ao atualizar UltimoEnvioNcoletas:', error.message);
     }
   },
 
@@ -1355,9 +1430,20 @@ export const SharePointService = {
       const siteId = await getResolvedSiteId(token);
       const listId = '83e8cfb9-1982-47ae-b515-3fec112da457';
 
-      const data = await graphFetch(`/sites/${siteId}/lists/${listId}/items?expand=fields`, token);
+      // Busca todos os itens com paginação (SharePoint retorna max 100 por página)
+      let allItems: any[] = [];
+      let nextUrl: string | null = `/sites/${siteId}/lists/${listId}/items?expand=fields&$top=100`;
 
-      return (data.value || []).map((item: any) => {
+      while (nextUrl) {
+        const data = await graphFetch(nextUrl, token);
+        allItems = allItems.concat(data.value || []);
+        nextUrl = data['@odata.nextLink'] || null;
+        console.log(`[NonCollections] Página carregada. Total acumulado: ${allItems.length}`);
+      }
+
+      console.log(`[NonCollections] Total bruto: ${allItems.length} itens`);
+
+      return allItems.map((item: any) => {
         const f = item.fields || {};
         return {
           id: item.id.toString(),
@@ -1595,7 +1681,7 @@ export const SharePointService = {
       }
 
       // Busca configurações do usuário para filtrar pelas operações dele
-      const userConfigs = await this.getRouteConfigs(token, userEmail, false);
+      const userConfigs = await this.getRouteConfigs(token, userEmail, true);
       const myOps = new Set(userConfigs.map(c => c.operacao));
 
       console.log(`[COLETAS_PREVISTAS] Operações do usuário (${userEmail}):`, Array.from(myOps));
@@ -1751,7 +1837,9 @@ function parseDateForSharePoint(brDate: string): string {
   if (!brDate || brDate.trim() === '' || brDate === '-') return '';
   try {
     const [day, month, year] = brDate.split('/');
-    const date = new Date(Number(year), Number(month) - 1, Number(day));
+    // Usa hora 12:00 para evitar que o fuso horário mova a data para o dia anterior
+    // ao converter para ISO (ex: 00:00 UTC-3 vira 03:00 UTC, mas 23:00 do dia anterior em alguns fusos)
+    const date = new Date(Number(year), Number(month) - 1, Number(day), 12, 0, 0);
     if (isNaN(date.getTime())) return '';
     return date.toISOString();
   } catch {

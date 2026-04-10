@@ -3,7 +3,7 @@ import { RouteConfig, User, ColetaPrevista } from '../types';
 import { SharePointService } from '../services/sharepointService';
 import { getValidToken } from '../services/tokenService';
 import * as XLSX from 'xlsx';
-import { getBrazilDate, getWeekString } from '../utils/dateUtils';
+import { getBrazilDate, getWeekString, getNonCollectionDateForCurrentTime } from '../utils/dateUtils';
 import {
   Clock, X, Loader2, RefreshCw, ShieldCheck,
   CheckCircle2, ChevronDown,
@@ -114,13 +114,16 @@ const NonCollectionsView: React.FC<{
     if (saved) {
       return new Set(JSON.parse(saved));
     }
-    return new Set();
+    return new Set(['semana']);
   });
 
   const [contextMenu, setContextMenu] = useState<{ visible: boolean; x: number; y: number; col: string | null }>({ visible: false, x: 0, y: 0, col: null });
   const filterDropdownRef = useRef<HTMLDivElement>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const resizingRef = useRef<{ col: string; startX: number; startWidth: number } | null>(null);
+
+  // Estado para o popup de atendimento detalhado
+  const [isAttendanceModalOpen, setIsAttendanceModalOpen] = useState(false);
 
   // Estados para modal de adicionar Não coleta
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -132,7 +135,7 @@ const NonCollectionsView: React.FC<{
     operacao: string;
   }>({
     rota: '',
-    data: getBrazilDate().split('-').reverse().join('/'),
+    data: getNonCollectionDateForCurrentTime(),
     codigo: '',
     produtor: '',
     operacao: ''
@@ -143,7 +146,7 @@ const NonCollectionsView: React.FC<{
     id: 'ghost',
     semana: '',
     rota: '',
-    data: getBrazilDate().split('-').reverse().join('/'),
+    data: getNonCollectionDateForCurrentTime(),
     codigo: '',
     produtor: '',
     motivo: '',
@@ -160,6 +163,7 @@ const NonCollectionsView: React.FC<{
   // Estados para modal de seleção de Operação (bulk paste)
   const [isOperationModalOpen, setIsOperationModalOpen] = useState(false);
   const [pendingBulkRoutes, setPendingBulkRoutes] = useState<string[]>([]);
+  const [isCreatingRecords, setIsCreatingRecords] = useState(false); // Trava contra cliques duplos
 
   // Estados para arquivamento e histórico
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
@@ -257,12 +261,15 @@ const NonCollectionsView: React.FC<{
       // Adiciona localmente com o ID real do SharePoint
       setNonCollections(prev => [...prev, { ...newRecord, id: spId }]);
 
+      // Busca coletas previstas para a data inserida
+      await fetchColetasPrevistas(ghostRow.data!);
+
       // Limpa ghost row
       setGhostRow({
         id: 'ghost',
         semana: '',
         rota: '',
-        data: getBrazilDate().split('-').reverse().join('/'),
+        data: getNonCollectionDateForCurrentTime(),
         codigo: '',
         produtor: '',
         motivo: '',
@@ -285,7 +292,14 @@ const NonCollectionsView: React.FC<{
    * SALVA CADA REGISTRO NO SHAREPOINT IMEDIATAMENTE.
    */
   const createBulkRecordsWithOperation = async (operacao: string) => {
-    const dataFormatada = getBrazilDate().split('-').reverse().join('/');
+    // Trava contra cliques duplos
+    if (isCreatingRecords) {
+      console.warn('[BULK_PASTE] Ignorando clique duplicado — criação em andamento');
+      return;
+    }
+
+    setIsCreatingRecords(true);
+    const dataFormatada = getNonCollectionDateForCurrentTime();
     const dataParaSemana = dataFormatada.split('/').reverse().join('-');
     const semana = getWeekString(dataParaSemana);
 
@@ -311,8 +325,9 @@ const NonCollectionsView: React.FC<{
           operacao
         }));
         setNonCollections(prev => [...prev, ...newRecords]);
-        setIsOperationModalOpen(false);
-        setPendingBulkRoutes([]);
+
+        // Busca coletas previstas para a data inserida
+        await fetchColetasPrevistas(dataFormatada);
         return;
       }
 
@@ -351,6 +366,9 @@ const NonCollectionsView: React.FC<{
 
       setNonCollections(prev => [...prev, ...savedRecords]);
       console.log('[BULK_PASTE] âœ…', savedRecords.length, 'linhas criadas e salvas com Operação:', operacao);
+
+      // Busca coletas previstas para a data inserida
+      await fetchColetasPrevistas(dataFormatada);
     } catch (e: any) {
       console.error('[BULK_PASTE] Erro crítico ao salvar no SharePoint:', e.message);
       // Fallback: cria localmente
@@ -370,17 +388,20 @@ const NonCollectionsView: React.FC<{
         operacao
       }));
       setNonCollections(prev => [...prev, ...newRecords]);
+    } finally {
+      // Sempre libera a trava
+      setIsCreatingRecords(false);
+      // Limpa estados do modal
+      setIsOperationModalOpen(false);
+      setPendingBulkRoutes([]);
     }
-
-    // Limpa estados do modal
-    setIsOperationModalOpen(false);
-    setPendingBulkRoutes([]);
   };
 
   /**
    * Cancela o modal de seleção de Operação sem criar linhas.
    */
   const cancelBulkPaste = () => {
+    setIsCreatingRecords(false);
     setIsOperationModalOpen(false);
     setPendingBulkRoutes([]);
   };
@@ -397,6 +418,19 @@ const NonCollectionsView: React.FC<{
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Atalho CTRL+SHIFT+L para limpar todos os filtros
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'l') {
+        event.preventDefault();
+        clearFilters();
+        setActiveFilterCol(null);
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
   }, []);
 
   // Redimensionamento de colunas
@@ -430,6 +464,33 @@ const NonCollectionsView: React.FC<{
   useEffect(() => {
     loadData();
   }, [currentUser]);
+
+  /**
+   * Busca coletas previstas para uma data específica e atualiza o estado.
+   * @param dataDDMMYYYY Data no formato DD/MM/YYYY
+   */
+  const fetchColetasPrevistas = async (dataDDMMYYYY: string) => {
+    try {
+      const token = await getValidToken() || currentUser.accessToken;
+      if (!token) return;
+
+      const dataISO = dataDDMMYYYY.split('/').reverse().join('-');
+      console.log('[COLETAS_PREVISTAS] Buscando para data:', dataISO);
+      console.log('[COLETAS_PREVISTAS] Email do usuário:', currentUser.email);
+      console.log('[COLETAS_PREVISTAS] Operações do usuário (userConfigs):', userConfigs.map(c => c.operacao));
+
+      // Limpa cache para garantir busca fresca
+      SharePointService.clearCache(`coletasPrevistas_${dataISO}_${currentUser.email}`);
+
+      const coletas = await SharePointService.getColetasPrevistas(token, dataISO, currentUser.email);
+      setColetasPrevistas(coletas);
+      console.log('[COLETAS_PREVISTAS] Total retornado:', coletas.length);
+      console.log('[COLETAS_PREVISTAS] Detalhes:', coletas.map(c => `${c.Title}=${c.QntColeta}`));
+      console.log('[COLETAS_PREVISTAS] Soma QntColeta:', coletas.reduce((sum, c) => sum + c.QntColeta, 0));
+    } catch (e: any) {
+      console.error('[COLETAS_PREVISTAS] Erro ao buscar:', e.message);
+    }
+  };
 
   const loadData = async () => {
     try {
@@ -466,12 +527,7 @@ const NonCollectionsView: React.FC<{
       if (filtered.length > 0) {
         // Pega a data da primeira não coleta (todas são da mesma data)
         const dataNC = filtered[0].data;
-        const dataISO = dataNC ? dataNC.split('/').reverse().join('-') : getBrazilDate();
-        console.log('[COLETAS_PREVISTAS] Buscando para data:', dataISO);
-
-        const coletas = await SharePointService.getColetasPrevistas(token, dataISO, currentUser.email);
-        setColetasPrevistas(coletas);
-        console.log('[COLETAS_PREVISTAS] Total:', coletas.length, 'Soma QntColeta:', coletas.reduce((sum, c) => sum + c.QntColeta, 0));
+        await fetchColetasPrevistas(dataNC);
       } else {
         setColetasPrevistas([]);
       }
@@ -553,6 +609,40 @@ const NonCollectionsView: React.FC<{
     return result;
   }, [nonCollections, colFilters, selectedFilters, isSortByDataEnabled]);
 
+  // Dados detalhados de atendimento por operação
+  const attendanceDetails = useMemo(() => {
+    const myOps = userConfigs.map(c => c.operacao);
+
+    return myOps.map(op => {
+      // Coletas previstas para esta operação
+      const prevOp = coletasPrevistas.find(c => c.Title === op);
+      const previstas = prevOp ? prevOp.QntColeta : 0;
+
+      // Não coletas internas (apenas desta operação)
+      const ncInternas = nonCollections.filter(nc => nc.operacao === op);
+      const ncCount = ncInternas.length;
+
+      // Não coletas VIA (para atendimento interno)
+      const ncVia = ncInternas.filter(nc => nc.Culpabilidade === 'VIA').length;
+
+      // Atendimento interno: (previstas - ncVIA) / previstas
+      const pctInterno = previstas > 0 ? ((previstas - ncVia) / previstas * 100) : 100;
+
+      // Atendimento geral: (previstas - todas NCs da op) / previstas
+      const pctGeral = previstas > 0 ? ((previstas - ncCount) / previstas * 100) : 100;
+
+      return {
+        operacao: op,
+        nomeExibicao: userConfigs.find(c => c.operacao === op)?.nomeExibicao || op,
+        previstas,
+        ncCount,
+        ncVia,
+        pctInterno,
+        pctGeral
+      };
+    }).sort((a, b) => b.pctInterno - a.pctInterno); // Ordena por atendimento interno (maior → menor)
+  }, [userConfigs, coletasPrevistas, nonCollections]);
+
   const handleAddNonCollection = async () => {
     if (!newNonCollectionData.rota || !newNonCollectionData.data || !newNonCollectionData.produtor || !newNonCollectionData.operacao) {
       alert('Preencha todos os campos obrigatórios!');
@@ -579,18 +669,32 @@ const NonCollectionsView: React.FC<{
         operacao: newNonCollectionData.operacao
       };
 
-      setNonCollections(prev => [...prev, newRecord]);
+      // Salva no SharePoint e obtém o ID real
+      const token = await getValidToken() || currentUser.accessToken;
+      if (!token) {
+        alert('Erro: Token não encontrado');
+        return;
+      }
+
+      const spId = await SharePointService.saveNonCollection(token, newRecord);
+
+      // Adiciona localmente com o ID real do SharePoint
+      setNonCollections(prev => [...prev, { ...newRecord, id: spId }]);
+
       setIsAddModalOpen(false);
       setNewNonCollectionData({
         rota: '',
-        data: getBrazilDate().split('-').reverse().join('/'),
+        data: getNonCollectionDateForCurrentTime(),
         codigo: '',
         produtor: '',
         operacao: ''
       });
-    } catch (e) {
+
+      // Busca coletas previstas para a data inserida
+      await fetchColetasPrevistas(newRecord.data);
+    } catch (e: any) {
       console.error('[ADD_NON_COLLECTION] Error:', e);
-      alert('Erro ao adicionar Não coleta');
+      alert(`Erro ao adicionar Não coleta: ${e.message}`);
     }
   };
 
@@ -732,28 +836,57 @@ const NonCollectionsView: React.FC<{
       // Abre modal para selecionar Operação antes de criar as linhas
       setPendingBulkRoutes(lines);
       setIsOperationModalOpen(true);
+      setIsCreatingRecords(false); // Garante que a trava esteja liberada ao abrir
     } else {
-      // COMPORTAMENTO 2: Atualizar linhas existentes (para CÓDIGO, PRODUTOR, MOTIVO, OBSERVAÇÃO, etc.)
-      console.log('[BULK_PASTE] Atualizando linhas existentes...');
-      const updatedRecords: NonCollection[] = [];
+      // COMPORTAMENTO 2: Atualizar linhas existentes ou vazias
+      // Para outras colunas (CÓDIGO, PRODUTOR, MOTIVO, etc.)
+      console.log('[BULK_PASTE] Preenchendo linhas existentes e/ou vazias...');
 
       // Colunas que devem ser tratadas individualmente (sem tentar separar Código/produtor)
       const colunasIndividuais: (keyof NonCollection)[] = ['codigo', 'produtor'];
       const isColunaIndividual = colunasIndividuais.includes(field);
 
-      for (let i = 0; i < Math.min(lines.length, nonCollections.length); i++) {
-        const record = nonCollections[i];
-        let finalValue = lines[i];
+      // ============================================================
+      // IDENTIFICA LINHAS VAZIAS vs PREENCHIDAS
+      // ============================================================
+      // Uma linha é considerada "vazia" se NÃO tem rota OU NÃO tem produtor
+      // Isso evita sobrescrever dados que o usuário já preencheu
+      const emptyIndices: number[] = [];
+      const filledIndices: number[] = [];
+
+      nonCollections.forEach((nc, idx) => {
+        const isEmpty = !nc.rota?.trim() || !nc.produtor?.trim();
+        if (isEmpty) {
+          emptyIndices.push(idx);
+        } else {
+          filledIndices.push(idx);
+        }
+      });
+
+      console.log('[BULK_PASTE] Linhas vazias detectadas:', emptyIndices.length);
+      console.log('[BULK_PASTE] Linhas preenchidas detectadas:', filledIndices.length);
+
+      // ============================================================
+      // DISTRIBUI VALORES: PRIORIZA LINHAS VAZIAS
+      // ============================================================
+      const updatedRecords: NonCollection[] = [...nonCollections]; // Cópia completa
+      let lineIndex = 0; // Índice do valor being processed
+
+      // Passo 1: Preenche primeiro nas linhas vazias
+      for (let i = 0; i < emptyIndices.length && lineIndex < lines.length; i++) {
+        const recordIndex = emptyIndices[i];
+        const record = updatedRecords[recordIndex];
+        let finalValue = lines[lineIndex];
         let codigo = '';
         let produtor = '';
 
         // Tenta separar Código e produtor SOMENTE se NÃO for coluna individual
         if (!isColunaIndividual) {
-          const parsed = parseCodigoProdutor(lines[i]);
+          const parsed = parseCodigoProdutor(lines[lineIndex]);
           if (parsed) {
             codigo = parsed.codigo;
             produtor = parsed.produtor;
-            console.log('[BULK_PASTE] âœ… Código e produtor separados:', parsed);
+            console.log(`[BULK_PASTE] ✅ Linha vazia ${recordIndex}: Código/produtor separados:`, parsed);
           }
         }
 
@@ -770,40 +903,87 @@ const NonCollectionsView: React.FC<{
           finalValue = finalValue.toUpperCase();
         }
 
-        // Se é coluna individual, aplica direto. Se separou Código/produtor, aplica ambos.
-        if (isColunaIndividual) {
-          updatedRecords.push({
-            ...record,
-            [field]: finalValue
-          });
-        } else {
-          updatedRecords.push({
-            ...record,
-            ...(codigo && produtor ? { codigo, produtor } : { [field]: finalValue })
-          });
-        }
-        console.log('[BULK_PASTE] Atualizando linha', i, 'campo', field, 'valor', isColunaIndividual ? finalValue : (codigo && produtor ? `${codigo} + ${produtor}` : finalValue));
+        // Aplica o valor na linha vazia
+        updatedRecords[recordIndex] = {
+          ...record,
+          ...(codigo && produtor ? { codigo, produtor } : { [field]: finalValue })
+        };
+        console.log(`[BULK_PASTE] Preenchida linha vazia ${recordIndex} (campo: ${field})`);
+        lineIndex++;
       }
 
-      // Mantém as linhas que Não foram atualizadas
-      const remainingRecords = nonCollections.slice(updatedRecords.length);
+      // Passo 2: Se ainda há valores e todas linhas vazias foram usadas, cria novas linhas
+      const remainingLines = lines.slice(lineIndex);
+      if (remainingLines.length > 0) {
+        console.log('[BULK_PASTE] Criando', remainingLines.length, 'novas linhas para valores restantes...');
 
-      // Atualiza estado local
-      setNonCollections([...updatedRecords, ...remainingRecords]);
-      console.log('[BULK_PASTE] âœ…', updatedRecords.length, 'linhas atualizadas', remainingRecords.length, 'mantidas');
+        const dataFormatada = getNonCollectionDateForCurrentTime();
+        const dataParaSemana = dataFormatada.split('/').reverse().join('-');
+        const semana = getWeekString(dataParaSemana);
+
+        for (let i = 0; i < remainingLines.length; i++) {
+          let finalValue = remainingLines[i];
+          let codigo = '';
+          let produtor = '';
+
+          // Tenta separar Código e produtor
+          if (!isColunaIndividual) {
+            const parsed = parseCodigoProdutor(remainingLines[i]);
+            if (parsed) {
+              codigo = parsed.codigo;
+              produtor = parsed.produtor;
+            }
+          }
+
+          // Formata se for data
+          if (field === 'data' || field === 'dataAcao' || field === 'ultimaColeta') {
+            if (finalValue.includes('-')) {
+              const [year, month, day] = finalValue.split('-');
+              finalValue = `${day}/${month}/${year}`;
+            }
+          }
+
+          // CÓDIGO: converte para maiúsculo
+          if (field === 'codigo') {
+            finalValue = finalValue.toUpperCase();
+          }
+
+          const newRecord: NonCollection = {
+            id: (Date.now() + i).toString(), // ID temporário
+            semana,
+            rota: '', // Será preenchido depois pelo usuário
+            data: dataFormatada,
+            codigo: codigo || (field === 'codigo' ? finalValue : ''),
+            produtor: produtor || (field === 'produtor' ? finalValue : ''),
+            motivo: field === 'motivo' ? finalValue : '',
+            observacao: field === 'observacao' ? finalValue : '',
+            acao: field === 'acao' ? finalValue : '',
+            dataAcao: field === 'dataAcao' ? finalValue : '',
+            ultimaColeta: field === 'ultimaColeta' ? finalValue : '',
+            Culpabilidade: field === 'Culpabilidade' ? finalValue : 'Não se aplica',
+            operacao: '' // Será definido pelo modal de operação
+          };
+
+          updatedRecords.push(newRecord);
+          console.log(`[BULK_PASTE] Criada nova linha ${updatedRecords.length - 1} para valor restante`);
+        }
+      }
+
+      // ============================================================
+      // ATUALIZA ESTADO E SALVA NO SHAREPOINT
+      // ============================================================
+      setNonCollections(updatedRecords);
+      console.log('[BULK_PASTE] ✅', lineIndex, 'valores distribuídos em linhas existentes/vazias,', remainingLines.length, 'novas linhas criadas');
 
       // Salva no SharePoint APENAS registros que já existem no SharePoint
-      // Registros criados localmente (com IDs baseados em timestamp) são ignorados
-      // até serem salvos via "Adicionar Não Coleta" ou similar
       try {
         const token = await getValidToken() || currentUser.accessToken;
         if (!token) {
-          console.error('[BULK_PASTE] Token Não encontrado, pulando salvamento no SharePoint');
+          console.error('[BULK_PASTE] Token não encontrado, pulando salvamento no SharePoint');
           return;
         }
 
         // Filtra apenas registros que já existem no SharePoint (IDs numéricos válidos)
-        // IDs locais gerados por Date.now() são strings grandes (13+ dígitos)
         const recordsToSave = updatedRecords.filter(r => {
           const id = parseInt(r.id);
           // SharePoint IDs são inteiros pequenos (< 1 milhão), locais são timestamps grandes
@@ -819,15 +999,24 @@ const NonCollectionsView: React.FC<{
         const savePromises = recordsToSave.map(async (record) => {
           try {
             await SharePointService.updateNonCollection(token, record);
-            console.log('[BULK_PASTE] âœ… Salvo:', record.rota, '-', record.codigo);
+            console.log('[BULK_PASTE] ✅ Salvo:', record.rota, '-', record.codigo);
           } catch (e: any) {
             console.error('[BULK_PASTE] Erro ao salvar registro:', record.rota, e.message);
           }
         });
         await Promise.all(savePromises);
-        console.log('[BULK_PASTE] âœ… Todos os registros salvos no SharePoint');
+        console.log('[BULK_PASTE] ✅ Todos os registros salvos no SharePoint');
       } catch (e: any) {
         console.error('[BULK_PASTE] Erro ao salvar no SharePoint:', e.message);
+      }
+
+      // Busca coletas previstas se criou novas linhas
+      if (remainingLines.length > 0 && nonCollections.length > 0) {
+        // Pega a data do último registro adicionado (todos têm a mesma data)
+        const lastRecord = updatedRecords[updatedRecords.length - 1];
+        if (lastRecord.data) {
+          await fetchColetasPrevistas(lastRecord.data);
+        }
       }
     }
   };
@@ -943,9 +1132,11 @@ const NonCollectionsView: React.FC<{
               const corDot = pct >= 90 ? 'bg-amber-500' : pct >= 70 ? 'bg-orange-500' : 'bg-red-500';
 
               return (
-                <div className={`flex items-center gap-3 px-6 py-3 rounded-2xl min-w-[160px] ${
-                  isDarkMode ? `${corBg} border ${corBorder}` : `${corBgLight} border ${corBorderLight}`
-                }`}>
+                <div
+                  onClick={() => setIsAttendanceModalOpen(true)}
+                  className={`flex items-center gap-3 px-6 py-3 rounded-2xl min-w-[160px] cursor-pointer hover:scale-105 transition-all ${
+                    isDarkMode ? `${corBg} border ${corBorder}` : `${corBgLight} border ${corBorderLight}`
+                  }`}>
                   <div className="text-center flex-1">
                     <p className={`text-[9px] font-black uppercase tracking-wider mb-1 ${isDarkMode ? corText : corTextLight}`}>Atend. Interno</p>
                     <p className={`text-2xl font-black leading-none ${isDarkMode ? corText : corTextLight}`}>{pct.toFixed(1)}%</p>
@@ -970,9 +1161,11 @@ const NonCollectionsView: React.FC<{
               const corDot = pct >= 90 ? 'bg-amber-500' : pct >= 70 ? 'bg-orange-500' : 'bg-red-500';
 
               return (
-                <div className={`flex items-center gap-3 px-6 py-3 rounded-2xl min-w-[160px] ${
-                  isDarkMode ? `${corBg} border ${corBorder}` : `${corBgLight} border ${corBorderLight}`
-                }`}>
+                <div
+                  onClick={() => setIsAttendanceModalOpen(true)}
+                  className={`flex items-center gap-3 px-6 py-3 rounded-2xl min-w-[160px] cursor-pointer hover:scale-105 transition-all ${
+                    isDarkMode ? `${corBg} border ${corBorder}` : `${corBgLight} border ${corBorderLight}`
+                  }`}>
                   <div className="text-center flex-1">
                     <p className={`text-[9px] font-black uppercase tracking-wider mb-1 ${isDarkMode ? corText : corTextLight}`}>Atend. Geral</p>
                     <p className={`text-2xl font-black leading-none ${isDarkMode ? corText : corTextLight}`}>{pct.toFixed(1)}%</p>
@@ -2358,12 +2551,6 @@ const NonCollectionsView: React.FC<{
         </div>
       )}
 
-      {/* Footer Info */}
-      <div className="px-6 py-3 text-center">
-        <p className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">
-          Visualização apenas • Dados não persistidos
-        </p>
-      </div>
 
       {/* Modal de seleção de Operação (Bulk Paste) */}
       {isOperationModalOpen && (
@@ -2401,9 +2588,21 @@ const NonCollectionsView: React.FC<{
                   <button
                     key={op.operacao}
                     onClick={() => createBulkRecordsWithOperation(op.operacao)}
-                    className="p-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl hover:bg-blue-600 hover:text-white hover:border-blue-700 dark:hover:bg-blue-600 dark:hover:border-blue-500 transition-all font-black text-xs uppercase text-slate-700 dark:text-slate-300"
+                    disabled={isCreatingRecords}
+                    className={`p-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl transition-all font-black text-xs uppercase relative
+                      ${isCreatingRecords
+                        ? 'opacity-40 cursor-not-allowed bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-600'
+                        : 'hover:bg-blue-600 hover:text-white hover:border-blue-700 dark:hover:bg-blue-600 dark:hover:border-blue-500 text-slate-700 dark:text-slate-300'
+                      }`}
                   >
-                    {op.operacao}
+                    {isCreatingRecords ? (
+                      <div className="flex items-center justify-center gap-2">
+                        <Loader2 size={14} className="animate-spin" />
+                        Criando...
+                      </div>
+                    ) : (
+                      op.operacao
+                    )}
                   </button>
                 ))}
               </div>
@@ -2415,6 +2614,155 @@ const NonCollectionsView: React.FC<{
             >
               Cancelar
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Atendimento Detalhado */}
+      {isAttendanceModalOpen && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[200] flex items-center justify-center p-4 animate-in fade-in zoom-in-95 duration-200">
+          <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] shadow-2xl w-full max-w-5xl overflow-hidden border border-blue-500/50 animate-in zoom-in duration-300 flex flex-col" style={{ maxHeight: '90vh' }}>
+            {/* Header */}
+            <div className="bg-gradient-to-r from-blue-600 via-blue-700 to-blue-600 text-white p-6 flex justify-between items-center shrink-0">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center">
+                  <CheckCircle2 size={28} />
+                </div>
+                <div>
+                  <h3 className="text-2xl font-black uppercase tracking-tight">Atendimento</h3>
+                  <p className="text-xs text-blue-200 font-bold uppercase tracking-widest">Detalhamento por Operação</p>
+                </div>
+              </div>
+              <button onClick={() => setIsAttendanceModalOpen(false)} className="hover:bg-white/10 p-2 rounded-full transition-all">
+                <X size={24} />
+              </button>
+            </div>
+
+            {/* Tabela de Atendimento */}
+            <div className="flex-1 overflow-auto p-6 scrollbar-thin">
+              <table className="w-full border-collapse">
+                <thead>
+                  <tr className="bg-slate-100 dark:bg-slate-800">
+                    <th className="px-4 py-3 text-left text-[10px] font-black uppercase text-slate-600 dark:text-slate-400 tracking-wider border-b-2 border-slate-200 dark:border-slate-700 sticky left-0 bg-slate-100 dark:bg-slate-800 z-10">
+                      Operação
+                    </th>
+                    {/* Atendimento Geral - Grupo */}
+                    <th colSpan={3} className="px-4 py-2 text-center text-[10px] font-black uppercase text-blue-600 dark:text-blue-400 tracking-wider border-b-2 border-blue-300 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20">
+                      Atendimento Geral
+                    </th>
+                    {/* Atendimento Interno - Grupo */}
+                    <th colSpan={3} className="px-4 py-2 text-center text-[10px] font-black uppercase text-emerald-600 dark:text-emerald-400 tracking-wider border-b-2 border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-900/20">
+                      Atendimento Interno
+                    </th>
+                  </tr>
+                  <tr className="bg-slate-50 dark:bg-slate-800/50">
+                    <th className="px-4 py-2 text-left text-[9px] font-bold uppercase text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-700 sticky left-0 bg-slate-50 dark:bg-slate-800/50 z-10">
+                    </th>
+                    {/* Sub-colunas Geral */}
+                    <th className="px-3 py-2 text-center text-[9px] font-bold uppercase text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-slate-700">Coletas Prev.</th>
+                    <th className="px-3 py-2 text-center text-[9px] font-bold uppercase text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-slate-700">Não Coletas</th>
+                    <th className="px-3 py-2 text-center text-[9px] font-bold uppercase text-blue-600 dark:text-blue-400 border-b border-slate-200 dark:border-slate-700">Atend. %</th>
+                    {/* Sub-colunas Interno */}
+                    <th className="px-3 py-2 text-center text-[9px] font-bold uppercase text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-slate-700">Coletas Prev.</th>
+                    <th className="px-3 py-2 text-center text-[9px] font-bold uppercase text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-slate-700">NCs VIA</th>
+                    <th className="px-3 py-2 text-center text-[9px] font-bold uppercase text-emerald-600 dark:text-emerald-400 border-b border-slate-200 dark:border-slate-700">Atend. %</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {attendanceDetails.map((item, idx) => {
+                    const corGeral = item.pctGeral >= 90 ? 'text-green-600 dark:text-green-400' : item.pctGeral >= 70 ? 'text-amber-600 dark:text-amber-400' : 'text-red-600 dark:text-red-400';
+                    const corInterno = item.pctInterno >= 90 ? 'text-green-600 dark:text-green-400' : item.pctInterno >= 70 ? 'text-amber-600 dark:text-amber-400' : 'text-red-600 dark:text-red-400';
+                    const bgGeral = item.pctGeral >= 90 ? 'bg-green-50 dark:bg-green-900/20' : item.pctGeral >= 70 ? 'bg-amber-50 dark:bg-amber-900/20' : 'bg-red-50 dark:bg-red-900/20';
+                    const bgInterno = item.pctInterno >= 90 ? 'bg-green-50 dark:bg-green-900/20' : item.pctInterno >= 70 ? 'bg-amber-50 dark:bg-amber-900/20' : 'bg-red-50 dark:bg-red-900/20';
+
+                    return (
+                      <tr key={item.operacao} className={`${idx % 2 === 0 ? 'bg-white dark:bg-slate-900' : 'bg-slate-50 dark:bg-slate-800/50'} hover:bg-blue-50 dark:hover:bg-slate-700/50 transition-colors`}>
+                        <td className="px-4 py-3 font-black text-[11px] uppercase text-slate-800 dark:text-white border-b border-slate-200 dark:border-slate-700 sticky left-0 bg-inherit z-10">
+                          {item.nomeExibicao}
+                        </td>
+                        {/* Colunas Geral */}
+                        <td className="px-3 py-3 text-center text-[11px] font-bold text-slate-700 dark:text-slate-300 border-b border-slate-200 dark:border-slate-700">{item.previstas}</td>
+                        <td className="px-3 py-3 text-center text-[11px] font-bold text-slate-700 dark:text-slate-300 border-b border-slate-200 dark:border-slate-700">{item.ncCount}</td>
+                        <td className={`px-3 py-3 text-center text-[12px] font-black border-b border-slate-200 dark:border-slate-700 ${corGeral} ${bgGeral}`}>
+                          {item.pctGeral.toFixed(1)}%
+                        </td>
+                        {/* Colunas Interno */}
+                        <td className="px-3 py-3 text-center text-[11px] font-bold text-slate-700 dark:text-slate-300 border-b border-slate-200 dark:border-slate-700">{item.previstas}</td>
+                        <td className="px-3 py-3 text-center text-[11px] font-bold text-slate-700 dark:text-slate-300 border-b border-slate-200 dark:border-slate-700">{item.ncVia}</td>
+                        <td className={`px-3 py-3 text-center text-[12px] font-black border-b border-slate-200 dark:border-slate-700 ${corInterno} ${bgInterno}`}>
+                          {item.pctInterno.toFixed(1)}%
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                {/* Rodapé com totais */}
+                <tfoot>
+                  <tr className="bg-slate-100 dark:bg-slate-800 font-black">
+                    <td className="px-4 py-3 text-[11px] uppercase text-slate-800 dark:text-white border-t-2 border-slate-300 dark:border-slate-600 sticky left-0 bg-slate-100 dark:bg-slate-800 z-10">
+                      TOTAL
+                    </td>
+                    <td className="px-3 py-3 text-center text-[11px] text-slate-800 dark:text-white border-t-2 border-slate-300 dark:border-slate-600">
+                      {coletasPrevistas.reduce((sum, c) => sum + c.QntColeta, 0)}
+                    </td>
+                    <td className="px-3 py-3 text-center text-[11px] text-slate-800 dark:text-white border-t-2 border-slate-300 dark:border-slate-600">
+                      {nonCollections.length}
+                    </td>
+                    <td className={`px-3 py-3 text-center text-[12px] border-t-2 border-slate-300 dark:border-slate-600 ${
+                      (() => {
+                        const tp = coletasPrevistas.reduce((s, c) => s + c.QntColeta, 0);
+                        const tn = nonCollections.length;
+                        const pct = tp > 0 ? ((tp - tn) / tp * 100) : 100;
+                        return pct >= 90 ? 'text-green-600 dark:text-green-400' : pct >= 70 ? 'text-amber-600 dark:text-amber-400' : 'text-red-600 dark:text-red-400';
+                      })()
+                    }`}>
+                      {(() => {
+                        const tp = coletasPrevistas.reduce((s, c) => s + c.QntColeta, 0);
+                        const tn = nonCollections.length;
+                        return tp > 0 ? ((tp - tn) / tp * 100).toFixed(1) + '%' : '100.0%';
+                      })()}
+                    </td>
+                    <td className="px-3 py-3 text-center text-[11px] text-slate-800 dark:text-white border-t-2 border-slate-300 dark:border-slate-600">
+                      {coletasPrevistas.reduce((sum, c) => sum + c.QntColeta, 0)}
+                    </td>
+                    <td className="px-3 py-3 text-center text-[11px] text-slate-800 dark:text-white border-t-2 border-slate-300 dark:border-slate-600">
+                      {nonCollections.filter(nc => nc.Culpabilidade === 'VIA').length}
+                    </td>
+                    <td className={`px-3 py-3 text-center text-[12px] border-t-2 border-slate-300 dark:border-slate-600 ${
+                      (() => {
+                        const tp = coletasPrevistas.reduce((s, c) => s + c.QntColeta, 0);
+                        const nv = nonCollections.filter(nc => nc.Culpabilidade === 'VIA').length;
+                        const pct = tp > 0 ? ((tp - nv) / tp * 100) : 100;
+                        return pct >= 90 ? 'text-green-600 dark:text-green-400' : pct >= 70 ? 'text-amber-600 dark:text-amber-400' : 'text-red-600 dark:text-red-400';
+                      })()
+                    }`}>
+                      {(() => {
+                        const tp = coletasPrevistas.reduce((s, c) => s + c.QntColeta, 0);
+                        const nv = nonCollections.filter(nc => nc.Culpabilidade === 'VIA').length;
+                        return tp > 0 ? ((tp - nv) / tp * 100).toFixed(1) + '%' : '100.0%';
+                      })()}
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+
+              {attendanceDetails.length === 0 && (
+                <div className="py-16 text-center text-slate-400 dark:text-slate-500">
+                  <AlertTriangle size={40} className="mx-auto mb-4 opacity-50" />
+                  <p className="text-sm font-bold">Nenhuma operação disponível</p>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 bg-slate-50 dark:bg-slate-800/50 border-t border-slate-200 dark:border-slate-700 flex justify-center shrink-0">
+              <button
+                onClick={() => setIsAttendanceModalOpen(false)}
+                className="px-8 py-3 bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl font-black uppercase text-[10px] hover:bg-slate-300 dark:hover:bg-slate-600 transition-all tracking-widest border border-slate-300 dark:border-slate-600 shadow-sm"
+              >
+                Fechar
+              </button>
+            </div>
           </div>
         </div>
       )}

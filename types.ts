@@ -81,6 +81,7 @@ export interface RouteConfig {
   Copia?: string; // Emails para cópia (separados por ";")
   UltimoEnvioResumoSaida?: string; // Último envio de resumo
   StatusResumoSaida?: string; // Status do resumo: "OK", "Atualizar" ou vazio
+  UltimoEnvioNcoletas?: string; // Último envio de não coletas
   CodigoKmm?: string; // Código KMM da operação para busca de coletas previstas
 }
 

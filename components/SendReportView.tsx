@@ -36,13 +36,21 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
   const [selectedOperacao, setSelectedOperacao] = useState<string>('');
   const [selectedOperacaoNC, setSelectedOperacaoNC] = useState<string>('');
   const [isSending, setIsSending] = useState(false);
-  const [sendError, setSendError] = useState<string | null>(null);
-  const [sendSuccess, setSendSuccess] = useState(false);
+
+  // Feedback separado para cada tipo de envio
+  const [sendError, setSendError] = useState<string | null>(null);       // Saídas (lado esquerdo)
+  const [sendSuccess, setSendSuccess] = useState(false);                  // Saídas (lado esquerdo)
+  const [ncSendError, setNcSendError] = useState<string | null>(null);   // Não Coletas (lado direito)
+  const [ncSendSuccess, setNcSendSuccess] = useState(false);              // Não Coletas (lado direito)
   const [isAtualizacao, setIsAtualizacao] = useState(false);
   const [isSendingSummary, setIsSendingSummary] = useState(false);
 
   const WEBHOOK_URL = import.meta.env.VITE_WEBHOOK_SAIDAS_URL || "https://n8n.datastack.viagroup.com.br/webhook/8cb1f3e1-833d-42a7-a3f0-2f959ea390d6";
+  const WEBHOOK_URL_NAO_COLETAS = "https://n8n.datastack.viagroup.com.br/webhook-test/d712d06e-b81f-40f4-9ca8-5b2403a90fdd";
   const WEBHOOK_URL_RESUMO = import.meta.env.VITE_WEBHOOK_RESUMO_URL || "https://n8n.datastack.viagroup.com.br/webhook/8cb1f3e1-833d-42a7-a3f0-2f959ea390d6";
+
+  // Estado para não coletas reais do SharePoint (usado na coluna da direita)
+  const [realNonCollections, setRealNonCollections] = useState<any[]>([]);
 
   const fetchAllData = async (forceRefresh: boolean = false) => {
     setIsLoading(true);
@@ -52,10 +60,11 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     try {
       console.log('[FETCH_ALL] Buscando dados completos...', forceRefresh ? '(force refresh)' : '');
       console.log('[FETCH_ALL] Usuário logado:', currentUser.email);
-      
-      const [depData, configs] = await Promise.all([
+
+      const [depData, configs, spNonCollections] = await Promise.all([
         SharePointService.getDepartures(token, forceRefresh),
-        SharePointService.getRouteConfigs(token, currentUser.email, forceRefresh)
+        SharePointService.getRouteConfigs(token, currentUser.email, forceRefresh),
+        SharePointService.getNonCollections(token, currentUser.email)
       ]);
 
       console.log('[FETCH_ALL] Total de rotas brutas do SharePoint:', depData?.length || 0);
@@ -85,6 +94,10 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
       // Manter TODAS as configs originais do usuário
       setUserConfigs(configs);
+
+      // Salvar não coletas reais do SharePoint
+      setRealNonCollections(spNonCollections || []);
+      console.log('[FETCH_ALL] Não coletas reais carregadas:', (spNonCollections || []).length);
 
       setLastSync(new Date());
       console.log('[FETCH_ALL] Dados atualizados com sucesso');
@@ -122,11 +135,27 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       }
     };
 
+    // Polling para atualizar não coletas reais a cada 10 segundos
+    const fetchNonCollectionsOnly = async () => {
+      const token = await getValidToken();
+      if (!token) return;
+
+      try {
+        const spNC = await SharePointService.getNonCollections(token, currentUser.email);
+        setRealNonCollections(spNC || []);
+      } catch (e) {
+        console.error("Erro ao atualizar não coletas:", e);
+      }
+    };
+
     // Carrega dados iniciais com force refresh
     fetchAllData();
 
     // Polling das configs a cada 5 segundos (mais frequente para atualizar em tempo real)
     const configsInterval = setInterval(() => fetchConfigsOnly(true), 5000);
+
+    // Polling de não coletas a cada 10 segundos
+    const ncInterval = setInterval(() => fetchNonCollectionsOnly(), 10000);
 
     // Atualização completa a cada 30 segundos
     const fullInterval = setInterval(() => {
@@ -136,6 +165,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
     return () => {
       clearInterval(configsInterval);
+      clearInterval(ncInterval);
       clearInterval(fullInterval);
     };
   }, []);
@@ -452,8 +482,8 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
   // Função para enviar não coletas
   const handleSendNonCollections = async () => {
     if (!selectedOperacaoNC) {
-      setSendError("Selecione uma operação para enviar.");
-      setTimeout(() => setSendError(null), 3000);
+      setNcSendError("Selecione uma operação para enviar.");
+      setTimeout(() => setNcSendError(null), 3000);
       return;
     }
 
@@ -476,21 +506,21 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       const hasAllDealeOps = getDealeOperationsToSend().every(op => myOps.has(op));
       if (!hasAllDealeOps) {
         console.error(`[SEND_NAO_COLETA_BLOCKED] Usuário tentou enviar DEALE sem ter todas as operações necessárias`);
-        setSendError(`Erro: Você não tem permissão para enviar esta operação.`);
-        setTimeout(() => setSendError(null), 5000);
+        setNcSendError(`Erro: Você não tem permissão para enviar esta operação.`);
+        setTimeout(() => setNcSendError(null), 5000);
         return;
       }
     } else if (!myOps.has(selectedOperacaoNC)) {
       console.error(`[SEND_NAO_COLETA_BLOCKED] Usuário tentou enviar operação não pertencente: ${selectedOperacaoNC}`);
-      setSendError(`Erro: Você não tem permissão para enviar esta operação.`);
-      setTimeout(() => setSendError(null), 5000);
+      setNcSendError(`Erro: Você não tem permissão para enviar esta operação.`);
+      setTimeout(() => setNcSendError(null), 5000);
       return;
     }
 
     // VERIFICA TRAVA PARA EVITAR ENVIO DUPLICADO (usa operação âncora para DEALE)
     const token = await getValidToken() || currentUser.accessToken;
     if (!token) {
-      setSendError("Erro de autenticação. Tente novamente.");
+      setNcSendError("Erro de autenticação. Tente novamente.");
       return;
     }
 
@@ -498,24 +528,24 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     const lockResult = await SharePointService.checkSendLock(token, anchorOperation);
     if (lockResult && lockResult.locked && !lockResult.expired) {
       const errorMsg = `⚠️ Já existe envio em andamento para ${selectedOperacaoNC} por ${lockResult.user}. Aguarde alguns segundos e tente novamente.`;
-      setSendError(errorMsg);
+      setNcSendError(errorMsg);
       console.warn('[SEND_NAO_COLETA] Envio bloqueado por trava:', lockResult.user);
-      setTimeout(() => setSendError(null), 8000);
+      setTimeout(() => setNcSendError(null), 8000);
       return;
     }
 
     // Adquire trava (na operação âncora para DEALE)
     const acquireResult = await SharePointService.acquireSendLock(token, anchorOperation, currentUser.email);
     if (!acquireResult.success) {
-      setSendError(`⚠️ Não foi possível adquirir trava para ${selectedOperacaoNC}: ${acquireResult.message}. Tente novamente.`);
-      setTimeout(() => setSendError(null), 8000);
+      setNcSendError(`⚠️ Não foi possível adquirir trava para ${selectedOperacaoNC}: ${acquireResult.message}. Tente novamente.`);
+      setTimeout(() => setNcSendError(null), 8000);
       return;
     }
 
     console.log(`[SEND_NAO_COLETA] ✅ Trava adquirida para ${anchorOperation} (selecionado: ${selectedOperacaoNC})`);
 
     setIsSending(true);
-    setSendError(null);
+    setNcSendError(null);
 
     // Para DEALE, pega todas as rotas das 3 operações
     const selectedDepartures = departures.filter(d => realOperations.includes(d.operacao));
@@ -531,16 +561,23 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     console.log('[SEND_NAO_COLETA] Config (efetiva):', config);
     console.log('[SEND_NAO_COLETA] Config - Envio:', config?.Envio, '| Copia:', config?.Copia);
 
-    const nonCollections = selectedDepartures.filter(d => d.statusGeral === 'NOK');
+    // BUSCA NÃO COLETAS REAIS NO SHAREPOINT PARA ESTA OPERAÇÃO
+    const spNonCollections = await SharePointService.getNonCollections(token, currentUser.email);
+    const ncFiltradas = spNonCollections.filter(nc => realOperations.includes(nc.operacao));
 
-    console.log('[SEND_NAO_COLETA] Não coletas encontradas:', nonCollections.length);
+    console.log('[SEND_NAO_COLETA] Não coletas encontradas no SharePoint:', ncFiltradas.length);
 
-    if (nonCollections.length === 0) {
-      setSendError("Nenhuma não coleta encontrada para esta operação.");
-      setTimeout(() => setSendError(null), 3000);
+    if (ncFiltradas.length === 0) {
+      setNcSendError(`⚠️ Nenhuma não coleta lançada para ${selectedOperacaoNC} na tabela. Não há dados para enviar.`);
+      setTimeout(() => setNcSendError(null), 6000);
       setIsSending(false);
+      // Libera a trava já que não há dados para enviar
+      await SharePointService.releaseSendLock(token, anchorOperation);
       return;
     }
+
+    // Não coletas da tabela de saídas (rotas NOK) — usado para contexto adicional
+    const nonCollections = selectedDepartures.filter(d => d.statusGeral === 'NOK');
 
     // VERIFICA SE HÁ ROTAS PENDENTES DE SAIR NO DIA (saida vazia)
     // Se houver, o status deve ser "Atualizar" em vez de "OK"
@@ -571,22 +608,25 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       dataEnvio: new Date().toISOString(),
       envio: config?.Envio || "",
       copia: config?.Copia || "",
-      naoColetas: nonCollections.map(d => ({
-        rota: d.rota,
-        data: d.data,
-        inicio: d.inicio,
-        motorista: d.motorista,
-        placa: d.placa,
-        saida: d.saida,
-        motivo: d.motivo,
-        observacao: d.observacao,
-        status: d.statusOp,
-        operacaoReal: d.operacao
+      totalNaoColetas: ncFiltradas.length,
+      naoColetas: ncFiltradas.map(nc => ({
+        semana: nc.semana,
+        rota: nc.rota,
+        data: nc.data,
+        codigo: nc.codigo,
+        produtor: nc.produtor,
+        motivo: nc.motivo,
+        observacao: nc.observacao,
+        acao: nc.acao,
+        dataAcao: nc.dataAcao,
+        ultimaColeta: nc.ultimaColeta,
+        culpabilidade: nc.Culpabilidade,
+        operacao: nc.operacao
       }))
     };
 
     try {
-      const response = await fetch(WEBHOOK_URL, {
+      const response = await fetch(WEBHOOK_URL_NAO_COLETAS, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -643,7 +683,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
             try {
               const opParaSalvar = isDealeSelectionNC ? anchorOperation : selectedOperacaoNC;
               console.log(`[ULTIMO_ENVIO_NAO_COLETAS] Enviando para atualização: ${dataHoraEnvio} (operação: ${opParaSalvar})`);
-              await SharePointService.updateUltimoEnvioSaida(
+              await SharePointService.updateUltimoEnvioNaoColetas(
                 token,
                 opParaSalvar,
                 dataHoraEnvio
@@ -656,7 +696,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
                 for (const op of realOps) {
                   if (op !== anchorOperation) {
                     try {
-                      await SharePointService.updateUltimoEnvioSaida(token, op, dataHoraEnvio);
+                      await SharePointService.updateUltimoEnvioNaoColetas(token, op, dataHoraEnvio);
                       console.log(`[ULTIMO_ENVIO_DEALE_NC] ✅ Atualizado também ${op}: ${dataHoraEnvio}`);
                     } catch (err) {
                       console.warn(`[ULTIMO_ENVIO_DEALE_NC] Falha ao atualizar ${op}:`, err);
@@ -665,7 +705,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
                 }
               }
             } catch (err: any) {
-              console.error('Erro ao atualizar UltimoEnvioSaida:', err.message);
+              console.error('Erro ao atualizar UltimoEnvioNaoColetas:', err.message);
             }
           }
         } else {
@@ -720,15 +760,15 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
           }
         }
 
-        setSendSuccess(true);
-        setTimeout(() => setSendSuccess(false), 3000);
+        setNcSendSuccess(true);
+        setTimeout(() => setNcSendSuccess(false), 3000);
       } else {
         throw new Error(`Erro na resposta do webhook: ${response.status}`);
       }
     } catch (error: any) {
-      console.error("Erro ao enviar webhook:", error);
-      setSendError(error.message || "Falha ao enviar dados.");
-      setTimeout(() => setSendError(null), 5000);
+      console.error("[SEND_NAO_COLETA] Erro ao enviar webhook:", error);
+      setNcSendError(error.message || "Falha ao enviar dados.");
+      setTimeout(() => setNcSendError(null), 5000);
     } finally {
       setIsSending(false);
 
@@ -1141,6 +1181,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
   }, [departures, userConfigs]);
 
   // Lógica para processar a lista de NÃO COLETAS (agrupa DEALE se aplicável)
+  // Usa NÃO COLETAS REAIS do SharePoint, não rotas com status NOK
   const nonCollectionsSummary = useMemo(() => {
     const dealeOps = new Set(['ARATIBA', 'CATUIPE', 'ALMIRANTE']);
     const allOps = Array.from(new Set(userConfigs.map(c => c.operacao)));
@@ -1148,36 +1189,35 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     const hasDealeOps = allOps.some(op => dealeOps.has(op.toUpperCase()));
 
     const result = nonDealeOps.map(op => {
-      const opRoutes = departures.filter(d => d.operacao === op);
-      const nokCount = opRoutes.filter(r => r.statusGeral === 'NOK').length;
+      // Conta não coletas REAIS desta operação
+      const ncCount = realNonCollections.filter(nc => nc.operacao === op).length;
 
       return {
         id: op,
         operacao: op,
         timestamp: new Date().toISOString(),
         relativeTime: getRelativeTime(new Date().toISOString()),
-        status: nokCount > 0 ? `${nokCount} NÃO COLETAS` : "TODOS COLETADOS",
-        statusColor: nokCount > 0 ? "bg-red-500 text-white" : "bg-emerald-500 text-white"
+        status: ncCount > 0 ? `${ncCount} NÃO COLETAS` : "TODOS COLETADOS",
+        statusColor: ncCount > 0 ? "bg-red-500 text-white" : "bg-emerald-500 text-white"
       };
     });
 
     // Adiciona DEALE agrupado se aplicável
     if (hasDealeOps) {
-      const dealeRoutes = departures.filter(d => dealeOps.has(d.operacao?.toUpperCase()));
-      const nokCount = dealeRoutes.filter(r => r.statusGeral === 'NOK').length;
+      const dealeNcCount = realNonCollections.filter(nc => dealeOps.has(nc.operacao?.toUpperCase())).length;
 
       result.push({
         id: 'DEALE',
         operacao: 'DEALE',
         timestamp: new Date().toISOString(),
         relativeTime: getRelativeTime(new Date().toISOString()),
-        status: nokCount > 0 ? `${nokCount} NÃO COLETAS` : "TODOS COLETADOS",
-        statusColor: nokCount > 0 ? "bg-red-500 text-white" : "bg-emerald-500 text-white"
+        status: dealeNcCount > 0 ? `${dealeNcCount} NÃO COLETAS` : "TODOS COLETADOS",
+        statusColor: dealeNcCount > 0 ? "bg-red-500 text-white" : "bg-emerald-500 text-white"
       });
     }
 
     return result;
-  }, [departures, userConfigs]);
+  }, [realNonCollections, userConfigs]);
 
   // Status do Resumo (pega da operação com UltimoEnvioResumoSaida mais recente)
   const resumoStatus = useMemo(() => {
@@ -1386,22 +1426,37 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
             ))}
           </div>
 
-          <div className="p-4 bg-slate-50 dark:bg-slate-800/80 border-t dark:border-slate-800 flex items-center gap-2">
-            <select
-              value={selectedOperacaoNC}
-              onChange={(e) => setSelectedOperacaoNC(e.target.value)}
-              className="flex-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs font-bold outline-none appearance-none cursor-pointer"
-            >
-              <option value="">SELECIONAR OPERAÇÃO...</option>
-              {sendOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-            </select>
-            <button 
-              onClick={handleSendNonCollections}
-              disabled={isSending}
-              className="bg-[#075985] text-white px-6 py-2 rounded-lg font-black uppercase text-[10px] flex items-center gap-2 hover:bg-sky-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {isSending ? <Loader2 size={14} className="animate-spin" /> : <><Send size={14} /> Enviar</>}
-            </button>
+          <div className="p-4 bg-slate-50 dark:bg-slate-800/80 border-t dark:border-slate-800 flex flex-col gap-2">
+            <div className="flex items-center gap-2">
+              <select
+                value={selectedOperacaoNC}
+                onChange={(e) => setSelectedOperacaoNC(e.target.value)}
+                className="flex-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs font-bold outline-none appearance-none cursor-pointer"
+              >
+                <option value="">SELECIONAR OPERAÇÃO...</option>
+                {sendOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+              </select>
+              <button
+                onClick={handleSendNonCollections}
+                disabled={isSending}
+                className="bg-[#075985] text-white px-6 py-2 rounded-lg font-black uppercase text-[10px] flex items-center gap-2 hover:bg-sky-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isSending ? <Loader2 size={14} className="animate-spin" /> : <><Send size={14} /> Enviar</>}
+              </button>
+            </div>
+            {/* Feedback de envio de NÃO COLETAS — aparece apenas no lado direito */}
+            {ncSendSuccess && (
+              <div className="flex items-center gap-2 text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20 px-3 py-2 rounded-lg border border-green-200 dark:border-green-800">
+                <CheckCircle2 size={14} />
+                <span className="text-[10px] font-bold">Não coletas enviadas com sucesso!</span>
+              </div>
+            )}
+            {ncSendError && (
+              <div className="flex items-center gap-2 text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 px-3 py-2 rounded-lg border border-red-200 dark:border-red-800">
+                <AlertCircle size={14} />
+                <span className="text-[10px] font-bold">{ncSendError}</span>
+              </div>
+            )}
           </div>
         </div>
 

@@ -261,7 +261,7 @@ export function getWeekString(dateString: string): string {
 export function getRouteDateForCurrentTime(): string {
   const now = new Date();
   const hours = getBrazilHours();
-  
+
   // Se for 21:00h ou mais, usa amanhã (D+1)
   if (hours >= 21) {
     const tomorrow = new Date(now);
@@ -271,7 +271,34 @@ export function getRouteDateForCurrentTime(): string {
       .reverse()
       .join('-');
   }
-  
+
   // Caso contrário, usa hoje (D)
   return getBrazilDate();
+}
+
+/**
+ * Obtém a data para inserção de Não Coletas com base no horário atual (Brasília).
+ * Regra:
+ * - 12:00h às 23:59h: Retorna data de hoje (D)
+ * - 00:00h às 11:59h: Retorna data do dia anterior (D-1)
+ *
+ * Isso garante que todas as não coletas na tabela principal tenham a mesma data,
+ * já que o usuário arquiva as do dia anterior antes de começar a inserir as do dia atual.
+ *
+ * @returns Data no formato DD/MM/YYYY
+ */
+export function getNonCollectionDateForCurrentTime(): string {
+  const now = new Date();
+  const hours = getBrazilHours();
+  const minutes = getBrazilMinutes();
+
+  // Se for 12:00h ou mais, usa hoje (D)
+  if (hours >= 12) {
+    return now.toLocaleDateString('pt-BR', { timeZone: BRAZIL_TIMEZONE });
+  }
+
+  // Se for 00:00h às 11:59h, usa dia anterior (D-1)
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  return yesterday.toLocaleDateString('pt-BR', { timeZone: BRAZIL_TIMEZONE });
 }
