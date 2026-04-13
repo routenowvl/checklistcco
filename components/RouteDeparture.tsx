@@ -13,7 +13,7 @@ import {
   ChevronRight, Maximize2, Minimize2,
   Archive, Database, Save, LinkIcon,
   Layers, Trash2, Settings2, Check, Table, SortAsc,
-  Sun, Moon, AlertTriangle, Calendar
+  Sun, Moon, AlertTriangle, Calendar, ArrowUpDown
 } from 'lucide-react';
 
 const MOTIVOS = [
@@ -399,6 +399,7 @@ const RouteDepartureView: React.FC<{
   const [historyActiveFilterCol, setHistoryActiveFilterCol] = useState<string | null>(null);
   const [historyFilterAnchorEl, setHistoryFilterAnchorEl] = useState<HTMLElement | null>(null);
   const historyFilterDropdownRef = useRef<HTMLDivElement>(null);
+  const [historySortByOperacao, setHistorySortByOperacao] = useState(false);
 
   const [activeObsId, setActiveObsId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -2412,25 +2413,25 @@ const RouteDepartureView: React.FC<{
     }
 
     // Ordena por data e hora de início (da mais antiga para a mais recente)
-    return [...result].sort((a, b) => {
+    let sorted = [...result].sort((a, b) => {
       // Converte data (pode vir em YYYY-MM-DD ou DD/MM/AAAA) para timestamp
       const parseDate = (dateStr: string) => {
         if (!dateStr) return 0;
-        
+
         // Tenta formato YYYY-MM-DD (vem do SharePoint)
         const matchISO = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
         if (matchISO) {
           const [, year, month, day] = matchISO;
           return new Date(Number(year), Number(month) - 1, Number(day)).getTime();
         }
-        
+
         // Tenta formato DD/MM/AAAA
         const matchBR = dateStr.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
         if (matchBR) {
           const [, day, month, year] = matchBR;
           return new Date(Number(year), Number(month) - 1, Number(day)).getTime();
         }
-        
+
         return 0;
       };
 
@@ -2453,7 +2454,18 @@ const RouteDepartureView: React.FC<{
       const timeB = parseTime(b.inicio || '');
       return timeA - timeB;
     });
-  }, [archivedResults, historySelectedFilters, hasHistoryActiveColFilters]);
+
+    // Se ordenação por operação estiver ativada, reordena por operação (alfabética)
+    if (historySortByOperacao) {
+      sorted.sort((a, b) => {
+        const opA = (a.operacao || '').toUpperCase();
+        const opB = (b.operacao || '').toUpperCase();
+        return opA.localeCompare(opB, 'pt-BR');
+      });
+    }
+
+    return sorted;
+  }, [archivedResults, historySelectedFilters, hasHistoryActiveColFilters, historySortByOperacao]);
 
   // Converte data YYYY-MM-DD para DD/MM/AAAA (parse manual para evitar fuso)
   const formatDateToBR = (dateString: string) => {
@@ -4198,6 +4210,17 @@ const RouteDepartureView: React.FC<{
                                           <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center relative group">
                                               <div className="flex items-center justify-center gap-1">
                                                   <span>Operação</span>
+                                                  <button
+                                                    onClick={() => setHistorySortByOperacao(!historySortByOperacao)}
+                                                    className={`p-1 rounded transition-all ${
+                                                      historySortByOperacao
+                                                        ? 'bg-emerald-600 text-white'
+                                                        : 'hover:bg-slate-300 dark:hover:bg-slate-600'
+                                                    }`}
+                                                    title={historySortByOperacao ? 'Ordenação por operação ativada' : 'Ordenar por operação (A-Z)'}
+                                                  >
+                                                    <ArrowUpDown size={10} />
+                                                  </button>
                                                   <button
                                                     ref={(el) => { if (historyActiveFilterCol === 'operacao') setHistoryFilterAnchorEl(el); }}
                                                     onClick={() => {
