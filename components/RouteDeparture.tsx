@@ -400,6 +400,7 @@ const RouteDepartureView: React.FC<{
   const [historyFilterAnchorEl, setHistoryFilterAnchorEl] = useState<HTMLElement | null>(null);
   const historyFilterDropdownRef = useRef<HTMLDivElement>(null);
   const [historySortByOperacao, setHistorySortByOperacao] = useState(false);
+  const [isSortByOperacao, setIsSortByOperacao] = useState(false);
 
   const [activeObsId, setActiveObsId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -1755,6 +1756,7 @@ const RouteDepartureView: React.FC<{
 
     // Desmarca a opção HORÁRIO após arquivar
     setIsSortByTimeEnabled(false);
+    setIsSortByOperacao(false);
 
     try {
       // Passo 1: Mover rotas para o histórico
@@ -1869,6 +1871,7 @@ const RouteDepartureView: React.FC<{
 
       // DESABILITA o filtro por horário para não misturar a nova rota na ordenação
       setIsSortByTimeEnabled(false);
+      setIsSortByOperacao(false);
 
       alert('Rota adicionada com sucesso!');
     } catch (e: any) {
@@ -1929,6 +1932,7 @@ const RouteDepartureView: React.FC<{
 
     // DESABILITA o filtro por horário para não misturar as novas rotas na ordenação
     setIsSortByTimeEnabled(false);
+    setIsSortByOperacao(false);
   };
 
   const handleMultilinePaste = async (field: keyof RouteDeparture, startRowIndex: number, value: string) => {
@@ -2021,6 +2025,7 @@ const RouteDepartureView: React.FC<{
 
     // DESABILITA o filtro por horário para não misturar as rotas atualizadas na ordenação
     setIsSortByTimeEnabled(false);
+    setIsSortByOperacao(false);
 
     setIsSyncing(false);
   };
@@ -2104,6 +2109,7 @@ const RouteDepartureView: React.FC<{
 
                 // DESABILITA o filtro por horário para não misturar a nova rota na ordenação
                 setIsSortByTimeEnabled(false);
+                setIsSortByOperacao(false);
 
                 setGhostRow({ id: 'ghost', rota: '', data: getRouteDateForCurrentTime(), inicio: '', saida: '', motorista: '', placa: '', statusGeral: '', aviso: 'NÃO', operacao: '', statusOp: 'Previsto', tempo: '' });
             } catch (e) {} finally { setIsSyncing(false); }
@@ -2622,6 +2628,7 @@ const RouteDepartureView: React.FC<{
     setColFilters({});
     setSelectedFilters({});
     setIsSortByTimeEnabled(false);
+    setIsSortByOperacao(false);
     sessionStorage.removeItem('route_departure_col_widths');
     sessionStorage.removeItem('route_departure_hidden_cols');
     sessionStorage.removeItem('route_departure_col_filters');
@@ -2728,8 +2735,17 @@ const RouteDepartureView: React.FC<{
         });
     }
 
+    // Se ordenação por operação estiver ativada, reordena por operação (alfabética)
+    if (isSortByOperacao) {
+        result = [...result].sort((a, b) => {
+            const opA = (a.operacao || '').toUpperCase();
+            const opB = (b.operacao || '').toUpperCase();
+            return opA.localeCompare(opB, 'pt-BR');
+        });
+    }
+
     return result;
-  }, [routes, colFilters, selectedFilters, isSortByTimeEnabled, userConfigs]);
+  }, [routes, colFilters, selectedFilters, isSortByTimeEnabled, isSortByOperacao, userConfigs]);
 
   // Cálculo dos indicadores GERAL e INTERNO - memoizado para evitar re-renderização desnecessária
   const [performanceIndicators, setPerformanceIndicators] = useState({ geral: '0.00', interno: '0.00' });
@@ -2875,7 +2891,22 @@ const RouteDepartureView: React.FC<{
                 <th key={col.id} data-col={col.id} style={{ width: colWidths[col.id] }} className={`relative p-0 border ${isDarkMode ? 'border-slate-700/50' : 'border-slate-600/60'} text-[10px] font-black uppercase tracking-wider text-left group`}>
                   <div className="flex items-center justify-between px-3 h-[48px]">
                     <span onContextMenu={(e) => handleContextMenu(e, col.id)}>{col.label}</span>
-                    <button onClick={(e) => { e.stopPropagation(); setActiveFilterCol(activeFilterCol === col.id ? null : col.id); }} className={`p-1 rounded ${!!colFilters[col.id] || (selectedFilters[col.id]?.length ?? 0) > 0 ? 'text-yellow-400' : isDarkMode ? 'text-white/40' : 'text-white/60'}`}><Filter size={11} /></button>
+                    <div className="flex items-center gap-1">
+                      {col.id === 'operacao' && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setIsSortByOperacao(!isSortByOperacao); }}
+                          className={`p-1 rounded transition-all ${
+                            isSortByOperacao
+                              ? 'text-emerald-400'
+                              : isDarkMode ? 'text-white/40 hover:text-white/60' : 'text-white/60 hover:text-white/80'
+                          }`}
+                          title={isSortByOperacao ? 'Ordenação por operação ativada' : 'Ordenar por operação (A-Z)'}
+                        >
+                          <ArrowUpDown size={11} />
+                        </button>
+                      )}
+                      <button onClick={(e) => { e.stopPropagation(); setActiveFilterCol(activeFilterCol === col.id ? null : col.id); }} className={`p-1 rounded ${!!colFilters[col.id] || (selectedFilters[col.id]?.length ?? 0) > 0 ? 'text-yellow-400' : isDarkMode ? 'text-white/40' : 'text-white/60'}`}><Filter size={11} /></button>
+                    </div>
                   </div>
                   {activeFilterCol === col.id && <FilterDropdown col={col.id} routes={routes} colFilters={colFilters} setColFilters={setColFilters} selectedFilters={selectedFilters} setSelectedFilters={setSelectedFilters} onClose={() => setActiveFilterCol(null)} dropdownRef={filterDropdownRef} />}
                   <div onMouseDown={(e) => { e.preventDefault(); resizingRef.current = { col: col.id, startX: e.clientX, startWidth: colWidths[col.id] }; }} className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize z-10" />
