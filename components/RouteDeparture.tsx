@@ -1595,7 +1595,7 @@ const RouteDepartureView: React.FC<{
   // Estado para controlar se o usuário está editando alguma célula (pausa polling)
   const [isEditingCell, setIsEditingCell] = useState(false);
 
-  // Polling para atualizar dados automaticamente a cada 10 segundos (SEGUNDO PLANO)
+  // Polling para atualizar dados automaticamente a cada 30 segundos (OTIMIZADO)
   useEffect(() => {
     const refreshInterval = setInterval(() => {
       // Se o usuário está editando, NÃO faz polling para evitar lag
@@ -1605,8 +1605,8 @@ const RouteDepartureView: React.FC<{
       }
       console.log('[POLLING_ROUTE_DEPARTURE] Atualização automática de dados (segundo plano)');
       console.log('[POLLING_ROUTE_DEPARTURE] Usuário:', currentUser.email);
-      loadData(true); // true = background refresh
-    }, 10000);
+      loadData(false); // false = usa cache do serviço (otimizado)
+    }, 30000);
 
     return () => clearInterval(refreshInterval);
   }, [currentUser, isEditingCell]);

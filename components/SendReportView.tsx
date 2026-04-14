@@ -149,19 +149,19 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     };
 
     // Carrega dados iniciais com force refresh
-    fetchAllData();
+    fetchAllData(true);
 
-    // Polling das configs a cada 5 segundos (mais frequente para atualizar em tempo real)
-    const configsInterval = setInterval(() => fetchConfigsOnly(true), 5000);
+    // Polling das configs a cada 15 segundos (otimizado para reduzir chamadas à API)
+    const configsInterval = setInterval(() => fetchConfigsOnly(false), 15000);
 
-    // Polling de não coletas a cada 10 segundos
-    const ncInterval = setInterval(() => fetchNonCollectionsOnly(), 10000);
+    // Polling de não coletas a cada 30 segundos (otimizado para reduzir chamadas à API)
+    const ncInterval = setInterval(() => fetchNonCollectionsOnly(), 30000);
 
-    // Atualização completa a cada 30 segundos
+    // Atualização completa a cada 60 segundos (otimizado para reduzir chamadas à API)
     const fullInterval = setInterval(() => {
       console.log('[POLLING] Atualização completa dos dados');
-      fetchAllData(true);
-    }, 30000);
+      fetchAllData(false); // Sem forceRefresh — usa cache do serviço
+    }, 60000);
 
     return () => {
       clearInterval(configsInterval);

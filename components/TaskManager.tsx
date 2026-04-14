@@ -64,6 +64,10 @@ const TaskManager: React.FC<TaskManagerProps> = ({
   const [registeredUsers, setRegisteredUsers] = useState<string[]>([]);
   const [isLoadingUsers, setIsLoadingUsers] = useState(false);
 
+  // Ref para debounce de atualizações de status (evita chamadas duplicadas à API)
+  const pendingUpdatesRef = useRef<Map<string, OperationStatus>>(new Map());
+  const updateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const [isDragging, setIsDragging] = useState(false);
   const paintedThisDrag = useRef<Set<string>>(new Set());
   
@@ -180,7 +184,13 @@ const TaskManager: React.FC<TaskManagerProps> = ({
       }
     };
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      // Cleanup do debounce timeout
+      if (updateTimeoutRef.current) {
+        clearTimeout(updateTimeoutRef.current);
+      }
+    };
   }, []);
 
   const handleOpenResetModal = async () => {
@@ -207,34 +217,53 @@ const TaskManager: React.FC<TaskManagerProps> = ({
   const handleUpdateStatus = async (taskId: string, location: string, status: OperationStatus) => {
     const token = await getValidToken() || currentUser.accessToken;
     if (!token) return;
-    
-    const originalTasks = [...tasks];
-    setTasks(prev => prev.map(t => t.id === taskId ? { 
-      ...t, 
-      operations: { ...t.operations, [location]: status } 
-    } : t));
-    
-    setIsUpdating(true);
-    try {
-      const today = getBrazilDate();
-      const todayKey = today.replace(/-/g, '');
-      const uniqueKey = `${todayKey}_${taskId}_${location}`;
 
-      await SharePointService.updateStatus(token, {
-        DataReferencia: today,
-        TarefaID: taskId,
-        OperacaoSigla: location,
-        Status: status,
-        Usuario: currentUser.name,
-        Title: uniqueKey
-      });
-    } catch (err: any) {
-      console.error(`Erro ao sincronizar:`, err);
-      alert(`Falha ao salvar no SharePoint: ${err.message}`);
-      setTasks(originalTasks);
-    } finally {
-      setIsUpdating(false);
+    const originalTasks = [...tasks];
+    setTasks(prev => prev.map(t => t.id === taskId ? {
+      ...t,
+      operations: { ...t.operations, [location]: status }
+    } : t));
+
+    // Debounce: acumula atualizações pendentes e envia em lote após 500ms
+    const key = `${taskId}|||${location}`;
+    pendingUpdatesRef.current.set(key, { taskId, location, status });
+
+    // Limpa timeout anterior se existe
+    if (updateTimeoutRef.current) {
+      clearTimeout(updateTimeoutRef.current);
     }
+
+    setIsUpdating(true);
+
+    // Agenda envio em lote após 500ms de inatividade
+    updateTimeoutRef.current = setTimeout(async () => {
+      const updatesToSend = new Map(pendingUpdatesRef.current);
+      pendingUpdatesRef.current.clear();
+
+      try {
+        const today = getBrazilDate();
+        const todayKey = today.replace(/-/g, '');
+
+        // Envia todas as atualizações pendentes em paralelo
+        await Promise.all(Array.from(updatesToSend.values()).map(({ taskId: tid, location: loc, status: st }) => {
+          const uniqueKey = `${todayKey}_${tid}_${loc}`;
+          return SharePointService.updateStatus(token, {
+            DataReferencia: today,
+            TarefaID: tid,
+            OperacaoSigla: loc,
+            Status: st,
+            Usuario: currentUser.name,
+            Title: uniqueKey
+          });
+        }));
+      } catch (err: any) {
+        console.error(`Erro ao sincronizar:`, err);
+        alert(`Falha ao salvar no SharePoint: ${err.message}`);
+        setTasks(originalTasks);
+      } finally {
+        setIsUpdating(false);
+      }
+    }, 500);
   };
 
   const handlePaintRow = async (taskId: string) => {

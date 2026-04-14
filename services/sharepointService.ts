@@ -35,9 +35,9 @@ const SITE_PATH = import.meta.env.VITE_SHAREPOINT_SITE_PATH || "vialacteoscombr.
 let cachedSiteId: string | null = null;
 const columnMappingCache: Record<string, { mapping: Record<string, string>, readOnly: Set<string>, internalNames: Set<string> }> = {};
 
-// Cache para dados estáticos/semi-estáticos (5 minutos)
+// Cache para dados estáticos/semi-estáticos (10 minutos — otimizado para reduzir chamadas à API)
 const dataCache: Record<string, { data: any, timestamp: number }> = {};
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutos
+const CACHE_TTL = 10 * 60 * 1000; // 10 minutos (aumentado de 5 para reduzir consumo de API)
 
 // Debounce para evento token-expired (evita disparos múltiplos)
 let lastTokenEventTime = 0;
@@ -204,8 +204,10 @@ function normalizeString(str: string): string {
 
 async function getListColumnMapping(siteId: string, listId: string, token: string, forceRefresh: boolean = false) {
   const cacheKey = `${siteId}_${listId}`;
+  // Cache de column mapping é válido por toda a sessão — colunas do SharePoint não mudam frequentemente
+  // Força refresh apenas se explicitamente solicitado (ex: admin alterou schema)
   if (columnMappingCache[cacheKey] && !forceRefresh) return columnMappingCache[cacheKey];
-  
+
   const columns = await graphFetch(`/sites/${siteId}/lists/${listId}/columns`, token);
   const mapping: Record<string, string> = {};
   const readOnly = new Set<string>();
@@ -222,6 +224,7 @@ async function getListColumnMapping(siteId: string, listId: string, token: strin
   });
 
   columnMappingCache[cacheKey] = { mapping, readOnly, internalNames };
+  console.log(`[COLUMN_CACHE] Cache criado para ${cacheKey} (${columns.value.length} colunas)`);
   return columnMappingCache[cacheKey];
 }
 
@@ -952,7 +955,7 @@ export const SharePointService = {
   async updateDeparture(token: string, departure: RouteDeparture): Promise<string> {
     const siteId = await getResolvedSiteId(token);
     const list = await findListByIdOrName(siteId, 'Dados_Saida_de_rotas', token);
-    const { mapping, internalNames, readOnly } = await getListColumnMapping(siteId, list.id, token, true);
+    const { mapping, internalNames, readOnly } = await getListColumnMapping(siteId, list.id, token);
 
     // Calcula a semana com base na data, usando a mesma lógica do Excel
     // Se departure.semana já existir, usa; caso contrário, calcula automaticamente
@@ -1003,7 +1006,7 @@ export const SharePointService = {
   async updateArchivedDeparture(token: string, departure: RouteDeparture): Promise<string> {
     const siteId = await getResolvedSiteId(token);
     const historyListId = "856bf9d5-6081-4360-bcad-e771cbabfda8";
-    const { mapping, internalNames, readOnly } = await getListColumnMapping(siteId, historyListId, token, true);
+    const { mapping, internalNames, readOnly } = await getListColumnMapping(siteId, historyListId, token);
 
     // Calcula a semana com base na data, usando a mesma lógica do Excel
     const semana = departure.semana || getWeekString(departure.data);
