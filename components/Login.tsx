@@ -14,11 +14,8 @@ const TURNSTILE_SITE_KEY = process.env.SITE_KEY || '';
 const STORAGE_RETRY_KEY = 'login_retry_count';
 const STORAGE_LOCKOUT_KEY = 'login_lockout_until';
 
-// URL da API Vercel
+// URL da API Vercel — sempre a mesma origem
 const getApiBaseUrl = () => {
-  if (import.meta.env.VITE_VERCEL_URL) {
-    return `https://${import.meta.env.VITE_VERCEL_URL}`;
-  }
   return window.location.origin;
 };
 
@@ -196,7 +193,7 @@ const Login: React.FC<{ onLogin: (user: User) => void }> = ({ onLogin }) => {
       const widgetId = window.turnstile.render(container, {
         sitekey: TURNSTILE_SITE_KEY,
         theme: 'dark',
-        language: 'pt-BR',
+        language: 'pt-br',
         size: 'flexible',
         callback: (token: string) => {
           console.log('[TURNSTILE] Token recebido');
