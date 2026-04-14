@@ -176,6 +176,7 @@ const NonCollectionsView: React.FC<{
   const [archivedResults, setArchivedResults] = useState<NonCollection[]>([]);
   const [isSearchingArchive, setIsSearchingArchive] = useState(false);
   const [isArchiving, setIsArchiving] = useState(false);
+  const archiveAbortRef = useRef<AbortController | null>(null);
 
   const updateGhostCell = (field: keyof NonCollection, value: string) => {
     const updatedGhost = { ...ghostRow, [field]: value };
@@ -743,23 +744,52 @@ const NonCollectionsView: React.FC<{
   // ============================================================
 
   const handleSearchArchive = async () => {
+    // Validação de período máximo (90 dias)
+    const startMs = new Date(histStart).getTime();
+    const endMs = new Date(histEnd).getTime();
+    if (isNaN(startMs) || isNaN(endMs)) {
+      alert('Selecione datas válidas para a busca.');
+      return;
+    }
+    const dayDiff = Math.ceil(Math.abs(endMs - startMs) / (1000 * 60 * 60 * 24));
+    if (dayDiff > 90) {
+      alert(`O intervalo máximo permitido é de 90 dias. O intervalo selecionado é de ${dayDiff} dias.`);
+      return;
+    }
+
+    // Cancela requisição anterior se existir
+    if (archiveAbortRef.current) {
+      archiveAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    archiveAbortRef.current = controller;
+
     setIsSearchingArchive(true);
     try {
       console.log('[NC_SEARCH_ARCHIVE] Requesting history from SharePoint list nao_coletas_web_hist...');
-      const results = await SharePointService.getArchivedNonCollections(await getAccessToken(), currentUser.email, histStart, histEnd);
+      const results = await SharePointService.getArchivedNonCollections(await getAccessToken(), currentUser.email, histStart, histEnd, controller.signal);
       console.log('[NC_SEARCH_ARCHIVE] Results received:', results.length);
 
-      const myOps = new Set(userConfigs.map(c => c.operacao));
-      const filtered = results && results.length > 0
-        ? results.filter(r => !myOps.size || myOps.has(r.operacao))
-        : [];
+      // Só atualiza state se esta requisição não foi cancelada
+      if (!controller.signal.aborted) {
+        const myOps = new Set(userConfigs.map(c => c.operacao));
+        const filtered = results && results.length > 0
+          ? results.filter(r => !myOps.size || myOps.has(r.operacao))
+          : [];
 
-      setArchivedResults(filtered);
+        setArchivedResults(filtered);
+      }
     } catch (err: any) {
+      if (err.name === 'AbortError') {
+        console.log('[NC_SEARCH_ARCHIVE] Requisição cancelada.');
+        return;
+      }
       console.error('[NC_SEARCH_ARCHIVE] Error during search:', err);
       alert("Erro na busca: " + (err?.message || "Erro desconhecido ao acessar o SharePoint."));
     } finally {
-      setIsSearchingArchive(false);
+      if (!controller.signal.aborted) {
+        setIsSearchingArchive(false);
+      }
     }
   };
 

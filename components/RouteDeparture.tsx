@@ -364,6 +364,7 @@ const RouteDepartureView: React.FC<{
   const [archivedResults, setArchivedResults] = useState<RouteDeparture[]>([]);
   const [isSearchingArchive, setIsSearchingArchive] = useState(false);
   const [isHistoryFullscreen, setIsHistoryFullscreen] = useState(false);
+  const archiveAbortRef = useRef<AbortController | null>(null);
   
   // Estado para edição em lote - armazena alterações pendentes
   const [pendingHistoryEdits, setPendingHistoryEdits] = useState<Record<string, Partial<RouteDeparture>>>({});
@@ -1571,24 +1572,53 @@ const RouteDepartureView: React.FC<{
 
   // Função para buscar histórico do SharePoint (usada no modal e no polling)
   const handleSearchArchive = async () => {
+    // Validação de período máximo (90 dias)
+    const startMs = new Date(histStart).getTime();
+    const endMs = new Date(histEnd).getTime();
+    if (isNaN(startMs) || isNaN(endMs)) {
+      alert('Selecione datas válidas para a busca.');
+      return;
+    }
+    const dayDiff = Math.ceil(Math.abs(endMs - startMs) / (1000 * 60 * 60 * 24));
+    if (dayDiff > 90) {
+      alert(`O intervalo máximo permitido é de 90 dias. O intervalo selecionado é de ${dayDiff} dias.`);
+      return;
+    }
+
+    // Cancela requisição anterior se existir
+    if (archiveAbortRef.current) {
+      archiveAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    archiveAbortRef.current = controller;
+
     setIsSearchingArchive(true);
     try {
         console.log('[SEARCH_ARCHIVE] Requesting history from SharePoint list {856bf9d5-6081-4360-bcad-e771cbabfda8}...');
-        const results = await SharePointService.getArchivedDepartures(await getAccessToken(), null, histStart, histEnd);
+        const results = await SharePointService.getArchivedDepartures(await getAccessToken(), null, histStart, histEnd, controller.signal);
         console.log('[SEARCH_ARCHIVE] Results received:', results.length);
 
-        const myOps = new Set(userConfigs.map(c => c.operacao));
-        // If myOps is empty, show everything for the user to avoid blockage if config loading is slow
-        const filtered = results && results.length > 0
-          ? results.filter(r => !myOps.size || myOps.has(r.operacao))
-          : [];
+        // Só atualiza state se esta requisição não foi cancelada
+        if (!controller.signal.aborted) {
+          const myOps = new Set(userConfigs.map(c => c.operacao));
+          // If myOps is empty, show everything for the user to avoid blockage if config loading is slow
+          const filtered = results && results.length > 0
+            ? results.filter(r => !myOps.size || myOps.has(r.operacao))
+            : [];
 
-        setArchivedResults(filtered);
+          setArchivedResults(filtered);
+        }
     } catch (err: any) {
+        if (err.name === 'AbortError') {
+          console.log('[SEARCH_ARCHIVE] Requisição cancelada.');
+          return;
+        }
         console.error('[SEARCH_ARCHIVE] Error during search:', err);
         alert("Erro na busca: " + (err?.message || "Erro desconhecido ao acessar o SharePoint. Verifique se você tem permissão na lista de histórico."));
     } finally {
-        setIsSearchingArchive(false);
+        if (!controller.signal.aborted) {
+          setIsSearchingArchive(false);
+        }
     }
   };
 

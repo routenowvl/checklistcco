@@ -39,6 +39,9 @@ const columnMappingCache: Record<string, { mapping: Record<string, string>, read
 const dataCache: Record<string, { data: any, timestamp: number }> = {};
 const CACHE_TTL = 10 * 60 * 1000; // 10 minutos (aumentado de 5 para reduzir consumo de API)
 
+// Deduplicação de requisições archive em andamento (evita chamadas duplicadas ao mesmo range)
+const inFlightArchiveRequests: Record<string, Promise<any>> = {};
+
 // Debounce para evento token-expired (evita disparos múltiplos)
 let lastTokenEventTime = 0;
 const TOKEN_EVENT_DEBOUNCE_MS = 10000; // 10 segundos
@@ -91,6 +94,15 @@ export function clearCache(key?: string): void {
   } else {
     Object.keys(dataCache).forEach(k => delete dataCache[k]);
   }
+}
+
+/**
+ * Limpa todas as chaves de cache que começam com o prefixo informado
+ */
+export function clearCacheByPrefix(prefix: string): void {
+  Object.keys(dataCache).forEach(k => {
+    if (k.startsWith(prefix)) delete dataCache[k];
+  });
 }
 
 /**
@@ -890,66 +902,96 @@ export const SharePointService = {
     } catch (e) { return []; }
   },
 
-  async getArchivedDepartures(token: string, operation: string | null, startDate: string, endDate: string): Promise<RouteDeparture[]> {
-    try {
-      const siteId = await getResolvedSiteId(token);
-      // History List ID provided by User: {856bf9d5-6081-4360-bcad-e771cbabfda8}
-      const historyListId = "856bf9d5-6081-4360-bcad-e771cbabfda8";
-      const { mapping } = await getListColumnMapping(siteId, historyListId, token);
-      
-      const colData = resolveFieldName(mapping, 'DataOperacao');
-      const colOp = resolveFieldName(mapping, 'Operacao');
-      
-      let filter = `fields/${colData} ge '${startDate}T00:00:00Z' and fields/${colData} le '${endDate}T23:59:59Z'`;
-      if (operation) {
-          filter += ` and fields/${colOp} eq '${operation}'`;
-      }
+  async getArchivedDepartures(token: string, operation: string | null, startDate: string, endDate: string, signal?: AbortSignal): Promise<RouteDeparture[]> {
+    const cacheKey = `archived_departures_${startDate}_${endDate}_${operation || 'all'}`;
 
-      console.log(`[ARCHIVE_QUERY] URL: /sites/${siteId}/lists/${historyListId}/items Filter: ${filter}`);
-      
-      // Busca todos os itens com paginação (SharePoint retorna max 100 por página)
-      let allItems: any[] = [];
-      let nextUrl: string | null = `/sites/${siteId}/lists/${historyListId}/items?expand=fields&$filter=${filter}&$top=100`;
-      
-      while (nextUrl) {
-        const data = await graphFetch(nextUrl, token);
-        allItems = allItems.concat(data.value || []);
-        nextUrl = data['@odata.nextLink'] || null;
-        console.log(`[ARCHIVE_QUERY] Página carregada. Total acumulado: ${allItems.length}`);
-      }
+    // 1. Cache: retorna imediatamente se já buscou esse range recentemente
+    const cached = getCachedData<RouteDeparture[]>(cacheKey);
+    if (cached) {
+      console.log(`[ARCHIVE_QUERY] Cache hit para ${cacheKey}`);
+      return cached;
+    }
 
-      const results = allItems.map((item: any) => {
-        const f = item.fields;
-        const dataStr = f[colData] ? f[colData].split('T')[0] : "";
-        const semanaFromSharePoint = f[resolveFieldName(mapping, 'Semana')] || "";
+    // 2. Deduplicação: se já existe uma requisição em andamento para o mesmo range, reutiliza
+    if (inFlightArchiveRequests[cacheKey]) {
+      console.log(`[ARCHIVE_QUERY] Reutilizando requisição em andamento para ${cacheKey}`);
+      return inFlightArchiveRequests[cacheKey];
+    }
 
-        return {
-          id: String(item.id),
-          semana: semanaFromSharePoint || getWeekString(dataStr), // Calcula se não vier do SharePoint
-          rota: f.Title || "",
-          data: dataStr,
-          inicio: f[resolveFieldName(mapping, 'HorarioInicio')] || "",
-          motorista: f[resolveFieldName(mapping, 'Motorista')] || "",
-          placa: f[resolveFieldName(mapping, 'Placa')] || "",
-          saida: f[resolveFieldName(mapping, 'HorarioSaida')] || "",
-          motivo: f[resolveFieldName(mapping, 'MotivoAtraso')] || "",
-          observacao: f[resolveFieldName(mapping, 'Observacao')] || "",
-          statusGeral: f[resolveFieldName(mapping, 'StatusGeral')] || "",
-          aviso: f[resolveFieldName(mapping, 'Aviso')] || "NÃO",
-          operacao: f[colOp] || "",
-          statusOp: f[resolveFieldName(mapping, 'StatusOp')] || "Pendente",
-          tempo: f[resolveFieldName(mapping, 'TempGab')] || f[resolveFieldName(mapping, 'TempoGap')] || "",
-          createdAt: f.Created || new Date().toISOString(),
-          checklistMotorista: f[resolveFieldName(mapping, 'ChecklistMotorista')] || ""
-        };
-      });
+    const executeQuery = async (): Promise<RouteDeparture[]> => {
+      try {
+        const siteId = await getResolvedSiteId(token);
+        // History List ID provided by User: {856bf9d5-6081-4360-bcad-e771cbabfda8}
+        const historyListId = "856bf9d5-6081-4360-bcad-e771cbabfda8";
+        const { mapping } = await getListColumnMapping(siteId, historyListId, token);
 
-      console.log(`[ARCHIVE_QUERY] Search success. Found ${results.length} records.`);
-      return results;
-    } catch (e: any) {
+        const colData = resolveFieldName(mapping, 'DataOperacao');
+        const colOp = resolveFieldName(mapping, 'Operacao');
+
+        let filter = `fields/${colData} ge '${startDate}T00:00:00Z' and fields/${colData} le '${endDate}T23:59:59Z'`;
+        if (operation) {
+            filter += ` and fields/${colOp} eq '${operation}'`;
+        }
+
+        console.log(`[ARCHIVE_QUERY] URL: /sites/${siteId}/lists/${historyListId}/items Filter: ${filter}`);
+
+        // Busca todos os itens com paginação (SharePoint retorna max 100 por página)
+        let allItems: any[] = [];
+        let nextUrl: string | null = `/sites/${siteId}/lists/${historyListId}/items?expand=fields&$filter=${filter}&$top=100`;
+
+        while (nextUrl) {
+          // Verifica se a requisição foi cancelada antes de cada página
+          if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+          const data = await graphFetch(nextUrl, token, signal ? { signal } : {});
+          allItems = allItems.concat(data.value || []);
+          nextUrl = data['@odata.nextLink'] || null;
+          console.log(`[ARCHIVE_QUERY] Página carregada. Total acumulado: ${allItems.length}`);
+        }
+
+        const results = allItems.map((item: any) => {
+          const f = item.fields;
+          const dataStr = f[colData] ? f[colData].split('T')[0] : "";
+          const semanaFromSharePoint = f[resolveFieldName(mapping, 'Semana')] || "";
+
+          return {
+            id: String(item.id),
+            semana: semanaFromSharePoint || getWeekString(dataStr), // Calcula se não vier do SharePoint
+            rota: f.Title || "",
+            data: dataStr,
+            inicio: f[resolveFieldName(mapping, 'HorarioInicio')] || "",
+            motorista: f[resolveFieldName(mapping, 'Motorista')] || "",
+            placa: f[resolveFieldName(mapping, 'Placa')] || "",
+            saida: f[resolveFieldName(mapping, 'HorarioSaida')] || "",
+            motivo: f[resolveFieldName(mapping, 'MotivoAtraso')] || "",
+            observacao: f[resolveFieldName(mapping, 'Observacao')] || "",
+            statusGeral: f[resolveFieldName(mapping, 'StatusGeral')] || "",
+            aviso: f[resolveFieldName(mapping, 'Aviso')] || "NÃO",
+            operacao: f[colOp] || "",
+            statusOp: f[resolveFieldName(mapping, 'StatusOp')] || "Pendente",
+            tempo: f[resolveFieldName(mapping, 'TempGab')] || f[resolveFieldName(mapping, 'TempoGap')] || "",
+            createdAt: f.Created || new Date().toISOString(),
+            checklistMotorista: f[resolveFieldName(mapping, 'ChecklistMotorista')] || ""
+          };
+        });
+
+        console.log(`[ARCHIVE_QUERY] Search success. Found ${results.length} records.`);
+        setCachedData(cacheKey, results);
+        return results;
+      } catch (e: any) {
+        if (e.name === 'AbortError') {
+          console.log('[ARCHIVE_QUERY] Requisição cancelada pelo usuário.');
+          return [];
+        }
         console.error("[ARCHIVE_FETCH_ERROR] Error fetching archived data:", e.message);
         throw e;
-    }
+      } finally {
+        delete inFlightArchiveRequests[cacheKey];
+      }
+    };
+
+    const promise = executeQuery();
+    inFlightArchiveRequests[cacheKey] = promise;
+    return promise;
   },
 
   async updateDeparture(token: string, departure: RouteDeparture): Promise<string> {
@@ -1051,7 +1093,7 @@ export const SharePointService = {
     }
 
     // Invalida cache de histórico após atualização
-    clearCache('archived_departures');
+    clearCacheByPrefix('archived_departures_');
     return result;
   },
 
@@ -1596,63 +1638,93 @@ export const SharePointService = {
    * Busca não coletas arquivadas no histórico.
    * Lista: nao_coletas_web_hist (ID: 1702fe62-6a47-4fd1-b935-0e3258073bb6)
    */
-  async getArchivedNonCollections(token: string, userEmail: string, startDate: string, endDate: string): Promise<NonCollection[]> {
-    try {
-      const siteId = await getResolvedSiteId(token);
-      const historyListId = '1702fe62-6a47-4fd1-b935-0e3258073bb6';
-      const { mapping } = await getListColumnMapping(siteId, historyListId, token);
+  async getArchivedNonCollections(token: string, userEmail: string, startDate: string, endDate: string, signal?: AbortSignal): Promise<NonCollection[]> {
+    const cacheKey = `archived_noncollections_${startDate}_${endDate}`;
 
-      const colData = resolveFieldName(mapping, 'Data');
-      const colOp = resolveFieldName(mapping, 'Operação');
-
-      let filter = `fields/${colData} ge '${startDate}T00:00:00Z' and fields/${colData} le '${endDate}T23:59:59Z'`;
-
-      console.log(`[NC_ARCHIVE_QUERY] URL: /sites/${siteId}/lists/${historyListId}/items Filter: ${filter}`);
-
-      // Busca todos os itens com paginação
-      let allItems: any[] = [];
-      let nextUrl: string | null = `/sites/${siteId}/lists/${historyListId}/items?expand=fields&$filter=${filter}&$top=100`;
-
-      while (nextUrl) {
-        const data = await graphFetch(nextUrl, token);
-        allItems = allItems.concat(data.value || []);
-        nextUrl = data['@odata.nextLink'] || null;
-        console.log(`[NC_ARCHIVE_QUERY] Página carregada. Total acumulado: ${allItems.length}`);
-      }
-
-      const results = allItems.map((item: any) => {
-        const f = item.fields;
-        const dataStr = f[colData] ? f[colData].split('T')[0] : "";
-        const ultimaColetaStr = f[resolveFieldName(mapping, 'ÚltimaColeta')] ? f[resolveFieldName(mapping, 'ÚltimaColeta')].split('T')[0] : "";
-        const dataAcaoStr = f[resolveFieldName(mapping, 'DataAção')] ? f[resolveFieldName(mapping, 'DataAção')].split('T')[0] : "";
-
-        // "Semana" é mapeada para LinkTitle que é computado (= Title/Rota).
-        // Calculamos a semana a partir da data real.
-        const semanaCalc = dataStr ? getWeekString(dataStr) : "";
-
-        return {
-          id: String(item.id),
-          semana: semanaCalc,
-          rota: f[resolveFieldName(mapping, 'Rota')] || f.Title || "",
-          data: dataStr,
-          codigo: f[resolveFieldName(mapping, 'Código')] || "",
-          produtor: f[resolveFieldName(mapping, 'Produtor')] || "",
-          motivo: f[resolveFieldName(mapping, 'Motivo')] || "",
-          observacao: f[resolveFieldName(mapping, 'Observação')] || "",
-          acao: f[resolveFieldName(mapping, 'Ação')] || "",
-          dataAcao: dataAcaoStr,
-          ultimaColeta: ultimaColetaStr,
-          Culpabilidade: f[resolveFieldName(mapping, 'Culpabilidade')] || "",
-          operacao: f[colOp] || ""
-        };
-      });
-
-      console.log(`[NC_ARCHIVE_QUERY] Search success. Found ${results.length} records.`);
-      return results;
-    } catch (e: any) {
-      console.error("[NC_ARCHIVE_FETCH_ERROR] Error fetching archived non-collections:", e.message);
-      throw e;
+    // 1. Cache: retorna imediatamente se já buscou esse range recentemente
+    const cached = getCachedData<NonCollection[]>(cacheKey);
+    if (cached) {
+      console.log(`[NC_ARCHIVE_QUERY] Cache hit para ${cacheKey}`);
+      return cached;
     }
+
+    // 2. Deduplicação: se já existe uma requisição em andamento para o mesmo range, reutiliza
+    if (inFlightArchiveRequests[cacheKey]) {
+      console.log(`[NC_ARCHIVE_QUERY] Reutilizando requisição em andamento para ${cacheKey}`);
+      return inFlightArchiveRequests[cacheKey];
+    }
+
+    const executeQuery = async (): Promise<NonCollection[]> => {
+      try {
+        const siteId = await getResolvedSiteId(token);
+        const historyListId = '1702fe62-6a47-4fd1-b935-0e3258073bb6';
+        const { mapping } = await getListColumnMapping(siteId, historyListId, token);
+
+        const colData = resolveFieldName(mapping, 'Data');
+        const colOp = resolveFieldName(mapping, 'Operação');
+
+        let filter = `fields/${colData} ge '${startDate}T00:00:00Z' and fields/${colData} le '${endDate}T23:59:59Z'`;
+
+        console.log(`[NC_ARCHIVE_QUERY] URL: /sites/${siteId}/lists/${historyListId}/items Filter: ${filter}`);
+
+        // Busca todos os itens com paginação
+        let allItems: any[] = [];
+        let nextUrl: string | null = `/sites/${siteId}/lists/${historyListId}/items?expand=fields&$filter=${filter}&$top=100`;
+
+        while (nextUrl) {
+          // Verifica se a requisição foi cancelada antes de cada página
+          if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+          const data = await graphFetch(nextUrl, token, signal ? { signal } : {});
+          allItems = allItems.concat(data.value || []);
+          nextUrl = data['@odata.nextLink'] || null;
+          console.log(`[NC_ARCHIVE_QUERY] Página carregada. Total acumulado: ${allItems.length}`);
+        }
+
+        const results = allItems.map((item: any) => {
+          const f = item.fields;
+          const dataStr = f[colData] ? f[colData].split('T')[0] : "";
+          const ultimaColetaStr = f[resolveFieldName(mapping, 'ÚltimaColeta')] ? f[resolveFieldName(mapping, 'ÚltimaColeta')].split('T')[0] : "";
+          const dataAcaoStr = f[resolveFieldName(mapping, 'DataAção')] ? f[resolveFieldName(mapping, 'DataAção')].split('T')[0] : "";
+
+          // "Semana" é mapeada para LinkTitle que é computado (= Title/Rota).
+          // Calculamos a semana a partir da data real.
+          const semanaCalc = dataStr ? getWeekString(dataStr) : "";
+
+          return {
+            id: String(item.id),
+            semana: semanaCalc,
+            rota: f[resolveFieldName(mapping, 'Rota')] || f.Title || "",
+            data: dataStr,
+            codigo: f[resolveFieldName(mapping, 'Código')] || "",
+            produtor: f[resolveFieldName(mapping, 'Produtor')] || "",
+            motivo: f[resolveFieldName(mapping, 'Motivo')] || "",
+            observacao: f[resolveFieldName(mapping, 'Observação')] || "",
+            acao: f[resolveFieldName(mapping, 'Ação')] || "",
+            dataAcao: dataAcaoStr,
+            ultimaColeta: ultimaColetaStr,
+            Culpabilidade: f[resolveFieldName(mapping, 'Culpabilidade')] || "",
+            operacao: f[colOp] || ""
+          };
+        });
+
+        console.log(`[NC_ARCHIVE_QUERY] Search success. Found ${results.length} records.`);
+        setCachedData(cacheKey, results);
+        return results;
+      } catch (e: any) {
+        if (e.name === 'AbortError') {
+          console.log('[NC_ARCHIVE_QUERY] Requisição cancelada pelo usuário.');
+          return [];
+        }
+        console.error("[NC_ARCHIVE_FETCH_ERROR] Error fetching archived non-collections:", e.message);
+        throw e;
+      } finally {
+        delete inFlightArchiveRequests[cacheKey];
+      }
+    };
+
+    const promise = executeQuery();
+    inFlightArchiveRequests[cacheKey] = promise;
+    return promise;
   },
 
   /**
