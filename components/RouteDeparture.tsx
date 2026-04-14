@@ -1467,13 +1467,13 @@ const RouteDepartureView: React.FC<{
     try {
       console.log('[LOAD_DATA] Buscando dados atualizados...', isBackgroundRefresh ? '(segundo plano)' : '(inicial)');
       console.log('[LOAD_DATA] Usuário logado:', currentUser.email);
-      
+
       const [configs, mappings, spData] = await Promise.all([
         SharePointService.getRouteConfigs(token, currentUser.email, true), // force refresh
         SharePointService.getRouteOperationMappings(token),
         SharePointService.getDepartures(token, true) // force refresh
       ]);
-      
+
       console.log('[LOAD_DATA] Configurações carregadas:', configs?.length || 0);
       console.log('[LOAD_DATA] Operações do usuário:', configs?.map(c => c.operacao));
       console.log('[LOAD_DATA] Total de rotas brutas do SharePoint:', spData?.length || 0);
@@ -1487,15 +1487,15 @@ const RouteDepartureView: React.FC<{
 
       // Filtra rotas APENAS das operações do usuário logado
       const myOps = new Set((configs || []).map(c => c.operacao));
-      
+
       // DEBUG: Log detalhe das operações para identificar problemas de comparação
       console.log('[LOAD_DATA] Operações configuradas (myOps):', Array.from(myOps));
       console.log('[LOAD_DATA] Total de rotas brutas do SharePoint:', spData?.length || 0);
-      
+
       // Log das primeiras 5 operações únicas nas rotas brutas
       const uniqueOpsInRoutes = Array.from(new Set((spData || []).map(r => r.operacao)));
       console.log('[LOAD_DATA] Operações únicas nas rotas brutas:', uniqueOpsInRoutes.slice(0, 10));
-      
+
       const filteredByUser = (spData || []).filter(route => {
         // Se não houver operações configuradas, retorna todas (fallback)
         if (myOps.size === 0) return true;
@@ -1517,16 +1517,85 @@ const RouteDepartureView: React.FC<{
         return { ...route, statusOp: status, tempo: gap };
       });
 
-      setRoutes(recalculatedRoutes);
+      if (isBackgroundRefresh) {
+        // MERGE inteligente: preserva a ordem atual da tabela e evita re-renderização desnecessária
+        // Só atualiza se houver mudança real nos dados
+        setRoutes(prevRoutes => {
+          const newMap = new Map(recalculatedRoutes.map(r => [r.id, r]));
+          const prevMap = new Map(prevRoutes.map(r => [r.id, r]));
+
+          // Detecta mudanças: IDs novos/removidos ou campos alterados
+          const newIds = new Set(newMap.keys());
+          const prevIds = new Set(prevMap.keys());
+          const hasIdChanges = newIds.size !== prevIds.size || ![...newIds].every(id => prevIds.has(id));
+
+          if (!hasIdChanges) {
+            // Mesmos IDs — verifica se algum campo relevante mudou
+            let hasChanges = false;
+            for (const route of recalculatedRoutes) {
+              const prev = prevMap.get(route.id);
+              if (!prev) { hasChanges = true; break; }
+              // Compara campos relevantes (ignora campos que mudam a cada refresh)
+              if (
+                prev.rota !== route.rota ||
+                prev.data !== route.data ||
+                prev.inicio !== route.inicio ||
+                prev.saida !== route.saida ||
+                prev.motorista !== route.motorista ||
+                prev.placa !== route.placa ||
+                prev.motivo !== route.motivo ||
+                prev.observacao !== route.observacao ||
+                prev.statusGeral !== route.statusGeral ||
+                prev.statusOp !== route.statusOp ||
+                prev.tempo !== route.tempo ||
+                prev.aviso !== route.aviso ||
+                prev.operacao !== route.operacao ||
+                prev.checklistMotorista !== route.checklistMotorista
+              ) {
+                hasChanges = true;
+                break;
+              }
+            }
+            if (!hasChanges) {
+              console.log('[LOAD_DATA] Nenhuma mudança detectada — mantendo estado atual');
+              return prevRoutes; // Retorna mesma referência — React não re-renderiza
+            }
+          }
+
+          // Há mudanças: merge preservando a ordem das rotas existentes + adicionando novas
+          const merged = prevRoutes
+            .map(existing => {
+              const updated = newMap.get(existing.id);
+              return updated || existing; // Mantém existente se não veio do SP (não deve acontecer)
+            })
+            .filter(r => newMap.has(r.id)); // Remove rotas que sumiram do SP
+
+          // Adiciona rotas novas que não existiam no estado anterior
+          const existingIds = new Set(prevRoutes.map(r => r.id));
+          for (const route of recalculatedRoutes) {
+            if (!existingIds.has(route.id)) {
+              merged.push(route);
+            }
+          }
+
+          console.log('[LOAD_DATA] Merge concluído —', merged.length, 'rotas');
+          return merged;
+        });
+      } else {
+        // Primeira carga ou refresh manual: substituição total (com spinner)
+        setRoutes(recalculatedRoutes);
+      }
+
       console.log('[LOAD_DATA] Dados carregados com sucesso');
 
       // Analisa histórico dos últimos 7 dias para alertas (apenas no carregamento inicial)
       if (!isBackgroundRefresh) {
         analyzeRouteHistory(token);
       }
-      // Escaneia motoristas com "Mão de obra" na tabela e carrega alertas (sempre, incluindo refresh)
-      // Passa recalculatedRoutes diretamente para evitar stale state
-      scanExistingMotoristAlerts(token, recalculatedRoutes);
+      // Escaneia motoristas com "Mão de obra" — apenas no carregamento inicial para evitar queries excessivas
+      if (!isBackgroundRefresh) {
+        scanExistingMotoristAlerts(token, recalculatedRoutes);
+      }
 
       // Atualiza o último checklist de motorista após carregar as rotas
       if (spData && spData.length > 0) {
@@ -1635,7 +1704,7 @@ const RouteDepartureView: React.FC<{
       }
       console.log('[POLLING_ROUTE_DEPARTURE] Atualização automática de dados (segundo plano)');
       console.log('[POLLING_ROUTE_DEPARTURE] Usuário:', currentUser.email);
-      loadData(false); // false = usa cache do serviço (otimizado)
+      loadData(true); // true = segundo plano (sem loading, sem spinner)
     }, 30000);
 
     return () => clearInterval(refreshInterval);
@@ -2909,7 +2978,14 @@ const RouteDepartureView: React.FC<{
         className={`flex-1 overflow-y-auto overflow-x-auto rounded-2xl border shadow-2xl relative scrollbar-thin ${isDarkMode ? 'bg-slate-900 border-slate-700/50' : 'bg-white border-slate-400 shadow-xl'}`}
         id="table-container"
         onFocusCapture={() => setIsEditingCell(true)}
-        onBlurCapture={() => setIsEditingCell(false)}
+        onBlurCapture={(e) => {
+          // Só marca como não-editando se o novo foco está FORA da tabela
+          // Evita flicker quando o usuário navega entre inputs dentro da mesma tabela
+          const related = e.relatedTarget as HTMLElement | null;
+          if (!related || !e.currentTarget.contains(related)) {
+            setIsEditingCell(false);
+          }
+        }}
       >
         <div className="min-w-max" style={{ overflow: 'visible' }}>
         <table className="border-collapse" style={{ width: `${tableColumns.filter(col => !hiddenColumns.has(col.id)).reduce((acc, col) => acc + colWidths[col.id], 0) + 60}px`, tableLayout: 'fixed' }}>
