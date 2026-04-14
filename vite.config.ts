@@ -108,7 +108,10 @@ export default defineConfig(({ mode }) => {
       ],
       define: {
         'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-        'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)
+        'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
+        'process.env.LIMITAR_RETRY_LOGIN': JSON.stringify(env.LIMITAR_RETRY_LOGIN || '5'),
+        'process.env.LOGIN_LOCKOUT_MINUTES': JSON.stringify(env.LOGIN_LOCKOUT_MINUTES || '15'),
+        'process.env.SITE_KEY': JSON.stringify(env.SITE_KEY || '')
       }
     };
 });

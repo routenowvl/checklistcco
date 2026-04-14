@@ -6,7 +6,9 @@
       "Bash(git checkout *)",
       "Bash(powershell *)",
       "Bash(npx *)",
-      "Bash(findstr *)"
+      "Bash(findstr *)",
+      "Bash(mkdir *)",
+      "Bash(npm install *)"
     ]
   },
   "$version": 3
