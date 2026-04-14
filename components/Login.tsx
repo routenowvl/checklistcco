@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { User } from '../types';
 import { LogIn, Loader2, AlertCircle, ShieldCheck, Clock, CheckCircle2 } from 'lucide-react';
 import { setCurrentUser } from '../services/storageService';
@@ -16,19 +16,16 @@ const STORAGE_LOCKOUT_KEY = 'login_lockout_until';
 
 // URL da API Vercel
 const getApiBaseUrl = () => {
-  // Em produção Vercel: usa a mesma origem
-  // Em dev local: pode configurar VITE_VERCEL_URL ou fallback
   if (import.meta.env.VITE_VERCEL_URL) {
     return `https://${import.meta.env.VITE_VERCEL_URL}`;
   }
-  // Mesmo origin (Vercel deploy)
   return window.location.origin;
 };
 
 declare global {
   interface Window {
     turnstile?: {
-      render: (selector: string, config: TurnstileConfig) => string;
+      render: (container: HTMLElement | string, config: TurnstileConfig) => string;
       reset: (widgetId: string) => void;
       remove: (widgetId: string) => void;
       getResponse: (widgetId: string) => string;
@@ -46,9 +43,6 @@ interface TurnstileConfig {
   'expired-callback'?: () => void;
   language?: string;
   size?: 'normal' | 'compact' | 'flexible';
-  appearance?: 'always' | 'execute' | 'interaction-only';
-  action?: string;
-  cData?: string;
 }
 
 const MicrosoftIcon = () => (
@@ -98,6 +92,17 @@ function formatCountdown(ms: number): string {
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
+/**
+ * Verifica se o Turnstile está ativo (chave real, não placeholder)
+ */
+function isTurnstileConfigured(siteKey: string): boolean {
+  if (!siteKey) return false;
+  // Chaves de teste do Cloudflare começam com "1x00000000000000000000AA" ou "2x00000000000000000000AA"
+  // Placeholders como "su..." ou "se..." não são chaves reais
+  if (siteKey.startsWith('su') || siteKey.startsWith('se') || siteKey.includes('sua_')) return false;
+  return true;
+}
+
 const Login: React.FC<{ onLogin: (user: User) => void }> = ({ onLogin }) => {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -107,10 +112,11 @@ const Login: React.FC<{ onLogin: (user: User) => void }> = ({ onLogin }) => {
   const [turnstileReady, setTurnstileReady] = useState(false);
   const [turnstileVerified, setTurnstileVerified] = useState(false);
   const [isVerifying, setIsVerifying] = useState(false);
+  const [turnstileLoaded, setTurnstileLoaded] = useState(false);
 
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const turnstileWidgetId = useRef<string | null>(null);
-  const turnstileRendered = useRef(false);
+  const turnstileContainerRef = useRef<HTMLDivElement | null>(null);
 
   // Countdown do lockout
   useEffect(() => {
@@ -141,68 +147,93 @@ const Login: React.FC<{ onLogin: (user: User) => void }> = ({ onLogin }) => {
     };
   }, [lockoutRemaining]);
 
-  // Renderiza o widget do Turnstile
-  const renderTurnstile = useCallback(() => {
-    if (turnstileRendered.current || !window.turnstile || !TURNSTILE_SITE_KEY) {
-      // Se não tem SITE_KEY configurado, pula verificação (modo dev sem Turnstile)
-      if (!TURNSTILE_SITE_KEY || TURNSTILE_SITE_KEY.startsWith('su') || TURNSTILE_SITE_KEY.startsWith('se')) {
-        console.warn('[TURNSTILE] SITE_KEY não configurada — pulando verificação (modo dev)');
-        setTurnstileVerified(true);
-        setTurnstileReady(true);
-      }
+  // Verifica se o script do Turnstile já carregou
+  useEffect(() => {
+    if (!isTurnstileConfigured(TURNSTILE_SITE_KEY)) {
+      console.warn('[TURNSTILE] SITE_KEY não configurada — pulando verificação');
+      setTurnstileLoaded(true);
+      setTurnstileVerified(true);
+      setTurnstileReady(true);
       return;
     }
 
-    turnstileRendered.current = true;
-
-    const widgetId = window.turnstile.render('#turnstile-container', {
-      sitekey: TURNSTILE_SITE_KEY,
-      theme: 'dark',
-      language: 'pt-BR',
-      size: 'flexible',
-      callback: (token: string) => {
-        console.log('[TURNSTILE] Token recebido');
-        setTurnstileToken(token);
-        setTurnstileVerified(true);
-      },
-      'error-callback': () => {
-        console.error('[TURNSTILE] Erro ao carregar widget');
-        setError('Não foi possível carregar a verificação de segurança. Recarregue a página.');
-      },
-      'expired-callback': () => {
-        console.warn('[TURNSTILE] Token expirado');
-        setTurnstileToken(null);
-        setTurnstileVerified(false);
-      },
-    });
-
-    turnstileWidgetId.current = widgetId;
-    setTurnstileReady(true);
-  }, []);
-
-  // Aguarda script do Turnstile carregar e renderiza
-  useEffect(() => {
+    // Verifica se a API do Turnstile já está disponível
     const checkTurnstile = () => {
       if (window.turnstile) {
-        renderTurnstile();
+        setTurnstileLoaded(true);
       } else {
-        // Tenta novamente em 200ms
         setTimeout(checkTurnstile, 200);
       }
     };
 
-    // Timeout de 5 segundos
     const timeout = setTimeout(() => {
       if (!window.turnstile) {
-        console.warn('[TURNSTILE] Script não carregou — pulando verificação');
+        console.warn('[TURNSTILE] Script não carregou após 5s — pulando verificação');
+        setTurnstileLoaded(true);
+        setTurnstileVerified(true);
         setTurnstileReady(true);
       }
     }, 5000);
 
     checkTurnstile();
-
     return () => clearTimeout(timeout);
-  }, [renderTurnstile]);
+  }, []);
+
+  // Renderiza o widget do Turnstile APÓS o DOM estar montado
+  useEffect(() => {
+    if (!turnstileLoaded || !window.turnstile || !turnstileContainerRef.current) return;
+    if (!isTurnstileConfigured(TURNSTILE_SITE_KEY)) return;
+    if (turnstileWidgetId.current) return; // Já renderizado
+
+    // Garante que o container está no DOM
+    const container = turnstileContainerRef.current;
+    if (!container || !container.isConnected) {
+      console.warn('[TURNSTILE] Container não está no DOM, aguardando...');
+      return;
+    }
+
+    try {
+      const widgetId = window.turnstile.render(container, {
+        sitekey: TURNSTILE_SITE_KEY,
+        theme: 'dark',
+        language: 'pt-BR',
+        size: 'flexible',
+        callback: (token: string) => {
+          console.log('[TURNSTILE] Token recebido');
+          setTurnstileToken(token);
+          setTurnstileVerified(true);
+        },
+        'error-callback': () => {
+          console.error('[TURNSTILE] Erro ao carregar widget');
+          setError('Não foi possível carregar a verificação de segurança. Recarregue a página.');
+          setTurnstileReady(true);
+        },
+        'expired-callback': () => {
+          console.warn('[TURNSTILE] Token expirado');
+          setTurnstileToken(null);
+          setTurnstileVerified(false);
+        },
+      });
+
+      turnstileWidgetId.current = widgetId;
+      setTurnstileReady(true);
+      console.log('[TURNSTILE] Widget renderizado com sucesso');
+    } catch (err: any) {
+      console.error('[TURNSTILE] Erro ao renderizar widget:', err.message);
+      setTurnstileReady(true);
+    }
+  }, [turnstileLoaded]);
+
+  // Cleanup do widget ao desmontar
+  useEffect(() => {
+    return () => {
+      if (turnstileWidgetId.current && window.turnstile) {
+        try {
+          window.turnstile.remove(turnstileWidgetId.current);
+        } catch { /* ignora */ }
+      }
+    };
+  }, []);
 
   // Valida o token do Turnstile na API Vercel
   const verifyTurnstile = async (token: string): Promise<boolean> => {
@@ -223,7 +254,6 @@ const Login: React.FC<{ onLogin: (user: User) => void }> = ({ onLogin }) => {
       } else {
         console.warn('[TURNSTILE] ❌ Verificação falhou:', data.errors);
         setError('⚠️ Verificação de segurança falhou. Tente novamente.');
-        // Reseta o widget para nova tentativa
         if (turnstileWidgetId.current && window.turnstile) {
           window.turnstile.reset(turnstileWidgetId.current);
         }
@@ -233,7 +263,7 @@ const Login: React.FC<{ onLogin: (user: User) => void }> = ({ onLogin }) => {
       }
     } catch (err: any) {
       console.error('[TURNSTILE] Erro ao chamar API:', err.message);
-      // Se a API não existe (dev local), permite passar (fallback)
+      // Dev local sem API disponível
       if (!import.meta.env.PROD) {
         console.warn('[TURNSTILE] API indisponível em dev local — pulando validação server-side');
         return true;
@@ -310,16 +340,18 @@ const Login: React.FC<{ onLogin: (user: User) => void }> = ({ onLogin }) => {
       return;
     }
 
-    // Verifica se Turnstile foi resolvido
-    if (!turnstileVerified || !turnstileToken) {
+    // Verifica se Turnstile foi resolvido (se configurado)
+    if (isTurnstileConfigured(TURNSTILE_SITE_KEY) && (!turnstileVerified || !turnstileToken)) {
       setError('⚠️ Complete a verificação de segurança antes de entrar.');
       return;
     }
 
-    // Valida o token server-side
-    const isValid = await verifyTurnstile(turnstileToken);
-    if (!isValid) {
-      return;
+    // Valida o token server-side (se configurado)
+    if (isTurnstileConfigured(TURNSTILE_SITE_KEY) && turnstileToken) {
+      const isValid = await verifyTurnstile(turnstileToken);
+      if (!isValid) {
+        return;
+      }
     }
 
     setIsLoggingIn(true);
@@ -362,7 +394,6 @@ const Login: React.FC<{ onLogin: (user: User) => void }> = ({ onLogin }) => {
           );
           console.warn(`[LOGIN_LOCKOUT] Bloqueio ativado por ${LOCKOUT_MINUTES} minutos.`);
 
-          // Reseta Turnstile após lockout
           if (turnstileWidgetId.current && window.turnstile) {
             window.turnstile.reset(turnstileWidgetId.current);
           }
@@ -375,7 +406,6 @@ const Login: React.FC<{ onLogin: (user: User) => void }> = ({ onLogin }) => {
             `Tentativas restantes: ${retriesLeft}`
           );
 
-          // Reseta Turnstile para nova tentativa
           if (turnstileWidgetId.current && window.turnstile) {
             window.turnstile.reset(turnstileWidgetId.current);
           }
@@ -388,6 +418,7 @@ const Login: React.FC<{ onLogin: (user: User) => void }> = ({ onLogin }) => {
   };
 
   const isLocked = lockoutRemaining !== null && lockoutRemaining > 0;
+  const turnstileEnabled = isTurnstileConfigured(TURNSTILE_SITE_KEY);
 
   if (checkingSession) {
     return (
@@ -419,17 +450,17 @@ const Login: React.FC<{ onLogin: (user: User) => void }> = ({ onLogin }) => {
             )}
 
             {/* Widget Turnstile */}
-            {TURNSTILE_SITE_KEY && !isLocked && (
+            {turnstileEnabled && !isLocked && (
               <div className="w-full mb-4">
                 <div
-                  id="turnstile-container"
+                  ref={turnstileContainerRef}
                   className="flex justify-center transition-opacity duration-300"
                   style={{
                     minHeight: turnstileReady ? 'auto' : '65px',
-                    opacity: turnstileReady ? 1 : 0.3,
+                    opacity: (turnstileLoaded && turnstileReady) ? 1 : 0.3,
                   }}
                 >
-                  {!turnstileReady && (
+                  {(!turnstileLoaded || !turnstileReady) && (
                     <div className="flex items-center gap-2 text-slate-400 text-xs">
                       <Loader2 size={14} className="animate-spin" />
                       <span>Carregando verificação...</span>
@@ -438,7 +469,7 @@ const Login: React.FC<{ onLogin: (user: User) => void }> = ({ onLogin }) => {
                 </div>
 
                 {/* Status da verificação */}
-                {turnstileVerified && (
+                {turnstileVerified && turnstileReady && (
                   <div className="flex items-center justify-center gap-2 mt-2 text-green-600 text-xs font-medium">
                     <CheckCircle2 size={14} />
                     <span>Verificação concluída</span>
@@ -456,9 +487,9 @@ const Login: React.FC<{ onLogin: (user: User) => void }> = ({ onLogin }) => {
 
             <button
                 onClick={handleMicrosoftLogin}
-                disabled={isLoggingIn || isLocked || isVerifying || (!turnstileVerified && !!TURNSTILE_SITE_KEY)}
+                disabled={isLoggingIn || isLocked || isVerifying || (turnstileEnabled && !turnstileVerified)}
                 className={`w-full py-4 rounded-2xl font-bold flex items-center justify-center gap-3 transition-all shadow-lg ${
-                  isLocked || isVerifying || (!turnstileVerified && !!TURNSTILE_SITE_KEY)
+                  isLocked || isVerifying || (turnstileEnabled && !turnstileVerified)
                     ? 'bg-slate-300 text-slate-500 opacity-50 cursor-not-allowed hover:scale-100'
                     : 'bg-slate-900 text-white hover:bg-slate-800 hover:scale-[1.02] active:scale-95 disabled:opacity-70'
                 } shadow-lg`}
