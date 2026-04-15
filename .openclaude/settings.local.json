@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npm run:*)"
+      "Bash(npm run:*)",
+      "Bash(grep -rni -E \"saida|saída|departure|envio.*mail|send.*mail|send.*email|email.*send|mail.*send|auto.*mail\" C:/Projetos/checklistcco --include=*.tsx --include=*.ts --include=*.jsx --include=*.js)",
+      "Bash(grep:*)"
     ]
   }
 }

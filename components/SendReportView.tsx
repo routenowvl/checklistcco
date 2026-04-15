@@ -4,7 +4,7 @@ import { SharePointService } from '../services/sharepointService';
 import { getValidToken } from '../services/tokenService';
 import { getBrazilDate, getBrazilHours, isAfter10amBrazil } from '../utils/dateUtils';
 import { isDealeUser, getDealeFilteredConfigs, getDealeAnchorOperation, getDealeOperationsToSend, getDealeRealOperations, getDealeCombinedLastEnvio, getDealeEffectiveConfig } from '../utils/dealeUtils';
-import { RouteDeparture, Task, User, RouteConfig } from '../types';
+import { RouteDeparture, Task, User, RouteConfig, ColetaPrevista } from '../types';
 import {
   TowerControl, Send, RefreshCw, Loader2,
   CheckCircle2, AlertCircle, Clock, Filter,
@@ -44,10 +44,13 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
   const [ncSendSuccess, setNcSendSuccess] = useState(false);              // Não Coletas (lado direito)
   const [isAtualizacao, setIsAtualizacao] = useState(false);
   const [isSendingSummary, setIsSendingSummary] = useState(false);
+  const [isSendingNCSummary, setIsSendingNCSummary] = useState(false);
+  const [coletasPrevistas, setColetasPrevistas] = useState<ColetaPrevista[]>([]);
 
   const WEBHOOK_URL = import.meta.env.VITE_WEBHOOK_SAIDAS_URL || "https://n8n.datastack.viagroup.com.br/webhook/8cb1f3e1-833d-42a7-a3f0-2f959ea390d6";
   const WEBHOOK_URL_NAO_COLETAS = "https://n8n.datastack.viagroup.com.br/webhook-test/d712d06e-b81f-40f4-9ca8-5b2403a90fdd";
   const WEBHOOK_URL_RESUMO = import.meta.env.VITE_WEBHOOK_RESUMO_URL || "https://n8n.datastack.viagroup.com.br/webhook/8cb1f3e1-833d-42a7-a3f0-2f959ea390d6";
+  const WEBHOOK_URL_NC_RESUMO = "https://n8n.datastack.viagroup.com.br/webhook-test/20541afc-08c7-4799-b3e9-26dd3afdbb5a";
 
   // Estado para não coletas reais do SharePoint (usado na coluna da direita)
   const [realNonCollections, setRealNonCollections] = useState<any[]>([]);
@@ -567,6 +570,41 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
     console.log('[SEND_NAO_COLETA] Não coletas encontradas no SharePoint:', ncFiltradas.length);
 
+    // BUSCA COLETAS PREVISTAS DA DATA DAS NÃO COLETAS PARA INCLUIR NO PAYLOAD
+    // Pega a data da primeira não coleta encontrada (todas são da mesma data)
+    const ncDate = ncFiltradas[0]?.data || '';
+    let coletasPrev: ColetaPrevista[] = coletasPrevistas;
+    try {
+      // Converte DD/MM/YYYY → YYYY-MM-DD para a busca no SharePoint
+      let dataISO = '';
+      if (ncDate.includes('/')) {
+        const [dia, mes, ano] = ncDate.split('/');
+        dataISO = `${ano}-${mes}-${dia}`;
+      } else if (ncDate.includes('-')) {
+        dataISO = ncDate;
+      }
+
+      if (dataISO) {
+        coletasPrev = await SharePointService.getColetasPrevistas(token, dataISO, currentUser.email);
+        setColetasPrevistas(coletasPrev);
+        console.log('[SEND_NAO_COLETA] Coletas previstas para data:', dataISO, '— encontradas:', coletasPrev.length);
+      }
+    } catch (err) {
+      console.warn('[SEND_NAO_COLETA] Erro ao buscar coletas previstas, usando cache:', err);
+    }
+
+    // Soma coletas previstas por operação
+    const coletasPorOperacao: Record<string, number> = {};
+    realOperations.forEach(op => {
+      const previstas = coletasPrev.filter(c => c.Title === op);
+      coletasPorOperacao[op] = previstas.reduce((sum, c) => sum + (c.QntColeta || 0), 0);
+    });
+
+    const totalColetasPrevistas = Object.values(coletasPorOperacao).reduce((sum, n) => sum + n, 0);
+
+    console.log('[SEND_NAO_COLETA] Coletas previstas por operação:', coletasPorOperacao);
+    console.log('[SEND_NAO_COLETA] Total coletas previstas:', totalColetasPrevistas);
+
     if (ncFiltradas.length === 0) {
       setNcSendError(`⚠️ Nenhuma não coleta lançada para ${selectedOperacaoNC} na tabela. Não há dados para enviar.`);
       setTimeout(() => setNcSendError(null), 6000);
@@ -608,6 +646,8 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       dataEnvio: new Date().toISOString(),
       envio: config?.Envio || "",
       copia: config?.Copia || "",
+      totalColetasPrevistas: totalColetasPrevistas,
+      coletasPorOperacao: coletasPorOperacao,
       totalNaoColetas: ncFiltradas.length,
       naoColetas: ncFiltradas.map(nc => ({
         semana: nc.semana,
@@ -956,6 +996,133 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     }
   };
 
+  // Função para enviar resumo GERAL de todas as não coletas do usuário
+  const handleSendNCSummary = async () => {
+    const myOps = new Set(userConfigs.map(c => c.operacao));
+
+    console.log('[RESUMO_NC] === INICIANDO ENVIO DE RESUMO NÃO COLETAS ===');
+    console.log('[RESUMO_NC] Operações configuradas para este usuário:', userConfigs.map(c => c.operacao));
+    console.log('[RESUMO_NC] Total de não coletas no estado realNonCollections:', realNonCollections.length);
+
+    if (myOps.size === 0) {
+      setNcSendError("Nenhuma operação configurada para este usuário.");
+      setTimeout(() => setNcSendError(null), 3000);
+      return;
+    }
+
+    setIsSendingNCSummary(true);
+    setNcSendError(null);
+
+    // Filtra não coletas apenas das operações do usuário logado
+    const userNCs = realNonCollections.filter(nc => {
+      const pertence = !nc.operacao || myOps.has(nc.operacao);
+      if (!pertence) {
+        console.log(`[RESUMO_NC] Não coleta da operação ${nc.operacao} NÃO pertence a este usuário - será ignorada`);
+      }
+      return pertence;
+    });
+
+    // Busca coletas previstas da DATA das não coletas (usa a data da primeira NC encontrada)
+    const ncDate = userNCs.length > 0 ? userNCs[0].data : '';
+    let coletasPrev: ColetaPrevista[] = coletasPrevistas;
+    try {
+      const token = await getValidToken();
+      if (token) {
+        // Converte DD/MM/YYYY → YYYY-MM-DD para a busca no SharePoint
+        let dataISO = '';
+        if (ncDate.includes('/')) {
+          const [dia, mes, ano] = ncDate.split('/');
+          dataISO = `${ano}-${mes}-${dia}`;
+        } else if (ncDate.includes('-')) {
+          dataISO = ncDate;
+        } else {
+          // Fallback: usa data de hoje
+          dataISO = getBrazilDate();
+        }
+
+        coletasPrev = await SharePointService.getColetasPrevistas(token, dataISO, currentUser.email);
+        setColetasPrevistas(coletasPrev);
+        console.log('[RESUMO_NC] Coletas previstas para data:', dataISO, '— encontradas:', coletasPrev.length);
+      }
+    } catch (err) {
+      console.warn('[RESUMO_NC] Erro ao buscar coletas previstas, usando cache:', err);
+    }
+
+    // Agrupa não coletas por operação
+    const ncsByOperation: Record<string, any[]> = {};
+    userNCs.forEach(nc => {
+      const op = nc.operacao || 'SEM_OPERACAO';
+      if (!ncsByOperation[op]) {
+        ncsByOperation[op] = [];
+      }
+      ncsByOperation[op].push(nc);
+    });
+
+    // Lista com os nomes de todas as operações do login
+    const listaOperacoes = userConfigs.map(c => c.operacao);
+
+    // Envia TODAS as operações do login — inclusive as que não têm não coletas
+    const payload = {
+      tipo: "RESUMO_NAO_COLETAS",
+      usuario: currentUser.email,
+      dataEnvio: new Date().toISOString(),
+      totalNaoColetas: userNCs.length,
+      operacoes: listaOperacoes.length,
+      operacoesLogin: listaOperacoes,
+      naoColetasPorOperacao: Array.from(myOps).map(operacao => {
+        const config = userConfigs.find(c => c.operacao === operacao);
+        const ncs = ncsByOperation[operacao] || [];
+        const previstas = coletasPrev.filter(c => c.Title === operacao);
+        const totalPrevistas = previstas.reduce((sum, c) => sum + (c.QntColeta || 0), 0);
+        return {
+          operacao: operacao,
+          nomeExibicao: config?.nomeExibicao || operacao,
+          totalColetasPrevistas: totalPrevistas,
+          totalNaoColetas: ncs.length,
+          naoColetas: ncs.map(nc => ({
+            semana: nc.semana,
+            rota: nc.rota,
+            data: nc.data,
+            codigo: nc.codigo,
+            produtor: nc.produtor,
+            motivo: nc.motivo,
+            observacao: nc.observacao,
+            acao: nc.acao,
+            dataAcao: nc.dataAcao,
+            ultimaColeta: nc.ultimaColeta,
+            culpabilidade: nc.Culpabilidade,
+            operacao: nc.operacao
+          }))
+        };
+      })
+    };
+
+    console.log('[RESUMO_NC] Operações sendo enviadas:', payload.naoColetasPorOperacao.map((op: any) => `${op.operacao}: ${op.totalNaoColetas} NCs`));
+    console.log('[RESUMO_NC] Enviando payload:', payload);
+
+    try {
+      const response = await fetch(WEBHOOK_URL_NC_RESUMO, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (response.ok) {
+        console.log('[RESUMO_NC] ✅ Resumo de não coletas enviado com sucesso');
+        setNcSendSuccess(true);
+        setTimeout(() => setNcSendSuccess(false), 3000);
+      } else {
+        throw new Error(`Erro na resposta do webhook: ${response.status}`);
+      }
+    } catch (e: any) {
+      console.error('[RESUMO_NC] Erro ao enviar:', e.message);
+      setNcSendError(e.message || "Falha ao enviar resumo de não coletas");
+      setTimeout(() => setNcSendError(null), 5000);
+    } finally {
+      setIsSendingNCSummary(false);
+    }
+  };
+
   const getRelativeTime = (dateStr: string) => {
     if (!dateStr) return "há -- horas";
     const date = new Date(dateStr);
@@ -1299,17 +1466,6 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={handleSendSummary}
-            disabled={isSendingSummary || departures.length === 0}
-            className="flex items-center gap-2 px-4 py-2 bg-emerald-700 text-white rounded-lg hover:bg-emerald-600 font-bold border border-emerald-600 uppercase text-[10px] tracking-wide transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {isSendingSummary ? (
-              <><Loader2 size={16} className="animate-spin" /> Enviando...</>
-            ) : (
-              <><Send size={16} /> Enviar Resumo</>
-            )}
-          </button>
-          <button
             onClick={() => {
               console.log('[USER_ACTION] Refresh manual acionado');
               fetchAllData(true);
@@ -1332,6 +1488,17 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
               <Filter size={16} className="text-slate-400" />
               <h2 className="font-black text-[#075985] dark:text-sky-400 uppercase tracking-widest text-sm">Saídas</h2>
             </div>
+            <button
+              onClick={handleSendSummary}
+              disabled={isSendingSummary || departures.length === 0}
+              className="flex items-center gap-2 px-4 py-2 bg-emerald-700 text-white rounded-lg hover:bg-emerald-600 font-bold border border-emerald-600 uppercase text-[10px] tracking-wide transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isSendingSummary ? (
+                <><Loader2 size={16} className="animate-spin" /> Enviando...</>
+              ) : (
+                <><Send size={16} /> Enviar Resumo</>
+              )}
+            </button>
           </div>
           
           <div className="flex-1 overflow-y-auto p-4 space-y-3 scrollbar-thin">
@@ -1405,8 +1572,19 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
         {/* Coluna Não Coletas */}
         <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col overflow-hidden">
-          <div className="p-4 border-b dark:border-slate-800 flex justify-center items-center bg-slate-50/50 dark:bg-slate-800/50">
+          <div className="p-4 border-b dark:border-slate-800 flex justify-between items-center bg-slate-50/50 dark:bg-slate-800/50">
             <h2 className="font-black text-[#075985] dark:text-sky-400 uppercase tracking-widest text-sm">Não Coletas</h2>
+            <button
+              onClick={handleSendNCSummary}
+              disabled={isSendingNCSummary || userConfigs.length === 0}
+              className="flex items-center gap-2 px-4 py-2 bg-emerald-700 text-white rounded-lg hover:bg-emerald-600 font-bold border border-emerald-600 uppercase text-[10px] tracking-wide transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isSendingNCSummary ? (
+                <><Loader2 size={16} className="animate-spin" /> Enviando...</>
+              ) : (
+                <><Send size={16} /> Enviar Resumo</>
+              )}
+            </button>
           </div>
 
           <div className="flex-1 overflow-y-auto p-4 space-y-3 scrollbar-thin">
