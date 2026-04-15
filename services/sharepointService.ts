@@ -1615,6 +1615,52 @@ export const SharePointService = {
   },
 
   /**
+   * Atualiza não coleta arquivada na lista de histórico
+   * Lista: nao_coletas_web_hist (ID: 1702fe62-6a47-4fd1-b935-0e3258073bb6)
+   */
+  async updateArchivedNonCollection(token: string, nonCollection: NonCollection): Promise<void> {
+    try {
+      const siteId = await getResolvedSiteId(token);
+      const historyListId = '1702fe62-6a47-4fd1-b935-0e3258073bb6';
+
+      // Constrói payload removendo campos vazios (SharePoint rejeita DateTime com "")
+      const payload: any = {};
+
+      // Regra do histórico: Title SEMPRE representa a Rota
+      if (nonCollection.rota && nonCollection.rota.trim() !== '') {
+        payload.Title = nonCollection.rota;
+      }
+      if (nonCollection.data) {
+        const parsedData = parseDateForSharePoint(nonCollection.data);
+        if (parsedData) payload.Data = parsedData;
+      }
+      if (nonCollection.codigo) payload.C_x00f3_digo = nonCollection.codigo;
+      if (nonCollection.produtor) payload.Produtor = nonCollection.produtor;
+      if (nonCollection.motivo) payload.Motivo = nonCollection.motivo;
+      if (nonCollection.observacao) payload.Observa_x00e7__x00e3_o = nonCollection.observacao;
+      if (nonCollection.acao) payload.A_x00e7__x00e3_o = nonCollection.acao;
+      // Campos DateTime: só envia se parse resultou em valor válido
+      { const v = parseDateForSharePoint(nonCollection.dataAcao); if (v) payload.DataA_x00e7__x00e3_o = v; }
+      { const v = parseDateForSharePoint(nonCollection.ultimaColeta); if (v) payload._x00da_ltimaColeta = v; }
+      if (nonCollection.Culpabilidade) payload.Culpabilidade = nonCollection.Culpabilidade;
+      if (nonCollection.operacao) payload.Opera_x00e7__x00e3_o = nonCollection.operacao;
+
+      await graphFetch(`/sites/${siteId}/lists/${historyListId}/items/${nonCollection.id}`, token, {
+        method: 'PATCH',
+        body: JSON.stringify({ fields: payload })
+      });
+
+      // Invalida cache das consultas de histórico de não coletas
+      clearCacheByPrefix('archived_noncollections_');
+
+      console.log('[NonCollectionsHistory] ✅ Não coleta de histórico atualizada com sucesso:', nonCollection.rota, '-', nonCollection.codigo);
+    } catch (e: any) {
+      console.error('[NonCollectionsHistory] Erro ao atualizar não coleta de histórico:', e.message);
+      throw e;
+    }
+  },
+
+  /**
    * Exclui não coleta existente da lista do SharePoint
    * Lista: Dados_Nao_Coletas (ID: 83e8cfb9-1982-47ae-b515-3fec112da457)
    */
@@ -1686,14 +1732,14 @@ export const SharePointService = {
           const ultimaColetaStr = f[resolveFieldName(mapping, 'ÚltimaColeta')] ? f[resolveFieldName(mapping, 'ÚltimaColeta')].split('T')[0] : "";
           const dataAcaoStr = f[resolveFieldName(mapping, 'DataAção')] ? f[resolveFieldName(mapping, 'DataAção')].split('T')[0] : "";
 
-          // "Semana" é mapeada para LinkTitle que é computado (= Title/Rota).
-          // Calculamos a semana a partir da data real.
+          // Histórico: Title armazena a rota.
+          // "Semana" é apenas informativa na UI e é calculada pela data.
           const semanaCalc = dataStr ? getWeekString(dataStr) : "";
 
           return {
             id: String(item.id),
             semana: semanaCalc,
-            rota: f[resolveFieldName(mapping, 'Rota')] || f.Title || "",
+            rota: f.Title || f[resolveFieldName(mapping, 'Rota')] || "",
             data: dataStr,
             codigo: f[resolveFieldName(mapping, 'Código')] || "",
             produtor: f[resolveFieldName(mapping, 'Produtor')] || "",

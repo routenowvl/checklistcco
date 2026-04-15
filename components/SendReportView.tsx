@@ -1024,28 +1024,44 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
     // Busca coletas previstas da DATA das não coletas (usa a data da primeira NC encontrada)
     const ncDate = userNCs.length > 0 ? userNCs[0].data : '';
-    let coletasPrev: ColetaPrevista[] = coletasPrevistas;
+    let dataISOSelecionada = '';
+    if (ncDate.includes('/')) {
+      const [dia, mes, ano] = ncDate.split('/');
+      dataISOSelecionada = `${ano}-${mes}-${dia}`;
+    } else if (ncDate.includes('-')) {
+      dataISOSelecionada = ncDate.split('T')[0];
+    } else {
+      // Fallback: usa data de hoje
+      dataISOSelecionada = getBrazilDate();
+    }
+
+    // Usa apenas cache da data alvo para evitar falso positivo com cache de outro dia
+    let coletasPrev: ColetaPrevista[] = coletasPrevistas.filter(c =>
+      !!c.Data && c.Data.startsWith(dataISOSelecionada)
+    );
     try {
       const token = await getValidToken();
       if (token) {
-        // Converte DD/MM/YYYY → YYYY-MM-DD para a busca no SharePoint
-        let dataISO = '';
-        if (ncDate.includes('/')) {
-          const [dia, mes, ano] = ncDate.split('/');
-          dataISO = `${ano}-${mes}-${dia}`;
-        } else if (ncDate.includes('-')) {
-          dataISO = ncDate;
-        } else {
-          // Fallback: usa data de hoje
-          dataISO = getBrazilDate();
-        }
-
-        coletasPrev = await SharePointService.getColetasPrevistas(token, dataISO, currentUser.email);
+        coletasPrev = await SharePointService.getColetasPrevistas(token, dataISOSelecionada, currentUser.email);
         setColetasPrevistas(coletasPrev);
-        console.log('[RESUMO_NC] Coletas previstas para data:', dataISO, '— encontradas:', coletasPrev.length);
+        console.log('[RESUMO_NC] Coletas previstas para data:', dataISOSelecionada, '— encontradas:', coletasPrev.length);
+      } else {
+        console.warn('[RESUMO_NC] Token indisponível para buscar coletas previstas, usando cache local da data alvo');
       }
     } catch (err) {
       console.warn('[RESUMO_NC] Erro ao buscar coletas previstas, usando cache:', err);
+    }
+
+    // BLOQUEIO: não permite enviar resumo de NÃO COLETAS se não houver coletas previstas no dia
+    const totalColetasPrevistasDia = coletasPrev.reduce((sum, c) => sum + (c.QntColeta || 0), 0);
+    if (totalColetasPrevistasDia <= 0) {
+      const dataAviso = dataISOSelecionada
+        ? dataISOSelecionada.split('-').reverse().join('/')
+        : getBrazilDate().split('-').reverse().join('/');
+      setNcSendError(`Não existem coletas previstas para o dia ${dataAviso}. Envio do resumo de NÃO COLETAS bloqueado.`);
+      setTimeout(() => setNcSendError(null), 6000);
+      setIsSendingNCSummary(false);
+      return;
     }
 
     // Agrupa não coletas por operação
@@ -1123,12 +1139,65 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     }
   };
 
+  const parseConfigDateTime = (dateStr: string): Date | null => {
+    if (!dateStr || dateStr.trim() === '') return null;
+
+    const raw = dateStr.trim();
+
+    // ISO (ex: 2026-04-14T12:02:20.000Z)
+    if (raw.includes('T')) {
+      const isoDate = new Date(raw);
+      return isNaN(isoDate.getTime()) ? null : isoDate;
+    }
+
+    // Formatos esperados no SharePoint:
+    // - DD/MM/AAAA HH:MM:SS
+    // - DD/MM/AAAA HH:MM
+    // - DD/MM/AAAA HH:MM:SS 03
+    const match = raw.match(
+      /^(\d{2})\/(\d{2})\/(\d{4})(?:\s+(\d{2}):(\d{2})(?::(\d{2}))?)?(?:\s+[+-]?\d{1,2})?$/
+    );
+
+    if (match) {
+      const [, dia, mes, ano, hora = '00', minuto = '00', segundo = '00'] = match;
+      const parsed = new Date(
+        Number(ano),
+        Number(mes) - 1,
+        Number(dia),
+        Number(hora),
+        Number(minuto),
+        Number(segundo)
+      );
+      return isNaN(parsed.getTime()) ? null : parsed;
+    }
+
+    const fallback = new Date(raw);
+    return isNaN(fallback.getTime()) ? null : fallback;
+  };
+
+  const getLatestNaoColetasEnvio = (configs: RouteConfig[]): string => {
+    let latest = '';
+    let latestMs = 0;
+
+    configs.forEach(config => {
+      const current = config.UltimoEnvioNcoletas || '';
+      const parsed = parseConfigDateTime(current);
+      if (parsed && parsed.getTime() > latestMs) {
+        latestMs = parsed.getTime();
+        latest = current;
+      }
+    });
+
+    return latest;
+  };
+
   const getRelativeTime = (dateStr: string) => {
-    if (!dateStr) return "há -- horas";
-    const date = new Date(dateStr);
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+    if (!dateStr) return "Nunca enviado";
+    const date = parseConfigDateTime(dateStr);
+    if (!date) return "há -- horas";
+    const now = Date.now();
+    const diffMs = now - date.getTime();
+    const diffHours = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60)));
     return `há ${diffHours} horas`;
   };
 
@@ -1358,12 +1427,15 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     const result = nonDealeOps.map(op => {
       // Conta não coletas REAIS desta operação
       const ncCount = realNonCollections.filter(nc => nc.operacao === op).length;
+      const config = userConfigs.find(c => c.operacao === op);
+      const ultimoEnvioNC = config?.UltimoEnvioNcoletas || '';
+      const parsedUltimoEnvio = parseConfigDateTime(ultimoEnvioNC);
 
       return {
         id: op,
         operacao: op,
-        timestamp: new Date().toISOString(),
-        relativeTime: getRelativeTime(new Date().toISOString()),
+        timestamp: parsedUltimoEnvio ? parsedUltimoEnvio.toISOString() : new Date().toISOString(),
+        relativeTime: ultimoEnvioNC ? getRelativeTime(ultimoEnvioNC) : "Nunca enviado",
         status: ncCount > 0 ? `${ncCount} NÃO COLETAS` : "TODOS COLETADOS",
         statusColor: ncCount > 0 ? "bg-red-500 text-white" : "bg-emerald-500 text-white"
       };
@@ -1372,12 +1444,15 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     // Adiciona DEALE agrupado se aplicável
     if (hasDealeOps) {
       const dealeNcCount = realNonCollections.filter(nc => dealeOps.has(nc.operacao?.toUpperCase())).length;
+      const dealeConfigs = userConfigs.filter(c => dealeOps.has(c.operacao.toUpperCase()));
+      const ultimoEnvioDealeNC = getLatestNaoColetasEnvio(dealeConfigs);
+      const parsedUltimoEnvioDeale = parseConfigDateTime(ultimoEnvioDealeNC);
 
       result.push({
         id: 'DEALE',
         operacao: 'DEALE',
-        timestamp: new Date().toISOString(),
-        relativeTime: getRelativeTime(new Date().toISOString()),
+        timestamp: parsedUltimoEnvioDeale ? parsedUltimoEnvioDeale.toISOString() : new Date().toISOString(),
+        relativeTime: ultimoEnvioDealeNC ? getRelativeTime(ultimoEnvioDealeNC) : "Nunca enviado",
         status: dealeNcCount > 0 ? `${dealeNcCount} NÃO COLETAS` : "TODOS COLETADOS",
         statusColor: dealeNcCount > 0 ? "bg-red-500 text-white" : "bg-emerald-500 text-white"
       });

@@ -177,6 +177,14 @@ const NonCollectionsView: React.FC<{
   const [isSearchingArchive, setIsSearchingArchive] = useState(false);
   const [isArchiving, setIsArchiving] = useState(false);
   const archiveAbortRef = useRef<AbortController | null>(null);
+  const [historyColFilters, setHistoryColFilters] = useState<Record<string, string>>({});
+  const [historySelectedFilters, setHistorySelectedFilters] = useState<Record<string, string[]>>({});
+  const [historyActiveFilterCol, setHistoryActiveFilterCol] = useState<string | null>(null);
+  const historyFilterDropdownRef = useRef<HTMLDivElement>(null);
+  const [pendingHistoryEdits, setPendingHistoryEdits] = useState<Record<string, Partial<NonCollection>>>({});
+  const [editingHistoryId, setEditingHistoryId] = useState<string | null>(null);
+  const [editingHistoryField, setEditingHistoryField] = useState<keyof NonCollection | null>(null);
+  const [isSavingHistoryEdits, setIsSavingHistoryEdits] = useState(false);
 
   const updateGhostCell = (field: keyof NonCollection, value: string) => {
     const updatedGhost = { ...ghostRow, [field]: value };
@@ -216,7 +224,7 @@ const NonCollectionsView: React.FC<{
         const dataNaoColeta = ghostRow.data!;
 
         if (motivo && dataNaoColeta) {
-          // Motivos que geram "Leite Descartado" ou "Aguardando autorização" ficam com héfen
+          // Motivos que geram "Leite Descartado" ou "Aguardando autorização" ficam com hífen
           const motivoLower = motivo.toLowerCase();
           if (motivoLower === 'parou de fornecer' || motivoLower === 'produtor suspenso' || motivoLower === 'alizarol positivo') {
             return '-';
@@ -295,7 +303,7 @@ const NonCollectionsView: React.FC<{
   const createBulkRecordsWithOperation = async (operacao: string) => {
     // Trava contra cliques duplos
     if (isCreatingRecords) {
-      console.warn('[BULK_PASTE] Ignorando clique duplicado — criação em andamento');
+      console.warn('[BULK_PASTE] Ignorando clique duplicado - criação em andamento');
       return;
     }
 
@@ -356,7 +364,7 @@ const NonCollectionsView: React.FC<{
 
         try {
           const spId = await SharePointService.saveNonCollection(token, tempRecord);
-          console.log('[BULK_PASTE] âœ… Criado no SharePoint:', rota, 'ID:', spId);
+          console.log('[BULK_PASTE] ? Criado no SharePoint:', rota, 'ID:', spId);
           savedRecords.push({ ...tempRecord, id: spId }); // Usa o ID real do SharePoint
         } catch (e: any) {
           console.error('[BULK_PASTE] Erro ao criar registro no SharePoint:', rota, e.message);
@@ -366,7 +374,7 @@ const NonCollectionsView: React.FC<{
       }
 
       setNonCollections(prev => [...prev, ...savedRecords]);
-      console.log('[BULK_PASTE] âœ…', savedRecords.length, 'linhas criadas e salvas com Operação:', operacao);
+      console.log('[BULK_PASTE] -', savedRecords.length, 'linhas criadas e salvas com Operação:', operacao);
 
       // Busca coletas previstas para a data inserida
       await fetchColetasPrevistas(dataFormatada);
@@ -412,6 +420,9 @@ const NonCollectionsView: React.FC<{
     const handleClickOutside = (e: MouseEvent) => {
       if (filterDropdownRef.current && !filterDropdownRef.current.contains(e.target as Node)) {
         setActiveFilterCol(null);
+      }
+      if (historyFilterDropdownRef.current && !historyFilterDropdownRef.current.contains(e.target as Node)) {
+        setHistoryActiveFilterCol(null);
       }
       if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
         setContextMenu(prev => ({ ...prev, visible: false }));
@@ -533,7 +544,7 @@ const NonCollectionsView: React.FC<{
         setColetasPrevistas([]);
       }
 
-      console.log('[NonCollections] âœ… Dados carregados com sucesso');
+      console.log('[NonCollections] ? Dados carregados com sucesso');
     } catch (e: any) {
       console.error('[NonCollections] Erro ao carregar dados:', e.message);
     } finally {
@@ -610,6 +621,56 @@ const NonCollectionsView: React.FC<{
     return result;
   }, [nonCollections, colFilters, selectedFilters, isSortByDataEnabled]);
 
+  const getHistoryUniqueValues = (field: keyof NonCollection) => {
+    return Array.from(new Set(archivedResults.map(r => String(r[field] || '').trim())))
+      .filter(v => v)
+      .sort();
+  };
+
+  const toggleHistoryFilterValue = (field: keyof NonCollection, value: string) => {
+    const current = historySelectedFilters[field] || [];
+    const updated = current.includes(value)
+      ? current.filter(v => v !== value)
+      : [...current, value];
+    setHistorySelectedFilters({ ...historySelectedFilters, [field]: updated });
+  };
+
+  const clearHistoryFilters = () => {
+    setHistoryColFilters({});
+    setHistorySelectedFilters({});
+    setHistoryActiveFilterCol(null);
+  };
+
+  const hasHistoryActiveFilters = useMemo(() => {
+    const hasSelected = Object.keys(historySelectedFilters).some(col => (historySelectedFilters[col] || []).length > 0);
+    const hasTyped = Object.keys(historyColFilters).some(col => !!historyColFilters[col]);
+    return hasSelected || hasTyped;
+  }, [historySelectedFilters, historyColFilters]);
+
+  const filteredArchivedResults = useMemo(() => {
+    let result = [...archivedResults];
+
+    // Filtros de texto
+    result = result.filter(r => {
+      return (Object.entries(historyColFilters) as [string, string][]).every(([col, val]) => {
+        if (!val) return true;
+        const field = col as keyof NonCollection;
+        return String(r[field] || '').toLowerCase().includes(val.toLowerCase());
+      });
+    });
+
+    // Filtros selecionados
+    result = result.filter(r => {
+      return (Object.entries(historySelectedFilters) as [string, string[]][]).every(([col, vals]) => {
+        if (!vals || vals.length === 0) return true;
+        const field = col as keyof NonCollection;
+        return vals.includes(String(r[field] || ''));
+      });
+    });
+
+    return result;
+  }, [archivedResults, historyColFilters, historySelectedFilters]);
+
   // Dados detalhados de atendimento por operação
   const attendanceDetails = useMemo(() => {
     const myOps = userConfigs.map(c => c.operacao);
@@ -641,7 +702,7 @@ const NonCollectionsView: React.FC<{
         pctInterno,
         pctGeral
       };
-    }).sort((a, b) => b.pctInterno - a.pctInterno); // Ordena por atendimento interno (maior → menor)
+    }).sort((a, b) => b.pctInterno - a.pctInterno); // Ordena por atendimento interno (maior -> menor)
   }, [userConfigs, coletasPrevistas, nonCollections]);
 
   const handleAddNonCollection = async () => {
@@ -733,7 +794,7 @@ const NonCollectionsView: React.FC<{
       for (const operacao of operacoes) {
         try {
           await SharePointService.updateUltimoEnvioNaoColetas(token, operacao, '');
-          console.log(`[NC_ARCHIVE] ✅ UltimoEnvioNcoletas limpo para ${operacao}`);
+          console.log(`[NC_ARCHIVE] ?o. UltimoEnvioNcoletas limpo para ${operacao}`);
         } catch (e: any) {
           console.error(`[NC_ARCHIVE] Erro ao limpar UltimoEnvioNcoletas para ${operacao}:`, e.message);
         }
@@ -752,7 +813,7 @@ const NonCollectionsView: React.FC<{
   };
 
   // ============================================================
-  // BUSCAR NO HISTÓRICO
+  // BUSCAR NO HISTéRICO
   // ============================================================
 
   const handleSearchArchive = async () => {
@@ -790,6 +851,9 @@ const NonCollectionsView: React.FC<{
           : [];
 
         setArchivedResults(filtered);
+        setPendingHistoryEdits({});
+        setEditingHistoryId(null);
+        setEditingHistoryField(null);
       }
     } catch (err: any) {
       if (err.name === 'AbortError') {
@@ -808,8 +872,11 @@ const NonCollectionsView: React.FC<{
   // Auto-busca quando o modal de histórico abre
   useEffect(() => {
     if (isHistoryModalOpen && userConfigs.length > 0) {
-      // NÃO faz auto-busca — usuário precisa filtrar manualmente
+      // NÃO faz auto-busca - usuário precisa filtrar manualmente
       setArchivedResults([]);
+      setPendingHistoryEdits({});
+      setEditingHistoryId(null);
+      setEditingHistoryField(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isHistoryModalOpen]);
@@ -817,10 +884,10 @@ const NonCollectionsView: React.FC<{
   // Estado para tela cheia no histórico
   const [isHistoryFullscreen, setIsHistoryFullscreen] = useState(false);
 
-  // Função auxiliar para formatar data YYYY-MM-DD → DD/MM/YYYY
+  // Função auxiliar para formatar data YYYY-MM-DD -> DD/MM/YYYY
   const formatDisplayDate = (dateStr: string | undefined): string => {
     if (!dateStr || dateStr.trim() === '') return '-';
-    // Já está em formato DD/MM/YYYY
+    // Jé está em formato DD/MM/YYYY
     if (/^\d{2}\/\d{2}\/\d{4}$/.test(dateStr)) return dateStr;
     // Formato YYYY-MM-DD
     if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
@@ -836,6 +903,145 @@ const NonCollectionsView: React.FC<{
     return dateStr;
   };
 
+  // Converte data DD/MM/AAAA ou AAAA-MM-DD para ISO (AAAA-MM-DD)
+  const normalizeDateToISO = (dateStr: string | undefined): string => {
+    if (!dateStr || dateStr.trim() === '' || dateStr.trim() === '-') return '';
+    const raw = dateStr.trim();
+
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+      return raw;
+    }
+
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(raw)) {
+      const [d, m, y] = raw.split('/');
+      return `${y}-${m}-${d}`;
+    }
+
+    if (raw.includes('T')) {
+      return raw.split('T')[0];
+    }
+
+    return '';
+  };
+
+  const applyDateMask = (value: string): string => {
+    if (value === '-') return value;
+    let digits = value.replace(/\D/g, '').slice(0, 8);
+    if (digits.length > 4) return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+    if (digits.length > 2) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+    return digits;
+  };
+
+  const handleUpdateHistoryCell = (id: string, field: keyof NonCollection, value: string) => {
+    setPendingHistoryEdits(prev => {
+      const current = prev[id] || {};
+      const next: Partial<NonCollection> = { ...current, [field]: value };
+
+      // Se alterar a data, recalcula semana automaticamente
+      if (field === 'data') {
+        const isoDate = normalizeDateToISO(value);
+        if (isoDate) {
+          next.semana = getWeekString(isoDate);
+        }
+      }
+
+      return {
+        ...prev,
+        [id]: next
+      };
+    });
+  };
+
+  const savePendingHistoryEdits = async () => {
+    const editIds = Object.keys(pendingHistoryEdits);
+    if (editIds.length === 0) return;
+
+    setIsSavingHistoryEdits(true);
+    let successCount = 0;
+    let errorCount = 0;
+
+    try {
+      const token = await getAccessToken();
+      if (!token) {
+        alert('Token não encontrado para salvar o histórico.');
+        return;
+      }
+
+      for (const id of editIds) {
+        const edits = pendingHistoryEdits[id];
+        const current = archivedResults.find(r => r.id === id);
+        if (!current) continue;
+
+        const rowToSave: NonCollection = { ...current, ...edits };
+
+        // Garante semana coerente com a data informada
+        const dataISO = normalizeDateToISO(rowToSave.data);
+        if (dataISO) {
+          rowToSave.semana = getWeekString(dataISO);
+        }
+
+        try {
+          await SharePointService.updateArchivedNonCollection(token, rowToSave);
+          successCount++;
+        } catch (e) {
+          errorCount++;
+        }
+      }
+
+      // Atualiza UI local após persistência
+      setArchivedResults(prev => prev.map(r => {
+        const edits = pendingHistoryEdits[r.id];
+        if (!edits) return r;
+        const updated = { ...r, ...edits };
+        const dataISO = normalizeDateToISO(updated.data);
+        if (dataISO) {
+          updated.semana = getWeekString(dataISO);
+        }
+        return updated;
+      }));
+
+      setPendingHistoryEdits({});
+      setEditingHistoryId(null);
+      setEditingHistoryField(null);
+
+      if (errorCount > 0) {
+        alert(`Salvas ${successCount} edição(ões), com ${errorCount} erro(s).`);
+      }
+    } catch (e: any) {
+      alert(`Erro ao salvar alterações do histórico: ${e?.message || 'erro desconhecido'}`);
+    } finally {
+      setIsSavingHistoryEdits(false);
+    }
+  };
+
+  const closeHistoryModal = () => {
+    setIsHistoryModalOpen(false);
+    setIsHistoryFullscreen(false);
+    setArchivedResults([]);
+    setHistoryColFilters({});
+    setHistorySelectedFilters({});
+    setHistoryActiveFilterCol(null);
+    setPendingHistoryEdits({});
+    setEditingHistoryId(null);
+    setEditingHistoryField(null);
+  };
+
+  // Enter salva todas as alterações pendentes no histórico
+  useEffect(() => {
+    if (!isHistoryModalOpen) return;
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.altKey) return;
+      if (Object.keys(pendingHistoryEdits).length === 0 || isSavingHistoryEdits) return;
+
+      e.preventDefault();
+      savePendingHistoryEdits();
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isHistoryModalOpen, pendingHistoryEdits, isSavingHistoryEdits]);
+
   /**
    * Tenta separar Código e produtor de uma string colada.
    * Padrão esperado: Código alfanumérico no início seguido de texto (ex: "202520769MARCELO DINIZ COUTO" ou "P0274001RODRIGO ALVES PEREIRA")
@@ -847,7 +1053,7 @@ const NonCollectionsView: React.FC<{
     // Regex: captura caracteres alfanuméricos no início (Código) seguidos de texto (produtor)
     // O Código pode ter letras e números (ex: "P0274001", "202520769")
     // O produtor é todo o restante da string
-    // Ex: "P0274001RODRIGO ALVES PEREIRA (IN )" â†’ codigo: "P0274001", produtor: "RODRIGO ALVES PEREIRA (IN )"
+    // Ex: "P0274001RODRIGO ALVES PEREIRA (IN )" é.??T codigo: "P0274001", produtor: "RODRIGO ALVES PEREIRA (IN )"
     const match = trimmed.match(/^([A-Za-z0-9]+)(.+)$/);
     
     if (match) {
@@ -912,7 +1118,7 @@ const NonCollectionsView: React.FC<{
       // DISTRIBUI VALORES: PRIORIZA LINHAS VAZIAS
       // ============================================================
       const updatedRecords: NonCollection[] = [...nonCollections]; // Cópia completa
-      let lineIndex = 0; // Índice do valor being processed
+      let lineIndex = 0; // índice do valor being processed
 
       // Passo 1: Preenche primeiro nas linhas vazias
       for (let i = 0; i < emptyIndices.length && lineIndex < lines.length; i++) {
@@ -928,7 +1134,7 @@ const NonCollectionsView: React.FC<{
           if (parsed) {
             codigo = parsed.codigo;
             produtor = parsed.produtor;
-            console.log(`[BULK_PASTE] ✅ Linha vazia ${recordIndex}: Código/produtor separados:`, parsed);
+            console.log(`[BULK_PASTE] -o. Linha vazia ${recordIndex}: Código/produtor separados:`, parsed);
           }
         }
 
@@ -1015,7 +1221,7 @@ const NonCollectionsView: React.FC<{
       // ATUALIZA ESTADO E SALVA NO SHAREPOINT
       // ============================================================
       setNonCollections(updatedRecords);
-      console.log('[BULK_PASTE] ✅', lineIndex, 'valores distribuídos em linhas existentes/vazias,', remainingLines.length, 'novas linhas criadas');
+      console.log('[BULK_PASTE] -o.', lineIndex, 'valores distribuídos em linhas existentes/vazias,', remainingLines.length, 'novas linhas criadas');
 
       // Salva no SharePoint APENAS registros que já existem no SharePoint
       try {
@@ -1041,20 +1247,20 @@ const NonCollectionsView: React.FC<{
         const savePromises = recordsToSave.map(async (record) => {
           try {
             await SharePointService.updateNonCollection(token, record);
-            console.log('[BULK_PASTE] ✅ Salvo:', record.rota, '-', record.codigo);
+            console.log('[BULK_PASTE] -o. Salvo:', record.rota, '-', record.codigo);
           } catch (e: any) {
             console.error('[BULK_PASTE] Erro ao salvar registro:', record.rota, e.message);
           }
         });
         await Promise.all(savePromises);
-        console.log('[BULK_PASTE] ✅ Todos os registros salvos no SharePoint');
+        console.log('[BULK_PASTE] -o. Todos os registros salvos no SharePoint');
       } catch (e: any) {
         console.error('[BULK_PASTE] Erro ao salvar no SharePoint:', e.message);
       }
 
       // Busca coletas previstas se criou novas linhas
       if (remainingLines.length > 0 && nonCollections.length > 0) {
-        // Pega a data do último registro adicionado (todos têm a mesma data)
+        // Pega a data do último registro adicionado (todos tém a mesma data)
         const lastRecord = updatedRecords[updatedRecords.length - 1];
         if (lastRecord.data) {
           await fetchColetasPrevistas(lastRecord.data);
@@ -1108,6 +1314,20 @@ const NonCollectionsView: React.FC<{
     { key: 'ultimaColeta', label: 'ÚLTIMA COLETA' },
     { key: 'Culpabilidade', label: 'CULPABILIDADE' },
     { key: 'operacao', label: 'OPERAÇÃO' }
+  ];
+
+  const historyColumns: { key: keyof NonCollection; label: string }[] = [
+    { key: 'semana', label: 'Semana' },
+    { key: 'rota', label: 'Rota' },
+    { key: 'data', label: 'Data' },
+    { key: 'codigo', label: 'Código' },
+    { key: 'produtor', label: 'Produtor' },
+    { key: 'motivo', label: 'Motivo' },
+    { key: 'acao', label: 'Ação' },
+    { key: 'dataAcao', label: 'Data Ação' },
+    { key: 'ultimaColeta', label: 'Última Coleta' },
+    { key: 'Culpabilidade', label: 'Culpabilidade' },
+    { key: 'operacao', label: 'Operação' }
   ];
 
   if (isLoading) {
@@ -1507,7 +1727,7 @@ const NonCollectionsView: React.FC<{
                                 e.preventDefault();
                                 const updated = { ...row, codigo: parsed.codigo, produtor: parsed.produtor };
                                 setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
-                                console.log('[PASTE PRODUTOR] âœ… Código e produtor separados:', parsed);
+                                console.log('[PASTE PRODUTOR] ? Código e produtor separados:', parsed);
                                 return;
                               }
                               
@@ -1553,7 +1773,7 @@ const NonCollectionsView: React.FC<{
                                 e.preventDefault();
                                 const updated = { ...row, codigo: parsed.codigo, produtor: parsed.produtor };
                                 setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
-                                console.log('[PASTE CODIGO] âœ… Código e produtor separados:', parsed);
+                                console.log('[PASTE CODIGO] ? Código e produtor separados:', parsed);
                                 return;
                               }
                               
@@ -1789,7 +2009,7 @@ const NonCollectionsView: React.FC<{
                         // Se o usuário já preencheu dataAcao manualmente, respeita
                         if (row.dataAcao) return row.dataAcao;
 
-                        // Para "parou de fornecer", "produtor suspenso" e "alizarol positivo", coloca héfen
+                        // Para "parou de fornecer", "produtor suspenso" e "alizarol positivo", coloca hífen
                         const motivoLower = motivo.toLowerCase();
                         if (motivoLower === 'parou de fornecer' || motivoLower === 'produtor suspenso' || motivoLower === 'alizarol positivo') {
                           return '-';
@@ -2329,7 +2549,7 @@ const NonCollectionsView: React.FC<{
                         const motivo = (ghostRow.motivo || '').trim();
                         const dataNaoColeta = (ghostRow.data || '').trim();
 
-                        // Motivos que geram "Leite Descartado" ou "Aguardando autorização" ficam com héfen
+                        // Motivos que geram "Leite Descartado" ou "Aguardando autorização" ficam com hífen
                         const motivoLower = motivo.toLowerCase();
                         if (motivoLower === 'parou de fornecer' || motivoLower === 'produtor suspenso' || motivoLower === 'alizarol positivo') {
                           return '-';
@@ -2608,7 +2828,7 @@ const NonCollectionsView: React.FC<{
             <div className="mb-6 max-h-32 overflow-y-auto scrollbar-thin bg-slate-50 dark:bg-slate-800 rounded-xl p-3 border border-slate-200 dark:border-slate-700">
               {pendingBulkRoutes.slice(0, 10).map((rota, i) => (
                 <div key={i} className="text-[10px] font-bold text-slate-600 dark:text-slate-400 py-1 truncate">
-                  • {rota}
+                  . {rota}
                 </div>
               ))}
               {pendingBulkRoutes.length > 10 && (
@@ -2832,8 +3052,24 @@ const NonCollectionsView: React.FC<{
                     {archivedResults.length} registro(s)
                   </span>
                 )}
+                {Object.keys(pendingHistoryEdits).length > 0 && (
+                  <span className="text-[10px] font-black uppercase tracking-widest text-amber-500 bg-amber-100 dark:bg-amber-900/30 px-3 py-1 rounded-full border border-amber-300 dark:border-amber-700">
+                    {Object.keys(pendingHistoryEdits).length} alteração(ões) pendente(s)
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-2">
+                {Object.keys(pendingHistoryEdits).length > 0 && (
+                  <button
+                    onClick={savePendingHistoryEdits}
+                    disabled={isSavingHistoryEdits}
+                    className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black uppercase text-[10px] tracking-widest transition-all disabled:opacity-60"
+                    title="Salvar alterações (Enter)"
+                  >
+                    {isSavingHistoryEdits ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                    Salvar
+                  </button>
+                )}
                 <button
                   onClick={() => setIsHistoryFullscreen(!isHistoryFullscreen)}
                   className={`p-2 rounded-lg transition-all ${isDarkMode ? 'hover:bg-slate-700' : 'hover:bg-slate-200'}`}
@@ -2842,7 +3078,7 @@ const NonCollectionsView: React.FC<{
                   {isHistoryFullscreen ? <Minimize2 size={20} className={isDarkMode ? 'text-slate-400' : 'text-slate-600'} /> : <Maximize2 size={20} className={isDarkMode ? 'text-slate-400' : 'text-slate-600'} />}
                 </button>
                 <button
-                  onClick={() => { setIsHistoryModalOpen(false); setIsHistoryFullscreen(false); setArchivedResults([]); }}
+                  onClick={closeHistoryModal}
                   className={`p-2 rounded-full transition-all ${isDarkMode ? 'hover:bg-slate-700' : 'hover:bg-slate-200'}`}
                 >
                   <X size={24} className={isDarkMode ? 'text-slate-400' : 'text-slate-600'} />
@@ -2883,60 +3119,394 @@ const NonCollectionsView: React.FC<{
                   {isSearchingArchive ? <><Loader2 size={16} className="animate-spin" /> Buscando...</> : <><Search size={16} /> Buscar</>}
                 </button>
                 <span className={`text-[10px] font-bold ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>
-                  {archivedResults.length} resultado(s)
+                  {filteredArchivedResults.length} resultado(s)
                 </span>
+                {hasHistoryActiveFilters && (
+                  <span className={`text-[10px] font-bold px-2 py-1 rounded-full ${
+                    isDarkMode ? 'text-amber-300 bg-amber-900/30 border border-amber-700' : 'text-amber-700 bg-amber-100 border border-amber-300'
+                  }`}>
+                    FILTRADO ({filteredArchivedResults.length} de {archivedResults.length})
+                  </span>
+                )}
+                {hasHistoryActiveFilters && (
+                  <button
+                    onClick={clearHistoryFilters}
+                    className="px-3 py-2 rounded-lg bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-600 dark:text-red-300 text-[10px] font-black uppercase tracking-widest hover:bg-red-100 dark:hover:bg-red-900/50 transition-all"
+                  >
+                    Limpar Filtros
+                  </button>
+                )}
               </div>
             </div>
 
             {/* Tabela de Resultados */}
             <div className={`overflow-auto flex-1 ${isDarkMode ? 'bg-slate-950' : 'bg-slate-50'}`}>
-              {archivedResults.length === 0 && !isSearchingArchive ? (
+              {filteredArchivedResults.length === 0 && !isSearchingArchive ? (
                 <div className="flex items-center justify-center h-40">
                   <p className={`text-sm font-bold ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>
-                    Nenhum resultado encontrado. Ajuste o período e clique em Buscar.
+                    Nenhum resultado encontrado para o período/filtros selecionados.
                   </p>
                 </div>
               ) : (
                 <table className="w-full text-xs">
                   <thead className={`sticky top-0 z-10 ${isDarkMode ? 'bg-slate-900' : 'bg-slate-200'}`}>
                     <tr>
-                      <th className={`px-3 py-2 text-left font-black uppercase text-[9px] tracking-wider ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>Semana</th>
-                      <th className={`px-3 py-2 text-left font-black uppercase text-[9px] tracking-wider ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>Rota</th>
-                      <th className={`px-3 py-2 text-left font-black uppercase text-[9px] tracking-wider ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>Data</th>
-                      <th className={`px-3 py-2 text-left font-black uppercase text-[9px] tracking-wider ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>Código</th>
-                      <th className={`px-3 py-2 text-left font-black uppercase text-[9px] tracking-wider ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>Produtor</th>
-                      <th className={`px-3 py-2 text-left font-black uppercase text-[9px] tracking-wider ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>Motivo</th>
-                      <th className={`px-3 py-2 text-left font-black uppercase text-[9px] tracking-wider ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>Ação</th>
-                      <th className={`px-3 py-2 text-left font-black uppercase text-[9px] tracking-wider ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>Data Ação</th>
-                      <th className={`px-3 py-2 text-left font-black uppercase text-[9px] tracking-wider ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>Última Coleta</th>
-                      <th className={`px-3 py-2 text-left font-black uppercase text-[9px] tracking-wider ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>Culpabilidade</th>
-                      <th className={`px-3 py-2 text-left font-black uppercase text-[9px] tracking-wider ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>Operação</th>
+                      {historyColumns.map(({ key, label }) => {
+                        const hasColumnFilter = (historySelectedFilters[key] || []).length > 0 || !!historyColFilters[key];
+
+                        return (
+                          <th
+                            key={key}
+                            className={`relative px-3 py-2 text-left font-black uppercase text-[9px] tracking-wider ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}
+                          >
+                            <div className="flex items-center gap-2">
+                              <span>{label}</span>
+                              <button
+                                onClick={() => setHistoryActiveFilterCol(historyActiveFilterCol === key ? null : key)}
+                                className={`p-1 rounded transition-colors ${
+                                  hasColumnFilter
+                                    ? 'bg-blue-600 text-white'
+                                    : isDarkMode
+                                      ? 'hover:bg-slate-700 text-slate-400'
+                                      : 'hover:bg-slate-300 text-slate-500'
+                                }`}
+                                title={`Filtrar ${label}`}
+                              >
+                                <Filter size={12} />
+                              </button>
+                            </div>
+
+                            {historyActiveFilterCol === key && (
+                              <div
+                                ref={historyFilterDropdownRef}
+                                className={`absolute top-full left-0 mt-2 z-50 w-56 border rounded-xl shadow-2xl p-3 animate-in fade-in zoom-in-95 duration-150 ${
+                                  isDarkMode
+                                    ? 'bg-slate-800 border-slate-700'
+                                    : 'bg-white border-slate-200'
+                                }`}
+                              >
+                                <div
+                                  className={`flex items-center gap-2 mb-3 p-2 rounded-lg border ${
+                                    isDarkMode ? 'bg-slate-900 border-slate-700' : 'bg-slate-50 border-slate-200'
+                                  }`}
+                                >
+                                  <Search size={14} className="text-slate-400" />
+                                  <input
+                                    type="text"
+                                    placeholder="Filtrar..."
+                                    autoFocus
+                                    value={historyColFilters[key] || ''}
+                                    onChange={(e) => setHistoryColFilters({ ...historyColFilters, [key]: e.target.value })}
+                                    className={`w-full bg-transparent outline-none text-[10px] font-bold ${
+                                      isDarkMode ? 'text-white' : 'text-slate-800'
+                                    }`}
+                                  />
+                                </div>
+
+                                <div
+                                  className={`max-h-48 overflow-y-auto space-y-1 py-2 border-t ${
+                                    isDarkMode ? 'border-slate-700' : 'border-slate-100'
+                                  }`}
+                                >
+                                  {getHistoryUniqueValues(key).map((value) => (
+                                    <div
+                                      key={value}
+                                      onClick={() => toggleHistoryFilterValue(key, value)}
+                                      className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-all ${
+                                        isDarkMode ? 'hover:bg-slate-700' : 'hover:bg-slate-50'
+                                      }`}
+                                    >
+                                      {(historySelectedFilters[key] || []).includes(value) ? (
+                                        <CheckSquare size={14} className="text-blue-600" />
+                                      ) : (
+                                        <Square size={14} className="text-slate-300" />
+                                      )}
+                                      <span
+                                        className={`text-[10px] font-bold uppercase truncate ${
+                                          isDarkMode ? 'text-slate-300' : 'text-slate-700'
+                                        }`}
+                                      >
+                                        {value}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+
+                                <button
+                                  onClick={() => {
+                                    setHistoryColFilters({ ...historyColFilters, [key]: '' });
+                                    setHistorySelectedFilters({ ...historySelectedFilters, [key]: [] });
+                                    setHistoryActiveFilterCol(null);
+                                  }}
+                                  className="w-full mt-2 py-2 text-[10px] font-black uppercase text-red-600 bg-red-50 dark:bg-red-900/30 hover:bg-red-100 dark:hover:bg-red-900/50 rounded-lg border border-red-100 dark:border-red-900/50 transition-colors"
+                                >
+                                  Limpar Filtro
+                                </button>
+                              </div>
+                            )}
+                          </th>
+                        );
+                      })}
                     </tr>
                   </thead>
                   <tbody>
-                    {archivedResults.map((nc) => (
-                      <tr key={nc.id} className={`border-t ${isDarkMode ? 'border-slate-800 hover:bg-slate-900' : 'border-slate-200 hover:bg-slate-100'} transition-colors`}>
-                        <td className={`px-3 py-2 font-bold ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>{nc.semana}</td>
-                        <td className={`px-3 py-2 font-bold ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>{nc.rota}</td>
-                        <td className={`px-3 py-2 font-bold ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>{formatDisplayDate(nc.data)}</td>
-                        <td className={`px-3 py-2 font-bold ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>{nc.codigo}</td>
-                        <td className={`px-3 py-2 font-bold ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>{nc.produtor}</td>
-                        <td className={`px-3 py-2 font-bold max-w-[200px] truncate ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`} title={nc.motivo}>{nc.motivo}</td>
-                        <td className={`px-3 py-2 font-bold max-w-[150px] truncate ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`} title={nc.acao}>{nc.acao}</td>
-                        <td className={`px-3 py-2 font-bold ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>{formatDisplayDate(nc.dataAcao)}</td>
-                        <td className={`px-3 py-2 font-bold ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>{formatDisplayDate(nc.ultimaColeta)}</td>
-                        <td className="px-3 py-2">
-                          <span className={`inline-flex px-2 py-1 rounded-full text-[9px] font-black uppercase ${
-                            nc.Culpabilidade === 'VIA'
-                              ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'
-                              : nc.Culpabilidade === 'Cliente'
-                                ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'
-                                : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
-                          }`}>{nc.Culpabilidade || '-'}</span>
-                        </td>
-                        <td className={`px-3 py-2 font-bold ${isDarkMode ? 'text-blue-400' : 'text-blue-600'}`}>{nc.operacao}</td>
-                      </tr>
-                    ))}
+                    {filteredArchivedResults.map((nc) => {
+                      const pending = pendingHistoryEdits[nc.id] || {};
+                      const operacoes = Array.from(new Set([...userConfigs.map(c => c.operacao), nc.operacao].filter(Boolean)));
+                      return (
+                        <tr key={nc.id} className={`border-t ${isDarkMode ? 'border-slate-800 hover:bg-slate-900' : 'border-slate-200 hover:bg-slate-100'} transition-colors`}>
+                          <td className={`px-3 py-2 font-bold ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>
+                            {pending.semana || nc.semana}
+                          </td>
+
+                          <td className={`px-3 py-2 ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>
+                            {editingHistoryId === nc.id && editingHistoryField === 'rota' ? (
+                              <input
+                                type="text"
+                                value={pending.rota ?? nc.rota}
+                                onChange={(e) => handleUpdateHistoryCell(nc.id, 'rota', e.target.value)}
+                                onBlur={() => { setEditingHistoryId(null); setEditingHistoryField(null); }}
+                                className="w-full bg-blue-100 dark:bg-blue-900/30 border-2 border-blue-500 px-2 py-1 rounded font-bold outline-none"
+                                autoFocus
+                              />
+                            ) : (
+                              <div
+                                onClick={() => { setEditingHistoryId(nc.id); setEditingHistoryField('rota'); }}
+                                className={`font-bold cursor-pointer hover:bg-slate-200/60 dark:hover:bg-slate-700/60 rounded px-1 ${
+                                  pending.rota ? 'bg-amber-200 dark:bg-amber-800/50' : ''
+                                }`}
+                              >
+                                {pending.rota || nc.rota || '---'}
+                              </div>
+                            )}
+                          </td>
+
+                          <td className={`px-3 py-2 ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>
+                            {editingHistoryId === nc.id && editingHistoryField === 'data' ? (
+                              <input
+                                type="text"
+                                value={pending.data ?? formatDisplayDate(nc.data)}
+                                onChange={(e) => handleUpdateHistoryCell(nc.id, 'data', applyDateMask(e.target.value))}
+                                onBlur={() => { setEditingHistoryId(null); setEditingHistoryField(null); }}
+                                className="w-full bg-blue-100 dark:bg-blue-900/30 border-2 border-blue-500 px-2 py-1 rounded font-mono font-bold outline-none"
+                                autoFocus
+                              />
+                            ) : (
+                              <div
+                                onClick={() => { setEditingHistoryId(nc.id); setEditingHistoryField('data'); }}
+                                className={`font-bold cursor-pointer hover:bg-slate-200/60 dark:hover:bg-slate-700/60 rounded px-1 ${
+                                  pending.data ? 'bg-amber-200 dark:bg-amber-800/50' : ''
+                                }`}
+                              >
+                                {pending.data || formatDisplayDate(nc.data)}
+                              </div>
+                            )}
+                          </td>
+
+                          <td className={`px-3 py-2 ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>
+                            {editingHistoryId === nc.id && editingHistoryField === 'codigo' ? (
+                              <input
+                                type="text"
+                                value={pending.codigo ?? nc.codigo}
+                                onChange={(e) => handleUpdateHistoryCell(nc.id, 'codigo', e.target.value.toUpperCase())}
+                                onBlur={() => { setEditingHistoryId(null); setEditingHistoryField(null); }}
+                                className="w-full bg-blue-100 dark:bg-blue-900/30 border-2 border-blue-500 px-2 py-1 rounded font-bold outline-none uppercase"
+                                autoFocus
+                              />
+                            ) : (
+                              <div
+                                onClick={() => { setEditingHistoryId(nc.id); setEditingHistoryField('codigo'); }}
+                                className={`font-bold cursor-pointer hover:bg-slate-200/60 dark:hover:bg-slate-700/60 rounded px-1 ${
+                                  pending.codigo ? 'bg-amber-200 dark:bg-amber-800/50' : ''
+                                }`}
+                              >
+                                {pending.codigo || nc.codigo || '---'}
+                              </div>
+                            )}
+                          </td>
+
+                          <td className={`px-3 py-2 ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>
+                            {editingHistoryId === nc.id && editingHistoryField === 'produtor' ? (
+                              <input
+                                type="text"
+                                value={pending.produtor ?? nc.produtor}
+                                onChange={(e) => handleUpdateHistoryCell(nc.id, 'produtor', e.target.value)}
+                                onBlur={() => { setEditingHistoryId(null); setEditingHistoryField(null); }}
+                                className="w-full bg-blue-100 dark:bg-blue-900/30 border-2 border-blue-500 px-2 py-1 rounded font-bold outline-none"
+                                autoFocus
+                              />
+                            ) : (
+                              <div
+                                onClick={() => { setEditingHistoryId(nc.id); setEditingHistoryField('produtor'); }}
+                                className={`font-bold cursor-pointer hover:bg-slate-200/60 dark:hover:bg-slate-700/60 rounded px-1 ${
+                                  pending.produtor ? 'bg-amber-200 dark:bg-amber-800/50' : ''
+                                }`}
+                              >
+                                {pending.produtor || nc.produtor || '---'}
+                              </div>
+                            )}
+                          </td>
+
+                          <td className={`px-3 py-2 max-w-[260px] ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>
+                            {editingHistoryId === nc.id && editingHistoryField === 'motivo' ? (
+                              <select
+                                value={pending.motivo ?? nc.motivo}
+                                onChange={(e) => handleUpdateHistoryCell(nc.id, 'motivo', e.target.value)}
+                                onBlur={() => { setEditingHistoryId(null); setEditingHistoryField(null); }}
+                                className="w-full bg-blue-100 dark:bg-blue-900/30 border-2 border-blue-500 px-2 py-1 rounded font-bold outline-none"
+                                autoFocus
+                              >
+                                <option value="">---</option>
+                                {Object.keys(MOTIVOS_CulpabilidadeS).map(label => (
+                                  <option key={label} value={label}>{label}</option>
+                                ))}
+                              </select>
+                            ) : (
+                              <div
+                                onClick={() => { setEditingHistoryId(nc.id); setEditingHistoryField('motivo'); }}
+                                className={`font-bold cursor-pointer hover:bg-slate-200/60 dark:hover:bg-slate-700/60 rounded px-1 truncate ${
+                                  pending.motivo ? 'bg-amber-200 dark:bg-amber-800/50' : ''
+                                }`}
+                                title={pending.motivo || nc.motivo}
+                              >
+                                {pending.motivo || nc.motivo || '---'}
+                              </div>
+                            )}
+                          </td>
+
+                          <td className={`px-3 py-2 max-w-[260px] ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>
+                            {editingHistoryId === nc.id && editingHistoryField === 'acao' ? (
+                              <textarea
+                                value={pending.acao ?? nc.acao}
+                                onChange={(e) => handleUpdateHistoryCell(nc.id, 'acao', e.target.value)}
+                                onBlur={() => { setEditingHistoryId(null); setEditingHistoryField(null); }}
+                                rows={2}
+                                className="w-full bg-blue-100 dark:bg-blue-900/30 border-2 border-blue-500 px-2 py-1 rounded font-bold outline-none resize-none"
+                                autoFocus
+                              />
+                            ) : (
+                              <div
+                                onClick={() => { setEditingHistoryId(nc.id); setEditingHistoryField('acao'); }}
+                                className={`font-bold cursor-pointer hover:bg-slate-200/60 dark:hover:bg-slate-700/60 rounded px-1 truncate ${
+                                  pending.acao ? 'bg-amber-200 dark:bg-amber-800/50' : ''
+                                }`}
+                                title={pending.acao || nc.acao}
+                              >
+                                {pending.acao || nc.acao || '---'}
+                              </div>
+                            )}
+                          </td>
+
+                          <td className={`px-3 py-2 ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>
+                            {editingHistoryId === nc.id && editingHistoryField === 'dataAcao' ? (
+                              <input
+                                type="text"
+                                value={pending.dataAcao ?? formatDisplayDate(nc.dataAcao)}
+                                onChange={(e) => handleUpdateHistoryCell(nc.id, 'dataAcao', applyDateMask(e.target.value))}
+                                onBlur={() => { setEditingHistoryId(null); setEditingHistoryField(null); }}
+                                className="w-full bg-blue-100 dark:bg-blue-900/30 border-2 border-blue-500 px-2 py-1 rounded font-mono font-bold outline-none"
+                                autoFocus
+                              />
+                            ) : (
+                              <div
+                                onClick={() => { setEditingHistoryId(nc.id); setEditingHistoryField('dataAcao'); }}
+                                className={`font-bold cursor-pointer hover:bg-slate-200/60 dark:hover:bg-slate-700/60 rounded px-1 ${
+                                  pending.dataAcao ? 'bg-amber-200 dark:bg-amber-800/50' : ''
+                                }`}
+                              >
+                                {pending.dataAcao || formatDisplayDate(nc.dataAcao)}
+                              </div>
+                            )}
+                          </td>
+
+                          <td className={`px-3 py-2 ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>
+                            {editingHistoryId === nc.id && editingHistoryField === 'ultimaColeta' ? (
+                              <input
+                                type="text"
+                                value={pending.ultimaColeta ?? formatDisplayDate(nc.ultimaColeta)}
+                                onChange={(e) => {
+                                  const raw = e.target.value;
+                                  handleUpdateHistoryCell(
+                                    nc.id,
+                                    'ultimaColeta',
+                                    raw === '-' ? raw : applyDateMask(raw)
+                                  );
+                                }}
+                                onBlur={() => { setEditingHistoryId(null); setEditingHistoryField(null); }}
+                                className="w-full bg-blue-100 dark:bg-blue-900/30 border-2 border-blue-500 px-2 py-1 rounded font-mono font-bold outline-none"
+                                autoFocus
+                              />
+                            ) : (
+                              <div
+                                onClick={() => { setEditingHistoryId(nc.id); setEditingHistoryField('ultimaColeta'); }}
+                                className={`font-bold cursor-pointer hover:bg-slate-200/60 dark:hover:bg-slate-700/60 rounded px-1 ${
+                                  pending.ultimaColeta ? 'bg-amber-200 dark:bg-amber-800/50' : ''
+                                }`}
+                              >
+                                {pending.ultimaColeta || formatDisplayDate(nc.ultimaColeta)}
+                              </div>
+                            )}
+                          </td>
+
+                          <td className="px-3 py-2">
+                            {editingHistoryId === nc.id && editingHistoryField === 'Culpabilidade' ? (
+                              <select
+                                value={pending.Culpabilidade ?? nc.Culpabilidade}
+                                onChange={(e) => handleUpdateHistoryCell(nc.id, 'Culpabilidade', e.target.value)}
+                                onBlur={() => { setEditingHistoryId(null); setEditingHistoryField(null); }}
+                                className="w-full bg-blue-100 dark:bg-blue-900/30 border-2 border-blue-500 px-2 py-1 rounded font-bold outline-none"
+                                autoFocus
+                              >
+                                <option value="">---</option>
+                                {Culpabilidade_OPCOES.map(culp => (
+                                  <option key={culp} value={culp}>{culp}</option>
+                                ))}
+                              </select>
+                            ) : (
+                              <div
+                                onClick={() => { setEditingHistoryId(nc.id); setEditingHistoryField('Culpabilidade'); }}
+                                className={`inline-flex px-2 py-1 rounded-full text-[9px] font-black uppercase cursor-pointer ${
+                                  (pending.Culpabilidade || nc.Culpabilidade) === 'VIA'
+                                    ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'
+                                    : (pending.Culpabilidade || nc.Culpabilidade) === 'Cliente'
+                                      ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'
+                                      : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
+                                }`}
+                                title="Clique para editar"
+                              >
+                                {pending.Culpabilidade || nc.Culpabilidade || '-'}
+                              </div>
+                            )}
+                          </td>
+
+                          <td className={`px-3 py-2 ${isDarkMode ? 'text-blue-400' : 'text-blue-600'}`}>
+                            {editingHistoryId === nc.id && editingHistoryField === 'operacao' ? (
+                              <select
+                                value={pending.operacao ?? nc.operacao}
+                                onChange={(e) => handleUpdateHistoryCell(nc.id, 'operacao', e.target.value)}
+                                onBlur={() => { setEditingHistoryId(null); setEditingHistoryField(null); }}
+                                className="w-full bg-blue-100 dark:bg-blue-900/30 border-2 border-blue-500 px-2 py-1 rounded font-bold outline-none"
+                                autoFocus
+                              >
+                                <option value="">---</option>
+                                {operacoes.map(op => (
+                                  <option key={op} value={op}>{op}</option>
+                                ))}
+                              </select>
+                            ) : (
+                              <div
+                                onClick={() => { setEditingHistoryId(nc.id); setEditingHistoryField('operacao'); }}
+                                className={`font-bold cursor-pointer hover:bg-slate-200/60 dark:hover:bg-slate-700/60 rounded px-1 ${
+                                  pending.operacao ? 'bg-amber-200 dark:bg-amber-800/50' : ''
+                                }`}
+                              >
+                                {pending.operacao || nc.operacao || '---'}
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               )}
@@ -2945,7 +3515,7 @@ const NonCollectionsView: React.FC<{
             {/* Footer */}
             <div className={`p-4 border-t shrink-0 flex justify-end ${isDarkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'}`}>
               <button
-                onClick={() => { setIsHistoryModalOpen(false); setIsHistoryFullscreen(false); setArchivedResults([]); }}
+                onClick={closeHistoryModal}
                 className={`px-6 py-3 rounded-xl font-black uppercase text-[10px] tracking-widest transition-all ${
                   isDarkMode
                     ? 'bg-slate-800 text-slate-300 hover:bg-slate-700'
@@ -2963,3 +3533,4 @@ const NonCollectionsView: React.FC<{
 };
 
 export default NonCollectionsView;
+
