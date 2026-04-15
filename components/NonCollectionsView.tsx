@@ -493,7 +493,7 @@ const NonCollectionsView: React.FC<{
     }
   };
 
-  const loadData = async () => {
+  const loadData = async (forceRefresh = false) => {
     try {
       const token = await getValidToken() || currentUser.accessToken;
       if (!token) {
@@ -504,7 +504,7 @@ const NonCollectionsView: React.FC<{
       console.log('[NonCollections] Carregando dados...', currentUser.email);
 
       // Carrega configurações do usuário
-      const configs = await SharePointService.getRouteConfigs(token, currentUser.email, true);
+      const configs = await SharePointService.getRouteConfigs(token, currentUser.email, forceRefresh);
       setUserConfigs(configs || []);
       console.log('[NonCollections] operações do usuário:', configs?.map(c => c.operacao));
 
@@ -727,7 +727,19 @@ const NonCollectionsView: React.FC<{
       const archiveResult = await SharePointService.moveNonCollectionsToHistory(token, validNonCollections);
       console.log(`[NC_ARCHIVE] Sucesso: ${archiveResult.success}, Falhas: ${archiveResult.failed}`);
 
-      // Recarregar dados com force refresh
+      // Limpa o campo UltimoEnvioNcoletas de cada operação do usuário
+      console.log('[NC_ARCHIVE] Limpando UltimoEnvioNcoletas das operações do usuário...');
+      const operacoes = userConfigs.map(c => c.operacao);
+      for (const operacao of operacoes) {
+        try {
+          await SharePointService.updateUltimoEnvioNaoColetas(token, operacao, '');
+          console.log(`[NC_ARCHIVE] ✅ UltimoEnvioNcoletas limpo para ${operacao}`);
+        } catch (e: any) {
+          console.error(`[NC_ARCHIVE] Erro ao limpar UltimoEnvioNcoletas para ${operacao}:`, e.message);
+        }
+      }
+
+      // Recarregar dados com force refresh para pegar configs atualizadas
       await loadData(true);
 
       alert(`${archiveResult.success} não coleta(s) arquivada(s) com sucesso!`);
