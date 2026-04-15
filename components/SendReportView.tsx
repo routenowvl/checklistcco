@@ -48,9 +48,9 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
   const [coletasPrevistas, setColetasPrevistas] = useState<ColetaPrevista[]>([]);
 
   const WEBHOOK_URL = import.meta.env.VITE_WEBHOOK_SAIDAS_URL || "https://n8n.datastack.viagroup.com.br/webhook/8cb1f3e1-833d-42a7-a3f0-2f959ea390d6";
-  const WEBHOOK_URL_NAO_COLETAS = "https://n8n.datastack.viagroup.com.br/webhook-test/d712d06e-b81f-40f4-9ca8-5b2403a90fdd";
+  const WEBHOOK_URL_NAO_COLETAS = "https://n8n.datastack.viagroup.com.br/webhook/d712d06e-b81f-40f4-9ca8-5b2403a90fdd";
   const WEBHOOK_URL_RESUMO = import.meta.env.VITE_WEBHOOK_RESUMO_URL || "https://n8n.datastack.viagroup.com.br/webhook/8cb1f3e1-833d-42a7-a3f0-2f959ea390d6";
-  const WEBHOOK_URL_NC_RESUMO = "https://n8n.datastack.viagroup.com.br/webhook-test/20541afc-08c7-4799-b3e9-26dd3afdbb5a";
+  const WEBHOOK_URL_NC_RESUMO = "https://n8n.datastack.viagroup.com.br/webhook/20541afc-08c7-4799-b3e9-26dd3afdbb5a";
 
   // Estado para não coletas reais do SharePoint (usado na coluna da direita)
   const [realNonCollections, setRealNonCollections] = useState<any[]>([]);
