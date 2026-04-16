@@ -30,6 +30,17 @@ const OBSERVATION_TEMPLATES: Record<string, string[]> = {
   'Infraestrutura': []
 };
 
+type ArchiveDivergentRoute = {
+  route: RouteDeparture;
+  missingFields: string[];
+};
+
+type ArchiveHardBlockType = 'resumo' | 'status';
+type ArchiveStatusDivergence = {
+  operacao: string;
+  status: string;
+};
+
 const FilterDropdown = ({ col, routes, colFilters, setColFilters, selectedFilters, setSelectedFilters, onClose, dropdownRef }: any) => {
     // Mapeia o nome da coluna para o campo real no objeto RouteDeparture
     const fieldMap: Record<string, string> = {
@@ -393,6 +404,11 @@ const RouteDepartureView: React.FC<{
   // Estado para modal de aviso quando tentar adicionar rota com filtros/ordenação ativos
   const [isFilterBlockModalOpen, setIsFilterBlockModalOpen] = useState(false);
   const [filterBlockReason, setFilterBlockReason] = useState<'single' | 'bulk' | 'ghost'>('ghost');
+  const [isArchiveValidationModalOpen, setIsArchiveValidationModalOpen] = useState(false);
+  const [archiveReadyRoutes, setArchiveReadyRoutes] = useState<RouteDeparture[]>([]);
+  const [archiveDivergentRoutes, setArchiveDivergentRoutes] = useState<ArchiveDivergentRoute[]>([]);
+  const [archiveHardBlockModal, setArchiveHardBlockModal] = useState<ArchiveHardBlockType | null>(null);
+  const [archiveStatusDivergences, setArchiveStatusDivergences] = useState<ArchiveStatusDivergence[]>([]);
   
   // Estados para filtros do histórico
   const [historyColFilters, setHistoryColFilters] = useState<Record<string, string[]>>({});
@@ -1820,11 +1836,169 @@ const RouteDepartureView: React.FC<{
     alert(`${success} rotas excluídas.`);
   };
 
+  const isDelayedOrAdvancedStatus = (status: string): boolean => {
+    const normalized = (status || '').trim();
+    return normalized === 'Atrasada' || normalized === 'Adiantada' || normalized === 'Atrasado' || normalized === 'Adiantado';
+  };
+
+  const getArchiveMissingFields = (route: RouteDeparture): string[] => {
+    const missing: string[] = [];
+    const saida = (route.saida || '').trim();
+    const motivo = (route.motivo || '').trim();
+    const observacao = (route.observacao || '').trim();
+    const geral = (route.statusGeral || '').trim().toUpperCase();
+
+    if (geral !== 'OK') {
+      missing.push('GERAL');
+    }
+
+    if (!saida) {
+      missing.push('SAÍDA');
+    }
+
+    if (isDelayedOrAdvancedStatus(route.statusOp || '')) {
+      if (!motivo) {
+        missing.push('MOTIVO');
+      }
+      if (!observacao) {
+        missing.push('OBSERVAÇÃO');
+      }
+    }
+
+    return missing;
+  };
+
+  const addOneDayToRouteDate = (dateValue: string): string => {
+    const trimmed = (dateValue || '').trim();
+    if (!trimmed) return getBrazilDate();
+
+    let dateObj: Date | null = null;
+    const isoMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    const brMatch = trimmed.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+
+    if (isoMatch) {
+      const [, y, m, d] = isoMatch;
+      dateObj = new Date(Number(y), Number(m) - 1, Number(d));
+    } else if (brMatch) {
+      const [, d, m, y] = brMatch;
+      dateObj = new Date(Number(y), Number(m) - 1, Number(d));
+    } else {
+      const tentative = new Date(trimmed);
+      if (!Number.isNaN(tentative.getTime())) {
+        dateObj = tentative;
+      }
+    }
+
+    if (!dateObj) return trimmed;
+
+    dateObj.setDate(dateObj.getDate() + 1);
+    const yyyy = dateObj.getFullYear();
+    const mm = String(dateObj.getMonth() + 1).padStart(2, '0');
+    const dd = String(dateObj.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  };
+
+  const executeArchiveWithDivergences = async (routesToArchive: RouteDeparture[], routesToPostpone: ArchiveDivergentRoute[]) => {
+    const token = await getAccessToken();
+    setIsSyncing(true);
+
+    // Desmarca a opção HORÁRIO após arquivar
+    setIsSortByTimeEnabled(false);
+    setIsSortByOperacao(false);
+
+    try {
+      let archiveSuccess = 0;
+      let archiveFailed = 0;
+      let clearCount = 0;
+
+      if (routesToArchive.length > 0) {
+        console.log(`[ARCHIVE] Movendo ${routesToArchive.length} itens para o histórico...`);
+        const archiveResult = await SharePointService.moveDeparturesToHistory(token, routesToArchive);
+        archiveSuccess = archiveResult.success;
+        archiveFailed = archiveResult.failed;
+        console.log(`[ARCHIVE] Sucesso: ${archiveSuccess}, Falhas: ${archiveFailed}`);
+
+        // Limpa status de envio apenas das operações arquivadas
+        console.log('[ARCHIVE] Limpando status de envio nas configurações das operações arquivadas...');
+        const opsToClear = Array.from(new Set(routesToArchive.map(r => r.operacao).filter(Boolean)));
+        for (const operacao of opsToClear) {
+          try {
+            await SharePointService.updateUltimoEnvioSaida(token, operacao, '');
+            await SharePointService.updateStatusOperacao(token, operacao, '');
+            await SharePointService.updateUltimoEnvioResumoSaida(token, operacao, '');
+            await SharePointService.updateStatusResumoSaida(token, operacao, '');
+            clearCount++;
+            console.log(`[ARCHIVE] ✅ Status limpo para ${operacao}`);
+          } catch (e: any) {
+            console.error(`[ARCHIVE] Erro ao limpar status de ${operacao}:`, e.message);
+          }
+        }
+      }
+
+      // Rotas divergentes: mantêm no painel e data vai para o próximo dia
+      let postponedSuccess = 0;
+      for (const divergence of routesToPostpone) {
+        try {
+          const nextDate = addOneDayToRouteDate(divergence.route.data || '');
+          const cfg = userConfigs.find(c => c.operacao === divergence.route.operacao);
+          const statusCalc = calculateStatusWithTolerance(
+            divergence.route.inicio || '',
+            divergence.route.saida || '',
+            cfg?.tolerancia || '00:00:00',
+            nextDate
+          );
+
+          const updatedRoute: RouteDeparture = {
+            ...divergence.route,
+            data: nextDate,
+            semana: getWeekString(nextDate),
+            statusOp: statusCalc.status,
+            tempo: statusCalc.gap
+          };
+
+          await SharePointService.updateDeparture(token, updatedRoute);
+          postponedSuccess++;
+        } catch (e: any) {
+          console.error(`[ARCHIVE] Erro ao postergar rota ${divergence.route.rota}:`, e.message);
+        }
+      }
+
+      // Recarrega dados e configs
+      await loadData(true);
+      try {
+        const refreshedConfigs = await SharePointService.getRouteConfigs(token, currentUser.email, true);
+        setUserConfigs(refreshedConfigs);
+      } catch (e: any) {
+        console.error('[ARCHIVE] Erro ao atualizar configs:', e.message);
+      }
+
+      if (routesToArchive.length > 0 && routesToPostpone.length > 0) {
+        alert(
+          `${archiveSuccess} rota(s) arquivada(s) com sucesso (falhas: ${archiveFailed}).\n` +
+          `${postponedSuccess} rota(s) incompleta(s) foram mantidas no painel e ajustadas para o próximo dia.\n` +
+          `Status de envio limpo para ${clearCount} operação(ões).`
+        );
+      } else if (routesToArchive.length > 0) {
+        alert(`${archiveSuccess} rota(s) arquivada(s) com sucesso!\nStatus de envio limpo para ${clearCount} operação(ões).`);
+      } else {
+        alert(`${postponedSuccess} rota(s) incompleta(s) foram mantidas no painel e ajustadas para o próximo dia.`);
+      }
+    } catch (e: any) {
+      console.error('[ARCHIVE] Erro geral:', e.message);
+      alert(`Erro ao arquivar: ${e.message}`);
+    } finally {
+      setIsSyncing(false);
+      setArchiveReadyRoutes([]);
+      setArchiveDivergentRoutes([]);
+      setIsArchiveValidationModalOpen(false);
+    }
+  };
+
   const handleArchiveAll = async () => {
     // VALIDAÇÃO CRÍTICA: Filtra apenas rotas que pertencem às operações do usuário logado
     const myOps = new Set(userConfigs.map(c => c.operacao));
     const validFilteredRoutes = filteredRoutes.filter(r => !r.operacao || myOps.has(r.operacao));
-    
+
     if (validFilteredRoutes.length === 0) {
       alert("Não há rotas das suas operações para arquivar.");
       return;
@@ -1833,7 +2007,7 @@ const RouteDepartureView: React.FC<{
     // Verifica se há alguma rota de operação não pertencente
     const blockedCount = filteredRoutes.length - validFilteredRoutes.length;
     if (blockedCount > 0) {
-        console.warn(`[ARCHIVE] ${blockedCount} rotas de outras operações serão ignoradas`);
+      console.warn(`[ARCHIVE] ${blockedCount} rotas de outras operações serão ignoradas`);
     }
 
     // Verifica se há alguma rota com status "Previsto"
@@ -1848,62 +2022,60 @@ const RouteDepartureView: React.FC<{
       return;
     }
 
-    if (!confirm(`Arquivar ${validFilteredRoutes.length} itens no histórico e limpar status de envio?`)) return;
+    const divergentRoutes: ArchiveDivergentRoute[] = [];
+    const readyToArchive: RouteDeparture[] = [];
 
-    const token = await getAccessToken();
-    setIsSyncing(true);
-
-    // Desmarca a opção HORÁRIO após arquivar
-    setIsSortByTimeEnabled(false);
-    setIsSortByOperacao(false);
-
-    try {
-      // Passo 1: Mover rotas para o histórico
-      console.log(`[ARCHIVE] Movendo ${validFilteredRoutes.length} itens para o histórico...`);
-      const archiveResult = await SharePointService.moveDeparturesToHistory(token, validFilteredRoutes as RouteDeparture[]);
-      console.log(`[ARCHIVE] Sucesso: ${archiveResult.success}, Falhas: ${archiveResult.failed}`);
-
-      // Passo 2: Limpar status de envio (OK, ATUALIZAR) na lista CONFIG_OPERACAO_SAIDA_DE_ROTAS
-      console.log('[ARCHIVE] Limpando status de envio nas configurações...');
-      const opsToClear = Array.from(new Set(validFilteredRoutes.map(r => r.operacao)));
-      let clearCount = 0;
-
-      for (const operacao of opsToClear) {
-        try {
-          // Limpa UltimoEnvioSaida
-          await SharePointService.updateUltimoEnvioSaida(token, operacao, '');
-          // Limpa Status
-          await SharePointService.updateStatusOperacao(token, operacao, '');
-          // Limpa UltimoEnvioResumoSaida
-          await SharePointService.updateUltimoEnvioResumoSaida(token, operacao, '');
-          // Limpa StatusResumoSaida
-          await SharePointService.updateStatusResumoSaida(token, operacao, '');
-          clearCount++;
-          console.log(`[ARCHIVE] ✅ Status limpo para ${operacao}`);
-        } catch (e: any) {
-          console.error(`[ARCHIVE] Erro ao limpar status de ${operacao}:`, e.message);
-        }
+    validFilteredRoutes.forEach(route => {
+      const missingFields = getArchiveMissingFields(route);
+      if (missingFields.length > 0) {
+        divergentRoutes.push({ route, missingFields });
+      } else {
+        readyToArchive.push(route);
       }
+    });
 
-      // Passo 3: Recarregar dados com force refresh
-      await loadData(true);
-
-      // Passo 4: Forçar refresh extra nas configs para garantir que o status "Previsto" apareça
-      try {
-        const refreshedConfigs = await SharePointService.getRouteConfigs(token, currentUser.email, true);
-        setUserConfigs(refreshedConfigs);
-        console.log('[ARCHIVE] ✅Configs atualizadas após arquivamento');
-      } catch (e: any) {
-        console.error('[ARCHIVE] Erro ao atualizar configs:', e.message);
-      }
-
-      alert(`${archiveResult.success} rotas arquivadas com sucesso!\nStatus de envio limpo para ${clearCount} operações.`);
-    } catch (e: any) {
-      console.error('[ARCHIVE] Erro geral:', e.message);
-      alert(`Erro ao arquivar: ${e.message}`);
-    } finally {
-      setIsSyncing(false);
+    if (divergentRoutes.length > 0) {
+      setArchiveReadyRoutes(readyToArchive);
+      setArchiveDivergentRoutes(divergentRoutes);
+      setIsArchiveValidationModalOpen(true);
+      return;
     }
+
+    // Se todas as rotas estão completas, valida se o resumo de saídas geral está OK
+    const configsComResumo = userConfigs.filter(c => !!c.UltimoEnvioResumoSaida && !!c.StatusResumoSaida);
+    const statusResumoGlobal = (() => {
+      if (configsComResumo.length === 0) return '';
+      const maisRecente = [...configsComResumo].sort((a, b) => {
+        const dateA = new Date(a.UltimoEnvioResumoSaida || '').getTime();
+        const dateB = new Date(b.UltimoEnvioResumoSaida || '').getTime();
+        return dateB - dateA;
+      })[0];
+      return (maisRecente?.StatusResumoSaida || '').trim();
+    })();
+
+    if (statusResumoGlobal.toUpperCase() !== 'OK') {
+      setArchiveHardBlockModal('resumo');
+      setArchiveStatusDivergences([]);
+      return;
+    }
+
+    // Valida status individual das operações (coluna Status da CONFIG_OPERACAO_SAIDA_DE_ROTAS)
+    const opsInArchive = Array.from(new Set(readyToArchive.map(r => (r.operacao || '').trim()).filter(Boolean)));
+    const statusDivergences: ArchiveStatusDivergence[] = opsInArchive
+      .map(op => {
+        const cfg = userConfigs.find(c => c.operacao === op);
+        const rawStatus = (cfg?.Status || '').trim();
+        return { operacao: op, status: rawStatus || 'Previsto' };
+      })
+      .filter(item => item.status.toUpperCase() !== 'OK');
+
+    if (statusDivergences.length > 0) {
+      setArchiveStatusDivergences(statusDivergences);
+      setArchiveHardBlockModal('status');
+      return;
+    }
+
+    await executeArchiveWithDivergences(readyToArchive, []);
   };
 
   const handleAddRoute = async () => {
@@ -4761,6 +4933,143 @@ const RouteDepartureView: React.FC<{
                   </div>
               </div>
           </div>
+      )}
+
+      {/* Modal de Bloqueio (Resumo/Status) */}
+      {archiveHardBlockModal && (
+        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-[455] flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white dark:bg-slate-900 rounded-[2.2rem] w-full max-w-2xl border border-red-300 dark:border-red-800 shadow-2xl overflow-hidden">
+            <div className="bg-red-500/10 dark:bg-red-900/30 border-b border-red-200 dark:border-red-800 px-6 py-5">
+              <div className="flex items-center gap-3">
+                <AlertTriangle className="text-red-600 dark:text-red-400" size={24} />
+                <div>
+                  <h3 className="text-base font-black uppercase tracking-widest text-red-700 dark:text-red-300">
+                    {archiveHardBlockModal === 'resumo' ? 'Resumo de Saídas Pendente' : 'Status Individual Pendente'}
+                  </h3>
+                  <p className="text-[11px] font-bold text-red-700/80 dark:text-red-300/80 mt-1">
+                    {archiveHardBlockModal === 'resumo'
+                      ? 'Não é possível arquivar enquanto o resumo de saídas não estiver como OK.'
+                      : 'Não é possível arquivar enquanto houver operação com Status individual diferente de OK.'}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="px-6 py-5">
+              {archiveHardBlockModal === 'status' && (
+                <div className="mb-4">
+                  <p className="text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-2">
+                    Operações com divergência no campo Status:
+                  </p>
+                  <div className="space-y-2 max-h-[220px] overflow-y-auto scrollbar-thin">
+                    {archiveStatusDivergences.map((item, idx) => (
+                      <div
+                        key={`${item.operacao}-${idx}`}
+                        className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50"
+                      >
+                        <p className="text-[11px] font-black uppercase text-slate-700 dark:text-slate-200">
+                          {item.operacao}
+                        </p>
+                        <p className="text-[10px] font-bold uppercase text-red-600 dark:text-red-400 mt-1">
+                          Status: {item.status}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="p-3 rounded-xl border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20">
+                <p className="text-[10px] font-black uppercase text-blue-700 dark:text-blue-300 leading-relaxed">
+                  Coloque "-" nas saídas que não serão realizadas no dia, envie novamente o resumo e o status, e depois tente arquivar de novo.
+                </p>
+              </div>
+            </div>
+
+            <div className="px-6 pb-6 pt-2">
+              <button
+                onClick={() => {
+                  setArchiveHardBlockModal(null);
+                  setArchiveStatusDivergences([]);
+                }}
+                className="w-full py-3 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-black uppercase text-[10px] tracking-wider hover:bg-slate-200 dark:hover:bg-slate-700 transition-all"
+              >
+                Entendi
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Validação para Arquivamento Parcial */}
+      {isArchiveValidationModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-[450] flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white dark:bg-slate-900 rounded-[2.2rem] w-full max-w-3xl border border-amber-300 dark:border-amber-800 shadow-2xl overflow-hidden">
+            <div className="bg-amber-500/10 dark:bg-amber-900/30 border-b border-amber-200 dark:border-amber-800 px-6 py-5">
+              <div className="flex items-center gap-3">
+                <AlertTriangle className="text-amber-600 dark:text-amber-400" size={24} />
+                <div>
+                  <h3 className="text-base font-black uppercase tracking-widest text-amber-700 dark:text-amber-300">
+                    Rotas Incompletas para Arquivamento
+                  </h3>
+                  <p className="text-[11px] font-bold text-amber-700/80 dark:text-amber-300/80 mt-1">
+                    Você pode arquivar as demais rotas. As incompletas ficarão no painel com data ajustada para o próximo dia.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="px-6 py-5 max-h-[50vh] overflow-y-auto scrollbar-thin">
+              <div className="mb-4 text-[11px] font-bold text-slate-600 dark:text-slate-300">
+                {archiveDivergentRoutes.length} rota(s) com divergência encontrada(s):
+              </div>
+              <div className="space-y-2">
+                {archiveDivergentRoutes.map((item, idx) => (
+                  <div
+                    key={`${item.route.id}-${idx}`}
+                    className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50"
+                  >
+                    <div className="text-[11px] font-black uppercase text-slate-700 dark:text-slate-200">
+                      {item.route.rota || '(ROTA SEM NOME)'} {item.route.operacao ? `- ${item.route.operacao}` : ''}
+                    </div>
+                    <div className="mt-1 text-[10px] font-bold text-red-600 dark:text-red-400 uppercase">
+                      Faltando: {item.missingFields.join(', ')}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-5 p-3 rounded-xl border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20">
+                <p className="text-[10px] font-black uppercase text-blue-700 dark:text-blue-300">
+                  Prontas para arquivar agora: {archiveReadyRoutes.length}
+                </p>
+              </div>
+            </div>
+
+            <div className="px-6 pb-6 pt-2 flex items-center gap-3">
+              <button
+                onClick={() => {
+                  setIsArchiveValidationModalOpen(false);
+                  setArchiveReadyRoutes([]);
+                  setArchiveDivergentRoutes([]);
+                }}
+                disabled={isSyncing}
+                className="flex-1 py-3 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-black uppercase text-[10px] tracking-wider hover:bg-slate-200 dark:hover:bg-slate-700 transition-all disabled:opacity-60"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={async () => {
+                  await executeArchiveWithDivergences(archiveReadyRoutes, archiveDivergentRoutes);
+                }}
+                disabled={isSyncing}
+                className="flex-1 py-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-black uppercase text-[10px] tracking-wider transition-all disabled:opacity-60 flex items-center justify-center gap-2"
+              >
+                {isSyncing ? <Loader2 size={16} className="animate-spin" /> : <Archive size={16} />}
+                Estou ciente, arquivar mesmo assim
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Modal de Edição de Horários */}
