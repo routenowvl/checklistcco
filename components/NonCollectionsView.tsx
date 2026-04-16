@@ -85,6 +85,7 @@ const NonCollectionsView: React.FC<{
   const [coletasPrevistas, setColetasPrevistas] = useState<ColetaPrevista[]>([]);
   const [userConfigs, setUserConfigs] = useState<RouteConfig[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [pendingCloudSyncCount, setPendingCloudSyncCount] = useState(0);
   const [isDarkMode, setIsDarkMode] = useState(() => {
     const saved = localStorage.getItem('non_collections_dark_mode');
     return saved !== 'false';
@@ -121,6 +122,8 @@ const NonCollectionsView: React.FC<{
   const filterDropdownRef = useRef<HTMLDivElement>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const resizingRef = useRef<{ col: string; startX: number; startWidth: number } | null>(null);
+  const nonCollectionPendingCacheKey = `non_collections_pending_cache_${(currentUser.email || '').toLowerCase()}`;
+  const lastRateLimitNoticeRef = useRef<number>(0);
 
   // Estado para o popup de atendimento detalhado
   const [isAttendanceModalOpen, setIsAttendanceModalOpen] = useState(false);
@@ -472,6 +475,123 @@ const NonCollectionsView: React.FC<{
     localStorage.setItem('non_collections_hidden_cols', JSON.stringify(Array.from(hiddenColumns)));
   }, [hiddenColumns]);
 
+  const isRateLimitError = (error: any): boolean => {
+    const msg = String(error?.message || error || '').toLowerCase();
+    return error?.status === 429 || msg.includes('429') || msg.includes('too many requests') || msg.includes('rate limit');
+  };
+
+  const readNonCollectionPendingCache = (): Record<string, NonCollection> => {
+    try {
+      const raw = localStorage.getItem(nonCollectionPendingCacheKey);
+      if (!raw) return {};
+      return JSON.parse(raw);
+    } catch {
+      return {};
+    }
+  };
+
+  const writeNonCollectionPendingCache = (cache: Record<string, NonCollection>) => {
+    const keys = Object.keys(cache);
+    if (keys.length === 0) {
+      localStorage.removeItem(nonCollectionPendingCacheKey);
+      setPendingCloudSyncCount(0);
+      window.dispatchEvent(new CustomEvent('cloud-sync-pending-changed'));
+      return;
+    }
+    localStorage.setItem(nonCollectionPendingCacheKey, JSON.stringify(cache));
+    setPendingCloudSyncCount(keys.length);
+    window.dispatchEvent(new CustomEvent('cloud-sync-pending-changed'));
+  };
+
+  const saveNonCollectionPendingCacheEntry = (row: NonCollection) => {
+    if (!row?.id || row.id === 'ghost' || row.id.startsWith('temp')) return;
+    const cache = readNonCollectionPendingCache();
+    cache[row.id] = row;
+    writeNonCollectionPendingCache(cache);
+  };
+
+  const removeNonCollectionPendingCacheEntry = (rowId: string) => {
+    if (!rowId) return;
+    const cache = readNonCollectionPendingCache();
+    if (!cache[rowId]) return;
+    delete cache[rowId];
+    writeNonCollectionPendingCache(cache);
+  };
+
+  const notifyRateLimitCacheSaved = () => {
+    const now = Date.now();
+    if (now - lastRateLimitNoticeRef.current < 8000) return;
+    lastRateLimitNoticeRef.current = now;
+    alert(
+      'Limite temporário da API Microsoft (429).\n\n' +
+      'Sua alteração foi mantida no cache local deste dispositivo e terá prioridade até sincronizar.'
+    );
+  };
+
+  const applyNonCollectionPendingCache = (baseRows: NonCollection[]): NonCollection[] => {
+    const cache = readNonCollectionPendingCache();
+    const cacheKeys = Object.keys(cache);
+    if (cacheKeys.length === 0) return baseRows;
+
+    const validIds = new Set(baseRows.map(row => row.id));
+    let cacheChanged = false;
+    for (const key of cacheKeys) {
+      if (!validIds.has(key)) {
+        delete cache[key];
+        cacheChanged = true;
+      }
+    }
+    if (cacheChanged) {
+      writeNonCollectionPendingCache(cache);
+    }
+
+    return baseRows.map(row => {
+      const cached = cache[row.id];
+      if (!cached) return row;
+      return { ...row, ...cached };
+    });
+  };
+
+  const syncNonCollectionPendingCacheToCloud = async (token: string) => {
+    const cache = readNonCollectionPendingCache();
+    const entries = Object.entries(cache);
+    if (entries.length === 0) {
+      setPendingCloudSyncCount(0);
+      return;
+    }
+
+    const nextCache: Record<string, NonCollection> = { ...cache };
+
+    for (const [rowId, pendingRow] of entries) {
+      try {
+        await SharePointService.updateNonCollection(token, pendingRow);
+        delete nextCache[rowId];
+      } catch (err) {
+        if (!isRateLimitError(err)) {
+          console.error('[CACHE_SYNC][NAO_COLETAS] Falha ao sincronizar registro pendente:', rowId, err);
+        }
+      }
+    }
+
+    writeNonCollectionPendingCache(nextCache);
+  };
+
+  useEffect(() => {
+    const refreshPendingSyncState = () => {
+      setPendingCloudSyncCount(Object.keys(readNonCollectionPendingCache()).length);
+    };
+
+    refreshPendingSyncState();
+
+    window.addEventListener('cloud-sync-pending-changed', refreshPendingSyncState);
+    window.addEventListener('storage', refreshPendingSyncState);
+
+    return () => {
+      window.removeEventListener('cloud-sync-pending-changed', refreshPendingSyncState);
+      window.removeEventListener('storage', refreshPendingSyncState);
+    };
+  }, [nonCollectionPendingCacheKey]);
+
   // Carrega dados ao montar e quando usuário muda
   useEffect(() => {
     loadData();
@@ -512,6 +632,8 @@ const NonCollectionsView: React.FC<{
         return;
       }
 
+      await syncNonCollectionPendingCacheToCloud(token);
+
       console.log('[NonCollections] Carregando dados...', currentUser.email);
 
       // Carrega configurações do usuário
@@ -533,12 +655,13 @@ const NonCollectionsView: React.FC<{
       console.log('[NonCollections] Não coletas filtradas por usuário:', filtered.length);
       console.log('[NonCollections] operações nos dados filtrados:', Array.from(new Set(filtered.map(r => r.operacao))));
 
-      setNonCollections(filtered);
+      const hydratedNonCollections = applyNonCollectionPendingCache(filtered);
+      setNonCollections(hydratedNonCollections);
 
       // Busca coletas previstas da data das não coletas
-      if (filtered.length > 0) {
+      if (hydratedNonCollections.length > 0) {
         // Pega a data da primeira não coleta (todas são da mesma data)
-        const dataNC = filtered[0].data;
+        const dataNC = hydratedNonCollections[0].data;
         await fetchColetasPrevistas(dataNC);
       } else {
         setColetasPrevistas([]);
@@ -551,6 +674,46 @@ const NonCollectionsView: React.FC<{
       setIsLoading(false);
     }
   };
+
+  const persistNonCollectionRow = async (rowId: string, fieldLabel: string) => {
+    if (!rowId || rowId === 'ghost' || rowId.startsWith('temp')) return;
+
+    const currentRow = nonCollections.find(r => r.id === rowId);
+    if (!currentRow) return;
+
+    try {
+      const token = await getValidToken() || currentUser.accessToken;
+      if (!token) return;
+
+      await SharePointService.updateNonCollection(token, currentRow);
+      removeNonCollectionPendingCacheEntry(rowId);
+      console.log(`[NC_SAVE] ${fieldLabel} salvo:`, currentRow.rota);
+    } catch (e: any) {
+      if (isRateLimitError(e)) {
+        saveNonCollectionPendingCacheEntry(currentRow);
+        notifyRateLimitCacheSaved();
+        return;
+      }
+      console.error(`[NC_SAVE] Erro ao salvar ${fieldLabel.toLowerCase()}:`, e?.message || e);
+    }
+  };
+
+  useEffect(() => {
+    const syncInterval = setInterval(() => {
+      const pendingCount = Object.keys(readNonCollectionPendingCache()).length;
+      if (pendingCount === 0) return;
+
+      const runSync = async () => {
+        const token = await getValidToken() || currentUser.accessToken;
+        if (!token) return;
+        await syncNonCollectionPendingCacheToCloud(token);
+      };
+
+      void runSync();
+    }, 15000);
+
+    return () => clearInterval(syncInterval);
+  }, [currentUser.email]);
 
   // Dark mode effect
   useEffect(() => {
@@ -1244,15 +1407,24 @@ const NonCollectionsView: React.FC<{
         }
 
         console.log('[BULK_PASTE] Salvando', recordsToSave.length, 'registros no SharePoint...');
+        let hasRateLimit = false;
         const savePromises = recordsToSave.map(async (record) => {
           try {
             await SharePointService.updateNonCollection(token, record);
+            removeNonCollectionPendingCacheEntry(record.id);
             console.log('[BULK_PASTE] -o. Salvo:', record.rota, '-', record.codigo);
           } catch (e: any) {
+            if (isRateLimitError(e)) {
+              saveNonCollectionPendingCacheEntry(record);
+              hasRateLimit = true;
+            }
             console.error('[BULK_PASTE] Erro ao salvar registro:', record.rota, e.message);
           }
         });
         await Promise.all(savePromises);
+        if (hasRateLimit) {
+          notifyRateLimitCacheSaved();
+        }
         console.log('[BULK_PASTE] -o. Todos os registros salvos no SharePoint');
       } catch (e: any) {
         console.error('[BULK_PASTE] Erro ao salvar no SharePoint:', e.message);
@@ -1437,6 +1609,15 @@ const NonCollectionsView: React.FC<{
               );
             })()}
           </div>
+          {pendingCloudSyncCount > 0 && (
+            <div className={`ml-6 px-4 py-2 rounded-xl border text-[10px] font-black uppercase tracking-wide ${
+              isDarkMode
+                ? 'bg-orange-900/30 border-orange-700/60 text-orange-300'
+                : 'bg-orange-50 border-orange-300 text-orange-700'
+            }`}>
+              Dados salvos localmente, aguardando resposta da nuvem.
+            </div>
+          )}
         </div>
 
         <div className="flex items-center gap-3">
@@ -1842,20 +2023,9 @@ const NonCollectionsView: React.FC<{
                               };
                               setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
                             }}
-                            onBlur={async () => {
+                            onBlur={() => {
                               if (row.id !== 'ghost' && !row.id.startsWith('temp')) {
-                                try {
-                                  const token = await getValidToken() || currentUser.accessToken;
-                                  if (token) {
-                                    const currentRow = nonCollections.find(r => r.id === row.id);
-                                    if (currentRow) {
-                                      await SharePointService.updateNonCollection(token, currentRow);
-                                      console.log('[NC_SAVE] Motivo salvo:', currentRow.rota);
-                                    }
-                                  }
-                                } catch (e: any) {
-                                  console.error('[NC_SAVE] Erro ao salvar motivo:', e.message);
-                                }
+                                void persistNonCollectionRow(row.id, 'Motivo');
                               }
                             }}
                             className={`w-full px-3 py-2 text-[11px] text-left truncate transition-all cursor-pointer outline-none border-none bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700 focus:ring-2 focus:ring-blue-500 rounded ${
@@ -1893,20 +2063,9 @@ const NonCollectionsView: React.FC<{
                               const updated = { ...row, observacao: e.target.value };
                               setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
                             }}
-                            onBlur={async () => {
+                            onBlur={() => {
                               if (row.id !== 'ghost' && !row.id.startsWith('temp')) {
-                                try {
-                                  const token = await getValidToken() || currentUser.accessToken;
-                                  if (token) {
-                                    const currentRow = nonCollections.find(r => r.id === row.id);
-                                    if (currentRow) {
-                                      await SharePointService.updateNonCollection(token, currentRow);
-                                      console.log('[NC_SAVE] Observação salva:', currentRow.rota);
-                                    }
-                                  }
-                                } catch (e: any) {
-                                  console.error('[NC_SAVE] Erro ao salvar observação:', e.message);
-                                }
+                                void persistNonCollectionRow(row.id, 'Observação');
                               }
                             }}
                             onPaste={(e) => {
@@ -1968,21 +2127,9 @@ const NonCollectionsView: React.FC<{
                               const updated = { ...row, acao: e.target.value };
                               setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
                             }}
-                            onBlur={async () => {
+                            onBlur={() => {
                               if (row.id !== 'ghost' && !row.id.startsWith('temp')) {
-                                try {
-                                  const token = await getValidToken() || currentUser.accessToken;
-                                  if (token) {
-                                    // Busca o valor MAIS RECENTE do estado (o onChange já atualizou)
-                                    const currentRow = nonCollections.find(r => r.id === row.id);
-                                    if (currentRow) {
-                                      await SharePointService.updateNonCollection(token, currentRow);
-                                      console.log('[NC_SAVE] Ação salva:', currentRow.rota);
-                                    }
-                                  }
-                                } catch (e: any) {
-                                  console.error('[NC_SAVE] Erro ao salvar ação:', e.message);
-                                }
+                                void persistNonCollectionRow(row.id, 'Ação');
                               }
                             }}
                             onPaste={(e) => {
@@ -2054,20 +2201,9 @@ const NonCollectionsView: React.FC<{
                               const updated = { ...row, dataAcao: val };
                               setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
                             }}
-                            onBlur={async () => {
+                            onBlur={() => {
                               if (row.id !== 'ghost' && !row.id.startsWith('temp')) {
-                                try {
-                                  const token = await getValidToken() || currentUser.accessToken;
-                                  if (token) {
-                                    const currentRow = nonCollections.find(r => r.id === row.id);
-                                    if (currentRow) {
-                                      await SharePointService.updateNonCollection(token, currentRow);
-                                      console.log('[NC_SAVE] Data Ação salva:', currentRow.rota);
-                                    }
-                                  }
-                                } catch (e: any) {
-                                  console.error('[NC_SAVE] Erro ao salvar data ação:', e.message);
-                                }
+                                void persistNonCollectionRow(row.id, 'Data Ação');
                               }
                             }}
                             onPaste={(e) => {
@@ -2111,20 +2247,9 @@ const NonCollectionsView: React.FC<{
                               const updated = { ...row, ultimaColeta: val };
                               setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
                             }}
-                            onBlur={async () => {
+                            onBlur={() => {
                               if (row.id !== 'ghost' && !row.id.startsWith('temp')) {
-                                try {
-                                  const token = await getValidToken() || currentUser.accessToken;
-                                  if (token) {
-                                    const currentRow = nonCollections.find(r => r.id === row.id);
-                                    if (currentRow) {
-                                      await SharePointService.updateNonCollection(token, currentRow);
-                                      console.log('[NC_SAVE] Última Coleta salva:', currentRow.rota);
-                                    }
-                                  }
-                                } catch (e: any) {
-                                  console.error('[NC_SAVE] Erro ao salvar última coleta:', e.message);
-                                }
+                                void persistNonCollectionRow(row.id, 'Última Coleta');
                               }
                             }}
                             onPaste={(e) => {
@@ -2183,20 +2308,9 @@ const NonCollectionsView: React.FC<{
                               const updated = { ...row, Culpabilidade: e.target.value };
                               setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
                             }}
-                            onBlur={async () => {
+                            onBlur={() => {
                               if (row.id !== 'ghost' && !row.id.startsWith('temp')) {
-                                try {
-                                  const token = await getValidToken() || currentUser.accessToken;
-                                  if (token) {
-                                    const currentRow = nonCollections.find(r => r.id === row.id);
-                                    if (currentRow) {
-                                      await SharePointService.updateNonCollection(token, currentRow);
-                                      console.log('[NC_SAVE] Culpabilidade salva:', currentRow.rota);
-                                    }
-                                  }
-                                } catch (e: any) {
-                                  console.error('[NC_SAVE] Erro ao salvar culpabilidade:', e.message);
-                                }
+                                void persistNonCollectionRow(row.id, 'Culpabilidade');
                               }
                             }}
                             className={`${inputClass} text-center cursor-pointer`}
@@ -2255,6 +2369,7 @@ const NonCollectionsView: React.FC<{
                             const token = await getValidToken() || currentUser.accessToken;
                             if (token) {
                               await SharePointService.deleteNonCollection(token, rowId);
+                              removeNonCollectionPendingCacheEntry(rowId);
                               console.log('[NC_DELETE] Não coleta excluída do SharePoint:', row.rota);
                             }
                           } catch (e: any) {

@@ -466,6 +466,7 @@ const RouteDepartureView: React.FC<{
   const [checklistTooltip, setChecklistTooltip] = useState<{ routeId: string; content: string } | null>(null);
   const [copiedGeralStatus, setCopiedGeralStatus] = useState<string | null>(null);
   const [hoveredGeralCell, setHoveredGeralCell] = useState<string | null>(null);
+  const [pendingCloudSyncCount, setPendingCloudSyncCount] = useState(0);
 
   // ⚠️ Estados para envio automático REMOVIDOS — envio agora é feito apenas pela tela "Resumo"
   // const [pendingSendOps, setPendingSendOps] = useState<Set<string>>(new Set());
@@ -491,6 +492,135 @@ const RouteDepartureView: React.FC<{
     if (fallback) return fallback;
     throw new Error('Sessão expirada. Por favor, renove sua sessão.');
   };
+
+  const routePendingCacheKey = `route_departure_pending_cache_${(currentUser.email || '').toLowerCase()}`;
+  const lastRateLimitNoticeRef = useRef<number>(0);
+
+  const isRateLimitError = (error: any): boolean => {
+    const msg = String(error?.message || error || '').toLowerCase();
+    return error?.status === 429 || msg.includes('429') || msg.includes('too many requests') || msg.includes('rate limit');
+  };
+
+  const readRoutePendingCache = (): Record<string, RouteDeparture> => {
+    try {
+      const raw = localStorage.getItem(routePendingCacheKey);
+      if (!raw) return {};
+      return JSON.parse(raw);
+    } catch {
+      return {};
+    }
+  };
+
+  const writeRoutePendingCache = (cache: Record<string, RouteDeparture>) => {
+    const keys = Object.keys(cache);
+    if (keys.length === 0) {
+      localStorage.removeItem(routePendingCacheKey);
+      setPendingCloudSyncCount(0);
+      window.dispatchEvent(new CustomEvent('cloud-sync-pending-changed'));
+      return;
+    }
+    localStorage.setItem(routePendingCacheKey, JSON.stringify(cache));
+    setPendingCloudSyncCount(keys.length);
+    window.dispatchEvent(new CustomEvent('cloud-sync-pending-changed'));
+  };
+
+  const saveRoutePendingCacheEntry = (route: RouteDeparture) => {
+    if (!route?.id || route.id === 'ghost') return;
+    const cache = readRoutePendingCache();
+    cache[route.id] = route;
+    writeRoutePendingCache(cache);
+  };
+
+  const removeRoutePendingCacheEntry = (routeId: string) => {
+    if (!routeId) return;
+    const cache = readRoutePendingCache();
+    if (!cache[routeId]) return;
+    delete cache[routeId];
+    writeRoutePendingCache(cache);
+  };
+
+  const notifyRateLimitCacheSaved = () => {
+    const now = Date.now();
+    if (now - lastRateLimitNoticeRef.current < 8000) return;
+    lastRateLimitNoticeRef.current = now;
+    alert(
+      'Limite temporário da API Microsoft (429).\n\n' +
+      'Sua alteração foi mantida no cache local deste dispositivo e terá prioridade sobre atualizações automáticas até sincronizar.'
+    );
+  };
+
+  const applyRoutePendingCache = (baseRoutes: RouteDeparture[], configs: RouteConfig[] = []): RouteDeparture[] => {
+    const cache = readRoutePendingCache();
+    const cacheKeys = Object.keys(cache);
+    if (cacheKeys.length === 0) return baseRoutes;
+
+    // Limpa entradas órfãs do cache (rotas que já não existem mais no SharePoint)
+    const validIds = new Set(baseRoutes.map(r => r.id));
+    let cacheChanged = false;
+    for (const key of cacheKeys) {
+      if (!validIds.has(key)) {
+        delete cache[key];
+        cacheChanged = true;
+      }
+    }
+    if (cacheChanged) {
+      writeRoutePendingCache(cache);
+    }
+
+    return baseRoutes.map(route => {
+      const cached = cache[route.id];
+      if (!cached) return route;
+      const merged = { ...route, ...cached };
+      const cfg = configs.find(c => c.operacao === merged.operacao);
+      const { status, gap } = calculateStatusWithTolerance(
+        merged.inicio || '',
+        merged.saida || '',
+        cfg?.tolerancia || '00:00:00',
+        merged.data || ''
+      );
+      return { ...merged, statusOp: status, tempo: gap };
+    });
+  };
+
+  const syncRoutePendingCacheToCloud = async (token: string) => {
+    const cache = readRoutePendingCache();
+    const entries = Object.entries(cache);
+    if (entries.length === 0) {
+      setPendingCloudSyncCount(0);
+      return;
+    }
+
+    const nextCache: Record<string, RouteDeparture> = { ...cache };
+
+    for (const [routeId, pendingRoute] of entries) {
+      try {
+        await SharePointService.updateDeparture(token, pendingRoute);
+        delete nextCache[routeId];
+      } catch (err) {
+        if (!isRateLimitError(err)) {
+          console.error('[CACHE_SYNC][SAIDAS] Falha ao sincronizar rota pendente:', routeId, err);
+        }
+      }
+    }
+
+    writeRoutePendingCache(nextCache);
+  };
+
+  useEffect(() => {
+    const refreshPendingSyncState = () => {
+      setPendingCloudSyncCount(Object.keys(readRoutePendingCache()).length);
+    };
+
+    refreshPendingSyncState();
+
+    window.addEventListener('cloud-sync-pending-changed', refreshPendingSyncState);
+    window.addEventListener('storage', refreshPendingSyncState);
+
+    return () => {
+      window.removeEventListener('cloud-sync-pending-changed', refreshPendingSyncState);
+      window.removeEventListener('storage', refreshPendingSyncState);
+    };
+  }, [routePendingCacheKey]);
 
   // Analisa histórico dos últimos 7 dias e identifica rotas com problemas
   const analyzeRouteHistory = async (token: string) => {
@@ -1481,6 +1611,8 @@ const RouteDepartureView: React.FC<{
     }
 
     try {
+      await syncRoutePendingCacheToCloud(token);
+
       console.log('[LOAD_DATA] Buscando dados atualizados...', isBackgroundRefresh ? '(segundo plano)' : '(inicial)');
       console.log('[LOAD_DATA] Usuário logado:', currentUser.email);
 
@@ -1532,12 +1664,13 @@ const RouteDepartureView: React.FC<{
         const { status, gap } = calculateStatusWithTolerance(route.inicio || '', route.saida || '', config?.tolerancia || "00:00:00", route.data || '');
         return { ...route, statusOp: status, tempo: gap };
       });
+      const hydratedRoutes = applyRoutePendingCache(recalculatedRoutes, configs || []);
 
       if (isBackgroundRefresh) {
         // MERGE inteligente: preserva a ordem atual da tabela e evita re-renderização desnecessária
         // Só atualiza se houver mudança real nos dados
         setRoutes(prevRoutes => {
-          const newMap = new Map(recalculatedRoutes.map(r => [r.id, r]));
+          const newMap = new Map(hydratedRoutes.map(r => [r.id, r]));
           const prevMap = new Map(prevRoutes.map(r => [r.id, r]));
 
           // Detecta mudanças: IDs novos/removidos ou campos alterados
@@ -1548,7 +1681,7 @@ const RouteDepartureView: React.FC<{
           if (!hasIdChanges) {
             // Mesmos IDs — verifica se algum campo relevante mudou
             let hasChanges = false;
-            for (const route of recalculatedRoutes) {
+            for (const route of hydratedRoutes) {
               const prev = prevMap.get(route.id);
               if (!prev) { hasChanges = true; break; }
               // Compara campos relevantes (ignora campos que mudam a cada refresh)
@@ -1588,7 +1721,7 @@ const RouteDepartureView: React.FC<{
 
           // Adiciona rotas novas que não existiam no estado anterior
           const existingIds = new Set(prevRoutes.map(r => r.id));
-          for (const route of recalculatedRoutes) {
+          for (const route of hydratedRoutes) {
             if (!existingIds.has(route.id)) {
               merged.push(route);
             }
@@ -1599,7 +1732,7 @@ const RouteDepartureView: React.FC<{
         });
       } else {
         // Primeira carga ou refresh manual: substituição total (com spinner)
-        setRoutes(recalculatedRoutes);
+        setRoutes(hydratedRoutes);
       }
 
       console.log('[LOAD_DATA] Dados carregados com sucesso');
@@ -1610,7 +1743,7 @@ const RouteDepartureView: React.FC<{
       }
       // Escaneia motoristas com "Mão de obra" — apenas no carregamento inicial para evitar queries excessivas
       if (!isBackgroundRefresh) {
-        scanExistingMotoristAlerts(token, recalculatedRoutes);
+        scanExistingMotoristAlerts(token, hydratedRoutes);
       }
 
       // Atualiza o último checklist de motorista após carregar as rotas
@@ -1797,6 +1930,7 @@ const RouteDepartureView: React.FC<{
       await SharePointService.deleteDeparture(token, id);
       setRoutes(prev => prev.filter(r => r.id !== id));
       setSelectedIds(prev => { const next = new Set(prev); next.delete(id); return next; });
+      removeRoutePendingCacheEntry(id);
     } catch (e) { alert("Erro ao excluir item."); }
     finally { setIsSyncing(false); }
   };
@@ -1828,7 +1962,11 @@ const RouteDepartureView: React.FC<{
     setIsSyncing(true);
     let success = 0;
     for (const id of validIdsToDelete) {
-        try { await SharePointService.deleteDeparture(token, id); success++; } catch (e) {}
+        try {
+          await SharePointService.deleteDeparture(token, id);
+          removeRoutePendingCacheEntry(id);
+          success++;
+        } catch (e) {}
     }
     setRoutes(prev => prev.filter(r => !selectedIds.has(r.id!)));
     setSelectedIds(new Set());
@@ -2279,10 +2417,15 @@ const RouteDepartureView: React.FC<{
 
         try {
             await SharePointService.updateDeparture(token, updatedRoute);
-            return { id: route.id, updatedRoute };
+            removeRoutePendingCacheEntry(route.id);
+            return { id: route.id, updatedRoute, isRateLimited: false };
         } catch (err) {
             console.error('[PASTE] Error updating route:', route.rota, err);
-            return null;
+            const rateLimited = isRateLimitError(err);
+            if (rateLimited) {
+              saveRoutePendingCacheEntry(updatedRoute);
+            }
+            return { id: route.id, updatedRoute, isRateLimited: rateLimited };
         }
     });
 
@@ -2290,18 +2433,24 @@ const RouteDepartureView: React.FC<{
     const results = await Promise.all(updatePromises);
 
     // Atualiza o estado com todos os resultados de uma vez
+    let hasRateLimit = false;
     setRoutes(prev => {
         const newRoutes = [...prev];
         results.forEach(result => {
-            if (result !== null) {
-                const index = newRoutes.findIndex(r => r.id === result.id);
-                if (index !== -1) {
-                    newRoutes[index] = result.updatedRoute;
-                }
+            const index = newRoutes.findIndex(r => r.id === result.id);
+            if (index !== -1) {
+                newRoutes[index] = result.updatedRoute;
+            }
+            if (result.isRateLimited) {
+              hasRateLimit = true;
             }
         });
         return newRoutes;
     });
+
+    if (hasRateLimit) {
+      notifyRateLimitCacheSaved();
+    }
 
     // DESABILITA o filtro por horário para não misturar as rotas atualizadas na ordenação
     setIsSortByTimeEnabled(false);
@@ -2461,8 +2610,13 @@ const RouteDepartureView: React.FC<{
 
     try {
         await SharePointService.updateDeparture(await getAccessToken(), updatedRoute);
+        removeRoutePendingCacheEntry(id);
     } catch (e) {
         console.error('[UPDATE] Error:', e);
+        if (isRateLimitError(e)) {
+          saveRoutePendingCacheEntry(updatedRoute);
+          notifyRateLimitCacheSaved();
+        }
     } finally {
         releaseLock(id);
         setIsSyncing(false);
@@ -5007,6 +5161,15 @@ const RouteDepartureView: React.FC<{
               </button>
             </div>
           </div>
+          {pendingCloudSyncCount > 0 && (
+            <div className={`ml-6 px-4 py-2 rounded-xl border text-[10px] font-black uppercase tracking-wide ${
+              isDarkMode
+                ? 'bg-orange-900/30 border-orange-700/60 text-orange-300'
+                : 'bg-orange-50 border-orange-300 text-orange-700'
+            }`}>
+              Dados salvos localmente, aguardando resposta da nuvem.
+            </div>
+          )}
         </div>
       )}
 

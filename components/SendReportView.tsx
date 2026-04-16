@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { SharePointService } from '../services/sharepointService';
 import { getValidToken } from '../services/tokenService';
 import { getBrazilDate, getBrazilHours, isAfter10amBrazil } from '../utils/dateUtils';
@@ -54,6 +54,93 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
   // Estado para não coletas reais do SharePoint (usado na coluna da direita)
   const [realNonCollections, setRealNonCollections] = useState<any[]>([]);
+  const routePendingCacheKey = `route_departure_pending_cache_${(currentUser.email || '').toLowerCase()}`;
+  const nonCollectionPendingCacheKey = `non_collections_pending_cache_${(currentUser.email || '').toLowerCase()}`;
+  const pendingSyncRef = useRef(false);
+  const [pendingCloudSync, setPendingCloudSync] = useState({ saidas: 0, naoColetas: 0 });
+
+  const cloudPendingTotal = pendingCloudSync.saidas + pendingCloudSync.naoColetas;
+  const hasPendingCloudSync = cloudPendingTotal > 0;
+  const cloudPendingMessage = 'Dados salvos localmente, aguardando resposta da nuvem. Envios manuais estao temporariamente bloqueados.';
+
+  const readPendingCache = (key: string): Record<string, any> => {
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return {};
+      return JSON.parse(raw);
+    } catch {
+      return {};
+    }
+  };
+
+  const writePendingCache = (key: string, cache: Record<string, any>) => {
+    const keys = Object.keys(cache);
+    if (keys.length === 0) {
+      localStorage.removeItem(key);
+    } else {
+      localStorage.setItem(key, JSON.stringify(cache));
+    }
+    window.dispatchEvent(new CustomEvent('cloud-sync-pending-changed'));
+  };
+
+  const refreshPendingCloudSyncState = () => {
+    const saidas = Object.keys(readPendingCache(routePendingCacheKey)).length;
+    const naoColetas = Object.keys(readPendingCache(nonCollectionPendingCacheKey)).length;
+    setPendingCloudSync({ saidas, naoColetas });
+  };
+
+  const syncPendingCacheToCloud = async () => {
+    if (pendingSyncRef.current) return;
+    pendingSyncRef.current = true;
+
+    try {
+      const routeCache = readPendingCache(routePendingCacheKey);
+      const nonCollectionCache = readPendingCache(nonCollectionPendingCacheKey);
+      if (Object.keys(routeCache).length === 0 && Object.keys(nonCollectionCache).length === 0) {
+        return;
+      }
+
+      const token = await getValidToken() || currentUser.accessToken;
+      if (!token) return;
+
+      if (Object.keys(routeCache).length > 0) {
+        const nextRouteCache: Record<string, any> = { ...routeCache };
+        for (const [id, row] of Object.entries(routeCache)) {
+          try {
+            await SharePointService.updateDeparture(token, row as any);
+            delete nextRouteCache[id];
+          } catch (err: any) {
+            const msg = String(err?.message || err || '').toLowerCase();
+            const isRateLimit = err?.status === 429 || msg.includes('429') || msg.includes('too many requests') || msg.includes('rate limit');
+            if (!isRateLimit) {
+              console.error('[CACHE_SYNC][SEND_VIEW][SAIDAS] Falha ao sincronizar item pendente:', id, err);
+            }
+          }
+        }
+        writePendingCache(routePendingCacheKey, nextRouteCache);
+      }
+
+      if (Object.keys(nonCollectionCache).length > 0) {
+        const nextNCCache: Record<string, any> = { ...nonCollectionCache };
+        for (const [id, row] of Object.entries(nonCollectionCache)) {
+          try {
+            await SharePointService.updateNonCollection(token, row as any);
+            delete nextNCCache[id];
+          } catch (err: any) {
+            const msg = String(err?.message || err || '').toLowerCase();
+            const isRateLimit = err?.status === 429 || msg.includes('429') || msg.includes('too many requests') || msg.includes('rate limit');
+            if (!isRateLimit) {
+              console.error('[CACHE_SYNC][SEND_VIEW][NAO_COLETAS] Falha ao sincronizar item pendente:', id, err);
+            }
+          }
+        }
+        writePendingCache(nonCollectionPendingCacheKey, nextNCCache);
+      }
+    } finally {
+      pendingSyncRef.current = false;
+      refreshPendingCloudSyncState();
+    }
+  };
 
   const fetchAllData = async (forceRefresh: boolean = false) => {
     setIsLoading(true);
@@ -173,6 +260,29 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     };
   }, []);
 
+  useEffect(() => {
+    const handlePendingChange = () => {
+      refreshPendingCloudSyncState();
+    };
+
+    refreshPendingCloudSyncState();
+    void syncPendingCacheToCloud();
+
+    const pendingSyncInterval = setInterval(() => {
+      refreshPendingCloudSyncState();
+      void syncPendingCacheToCloud();
+    }, 15000);
+
+    window.addEventListener('cloud-sync-pending-changed', handlePendingChange);
+    window.addEventListener('storage', handlePendingChange);
+
+    return () => {
+      clearInterval(pendingSyncInterval);
+      window.removeEventListener('cloud-sync-pending-changed', handlePendingChange);
+      window.removeEventListener('storage', handlePendingChange);
+    };
+  }, [currentUser.email]);
+
   // Define o estado inicial do botão de Atualização baseado no horário atual (Brasília)
   useEffect(() => {
     // Entre 12:00h e 23:59h (Brasília) = ativado, entre 00:00h e 11:59h = desativado
@@ -181,6 +291,12 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
   // Função para enviar saídas da operação selecionada
   const handleSendDepartures = async () => {
+    if (hasPendingCloudSync) {
+      setSendError(cloudPendingMessage);
+      setTimeout(() => setSendError(null), 6000);
+      return;
+    }
+
     if (!selectedOperacao) {
       setSendError("Selecione uma operação para enviar.");
       setTimeout(() => setSendError(null), 3000);
@@ -484,6 +600,12 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
   // Função para enviar não coletas
   const handleSendNonCollections = async () => {
+    if (hasPendingCloudSync) {
+      setNcSendError(cloudPendingMessage);
+      setTimeout(() => setNcSendError(null), 6000);
+      return;
+    }
+
     if (!selectedOperacaoNC) {
       setNcSendError("Selecione uma operação para enviar.");
       setTimeout(() => setNcSendError(null), 3000);
@@ -824,6 +946,12 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
   // Função para enviar resumo GERAL de todas as operações
   const handleSendSummary = async () => {
+    if (hasPendingCloudSync) {
+      setSendError(cloudPendingMessage);
+      setTimeout(() => setSendError(null), 6000);
+      return;
+    }
+
     // FILTRA rotas APENAS das operações do usuário logado (validação de segurança)
     const myOps = new Set(userConfigs.map(c => c.operacao));
 
@@ -998,6 +1126,12 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
   // Função para enviar resumo GERAL de todas as não coletas do usuário
   const handleSendNCSummary = async () => {
+    if (hasPendingCloudSync) {
+      setNcSendError(cloudPendingMessage);
+      setTimeout(() => setNcSendError(null), 6000);
+      return;
+    }
+
     const myOps = new Set(userConfigs.map(c => c.operacao));
 
     console.log('[RESUMO_NC] === INICIANDO ENVIO DE RESUMO NÃO COLETAS ===');
@@ -1537,6 +1671,11 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
                 <><CheckCircle2 size={12} className="text-green-500" /> Atualizado às {lastSync.toLocaleTimeString()}</>
               )}
             </p>
+            {hasPendingCloudSync && (
+              <p className="mt-2 inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-orange-300 bg-orange-50 text-orange-700 text-[10px] font-black uppercase tracking-wide">
+                Dados salvos localmente, aguardando resposta da nuvem.
+              </p>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -1565,7 +1704,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
             </div>
             <button
               onClick={handleSendSummary}
-              disabled={isSendingSummary || departures.length === 0}
+              disabled={isSendingSummary || departures.length === 0 || hasPendingCloudSync}
               className="flex items-center gap-2 px-4 py-2 bg-emerald-700 text-white rounded-lg hover:bg-emerald-600 font-bold border border-emerald-600 uppercase text-[10px] tracking-wide transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isSendingSummary ? (
@@ -1610,7 +1749,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
                 </select>
                 <button 
                   onClick={handleSendDepartures}
-                  disabled={isSending}
+                  disabled={isSending || hasPendingCloudSync}
                   className="bg-[#075985] text-white px-6 py-2 rounded-lg font-black uppercase text-[10px] flex items-center gap-2 hover:bg-sky-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isSending ? <Loader2 size={14} className="animate-spin" /> : <><Send size={14} /> Enviar</>}
@@ -1651,7 +1790,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
             <h2 className="font-black text-[#075985] dark:text-sky-400 uppercase tracking-widest text-sm">Não Coletas</h2>
             <button
               onClick={handleSendNCSummary}
-              disabled={isSendingNCSummary || userConfigs.length === 0}
+              disabled={isSendingNCSummary || userConfigs.length === 0 || hasPendingCloudSync}
               className="flex items-center gap-2 px-4 py-2 bg-emerald-700 text-white rounded-lg hover:bg-emerald-600 font-bold border border-emerald-600 uppercase text-[10px] tracking-wide transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isSendingNCSummary ? (
@@ -1691,7 +1830,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
               </select>
               <button
                 onClick={handleSendNonCollections}
-                disabled={isSending}
+                disabled={isSending || hasPendingCloudSync}
                 className="bg-[#075985] text-white px-6 py-2 rounded-lg font-black uppercase text-[10px] flex items-center gap-2 hover:bg-sky-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isSending ? <Loader2 size={14} className="animate-spin" /> : <><Send size={14} /> Enviar</>}
