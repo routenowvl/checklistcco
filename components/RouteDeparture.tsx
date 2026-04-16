@@ -1898,6 +1898,44 @@ const RouteDepartureView: React.FC<{
     return `${yyyy}-${mm}-${dd}`;
   };
 
+  const validateArchiveHardBlocks = (routesCandidate: RouteDeparture[]): boolean => {
+    // Trava 1: Resumo geral de saídas precisa estar OK
+    const configsComResumo = userConfigs.filter(c => !!c.UltimoEnvioResumoSaida && !!c.StatusResumoSaida);
+    const statusResumoGlobal = (() => {
+      if (configsComResumo.length === 0) return '';
+      const maisRecente = [...configsComResumo].sort((a, b) => {
+        const dateA = new Date(a.UltimoEnvioResumoSaida || '').getTime();
+        const dateB = new Date(b.UltimoEnvioResumoSaida || '').getTime();
+        return dateB - dateA;
+      })[0];
+      return (maisRecente?.StatusResumoSaida || '').trim();
+    })();
+
+    if (statusResumoGlobal.toUpperCase() !== 'OK') {
+      setArchiveStatusDivergences([]);
+      setArchiveHardBlockModal('resumo');
+      return false;
+    }
+
+    // Trava 2: Status individual (coluna Status) por operação precisa estar OK
+    const opsInArchive = Array.from(new Set(routesCandidate.map(r => (r.operacao || '').trim()).filter(Boolean)));
+    const statusDivergences: ArchiveStatusDivergence[] = opsInArchive
+      .map(op => {
+        const cfg = userConfigs.find(c => c.operacao === op);
+        const rawStatus = (cfg?.Status || '').trim();
+        return { operacao: op, status: rawStatus || 'Previsto' };
+      })
+      .filter(item => item.status.toUpperCase() !== 'OK');
+
+    if (statusDivergences.length > 0) {
+      setArchiveStatusDivergences(statusDivergences);
+      setArchiveHardBlockModal('status');
+      return false;
+    }
+
+    return true;
+  };
+
   const executeArchiveWithDivergences = async (routesToArchive: RouteDeparture[], routesToPostpone: ArchiveDivergentRoute[]) => {
     const token = await getAccessToken();
     setIsSyncing(true);
@@ -2041,37 +2079,8 @@ const RouteDepartureView: React.FC<{
       return;
     }
 
-    // Se todas as rotas estão completas, valida se o resumo de saídas geral está OK
-    const configsComResumo = userConfigs.filter(c => !!c.UltimoEnvioResumoSaida && !!c.StatusResumoSaida);
-    const statusResumoGlobal = (() => {
-      if (configsComResumo.length === 0) return '';
-      const maisRecente = [...configsComResumo].sort((a, b) => {
-        const dateA = new Date(a.UltimoEnvioResumoSaida || '').getTime();
-        const dateB = new Date(b.UltimoEnvioResumoSaida || '').getTime();
-        return dateB - dateA;
-      })[0];
-      return (maisRecente?.StatusResumoSaida || '').trim();
-    })();
-
-    if (statusResumoGlobal.toUpperCase() !== 'OK') {
-      setArchiveHardBlockModal('resumo');
-      setArchiveStatusDivergences([]);
-      return;
-    }
-
-    // Valida status individual das operações (coluna Status da CONFIG_OPERACAO_SAIDA_DE_ROTAS)
-    const opsInArchive = Array.from(new Set(readyToArchive.map(r => (r.operacao || '').trim()).filter(Boolean)));
-    const statusDivergences: ArchiveStatusDivergence[] = opsInArchive
-      .map(op => {
-        const cfg = userConfigs.find(c => c.operacao === op);
-        const rawStatus = (cfg?.Status || '').trim();
-        return { operacao: op, status: rawStatus || 'Previsto' };
-      })
-      .filter(item => item.status.toUpperCase() !== 'OK');
-
-    if (statusDivergences.length > 0) {
-      setArchiveStatusDivergences(statusDivergences);
-      setArchiveHardBlockModal('status');
+    // Travas bloqueantes: resumo geral OK + status individual OK
+    if (!validateArchiveHardBlocks(readyToArchive)) {
       return;
     }
 
@@ -5059,6 +5068,9 @@ const RouteDepartureView: React.FC<{
               </button>
               <button
                 onClick={async () => {
+                  if (!validateArchiveHardBlocks(archiveReadyRoutes)) {
+                    return;
+                  }
                   await executeArchiveWithDivergences(archiveReadyRoutes, archiveDivergentRoutes);
                 }}
                 disabled={isSyncing}
