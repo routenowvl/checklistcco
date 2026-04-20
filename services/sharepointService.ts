@@ -1779,10 +1779,6 @@ export const SharePointService = {
    */
   async getColetasPrevistas(token: string, date: string, userEmail: string): Promise<ColetaPrevista[]> {
     try {
-      const cacheKey = `coletasPrevistas_${date}_${userEmail}`;
-      const cached = getCachedData<ColetaPrevista[]>(cacheKey);
-      if (cached) return cached;
-
       const siteId = await getResolvedSiteId(token);
       const list = await findListByIdOrName(siteId, 'Coletas_previstas_cco', token);
       const { mapping } = await getListColumnMapping(siteId, list.id, token);
@@ -1838,7 +1834,6 @@ export const SharePointService = {
       console.log(`[COLETAS_PREVISTAS] Depois do filtro:`, filtered.map(c => `${c.Title}=${c.QntColeta}`));
       console.log(`[COLETAS_PREVISTAS] Total: ${filtered.length}, Soma QntColeta: ${filtered.reduce((sum, c) => sum + c.QntColeta, 0)}`);
 
-      setCachedData(cacheKey, filtered);
       return filtered;
     } catch (e: any) {
       console.error('[COLETAS_PREVISTAS] Erro ao buscar:', e.message);

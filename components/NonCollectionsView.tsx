@@ -492,9 +492,6 @@ const NonCollectionsView: React.FC<{
       console.log('[COLETAS_PREVISTAS] Email do usuário:', currentUser.email);
       console.log('[COLETAS_PREVISTAS] Operações do usuário (userConfigs):', userConfigs.map(c => c.operacao));
 
-      // Limpa cache para garantir busca fresca
-      SharePointService.clearCache(`coletasPrevistas_${dataISO}_${currentUser.email}`);
-
       const coletas = await SharePointService.getColetasPrevistas(token, dataISO, currentUser.email);
       setColetasPrevistas(coletas);
       console.log('[COLETAS_PREVISTAS] Total retornado:', coletas.length);
