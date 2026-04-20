@@ -1793,12 +1793,22 @@ export const SharePointService = {
       const colData = resolveFieldName(mapping, 'Data');
 
       const filter = `fields/${colData} ge '${startISO}' and fields/${colData} le '${endISO}'`;
-      console.log(`[COLETAS_PREVISTAS] URL: /sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}`);
-      const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}&$top=999`, token);
+      console.log(`[COLETAS_PREVISTAS] URL base: /sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}`);
 
-      console.log(`[COLETAS_PREVISTAS] Raw data count: ${data.value?.length || 0}`);
-      if (data.value?.length > 0) {
-        console.log(`[COLETAS_PREVISTAS] Primeiro item raw:`, JSON.stringify(data.value[0], null, 2));
+      // Busca com paginação para evitar truncamento quando a lista crescer.
+      let allItems: any[] = [];
+      let nextUrl: string | null = `/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}&$top=100`;
+
+      while (nextUrl) {
+        const data = await graphFetch(nextUrl, token);
+        allItems = allItems.concat(data.value || []);
+        nextUrl = data['@odata.nextLink'] || null;
+        console.log(`[COLETAS_PREVISTAS] Página carregada. Total acumulado: ${allItems.length}`);
+      }
+
+      console.log(`[COLETAS_PREVISTAS] Raw data count: ${allItems.length}`);
+      if (allItems.length > 0) {
+        console.log(`[COLETAS_PREVISTAS] Primeiro item raw:`, JSON.stringify(allItems[0], null, 2));
       }
 
       // Busca configurações do usuário para filtrar pelas operações dele
@@ -1807,7 +1817,7 @@ export const SharePointService = {
 
       console.log(`[COLETAS_PREVISTAS] Operações do usuário (${userEmail}):`, Array.from(myOps));
 
-      const result = (data.value || [])
+      const result = (allItems || [])
         .map((item: any): ColetaPrevista => {
           const f = item.fields;
           const dataRaw = f[colData];
