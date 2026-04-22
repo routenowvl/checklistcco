@@ -1788,18 +1788,71 @@ export const SharePointService = {
       const endISO = `${date}T23:59:59Z`;
       const colData = resolveFieldName(mapping, 'Data');
 
-      const filter = `fields/${colData} ge '${startISO}' and fields/${colData} le '${endISO}'`;
-      console.log(`[COLETAS_PREVISTAS] URL base: /sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}`);
+      const fetchAllItems = async (initialUrl: string): Promise<any[]> => {
+        let allItems: any[] = [];
+        let nextUrl: string | null = initialUrl;
+        let page = 0;
 
-      // Busca com paginação para evitar truncamento quando a lista crescer.
-      let allItems: any[] = [];
-      let nextUrl: string | null = `/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}&$top=100`;
+        while (nextUrl) {
+          const data = await graphFetch(nextUrl, token);
+          allItems = allItems.concat(data.value || []);
+          nextUrl = data['@odata.nextLink'] || null;
+          page++;
+          console.log(`[COLETAS_PREVISTAS] Página ${page} carregada. Total acumulado: ${allItems.length}`);
+          if (page > 500) {
+            console.warn('[COLETAS_PREVISTAS] Limite de segurança de paginação atingido (500 páginas).');
+            break;
+          }
+        }
 
-      while (nextUrl) {
-        const data = await graphFetch(nextUrl, token);
-        allItems = allItems.concat(data.value || []);
-        nextUrl = data['@odata.nextLink'] || null;
-        console.log(`[COLETAS_PREVISTAS] Página carregada. Total acumulado: ${allItems.length}`);
+        return allItems;
+      };
+
+      const normalizeDateField = (value: any): string => {
+        const raw = String(value || '').trim();
+        if (!raw) return '';
+        if (/^\d{4}-\d{2}-\d{2}T/.test(raw)) return raw.slice(0, 10);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+        if (/^\d{2}\/\d{2}\/\d{4}$/.test(raw)) {
+          const [d, m, y] = raw.split('/');
+          return `${y}-${m}-${d}`;
+        }
+        return '';
+      };
+
+      const normalizeOperation = (value: any): string =>
+        String(value || '')
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .trim()
+          .toUpperCase()
+          .replace(/\s+/g, ' ');
+
+      const rangeFilter = `fields/${colData} ge '${startISO}' and fields/${colData} le '${endISO}'`;
+      console.log(`[COLETAS_PREVISTAS] URL base: /sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${rangeFilter}`);
+
+      // 1) Tentativa padrão por intervalo de data/hora
+      let allItems = await fetchAllItems(
+        `/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${rangeFilter}&$top=100`
+      );
+
+      // 2) Fallback para colunas Date-only (sem hora)
+      if (allItems.length === 0) {
+        const eqDateFilter = `fields/${colData} eq '${date}'`;
+        console.warn('[COLETAS_PREVISTAS] Busca por range retornou 0. Tentando filtro date-only (eq).');
+        allItems = await fetchAllItems(
+          `/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${eqDateFilter}&$top=100`
+        );
+      }
+
+      // 3) Fallback final: busca ampla com paginação e filtra a data no cliente
+      if (allItems.length === 0) {
+        console.warn('[COLETAS_PREVISTAS] Filtro no servidor retornou 0. Aplicando fallback com filtro de data no cliente.');
+        const broadItems = await fetchAllItems(
+          `/sites/${siteId}/lists/${list.id}/items?expand=fields&$top=100`
+        );
+        allItems = broadItems.filter((item: any) => normalizeDateField(item?.fields?.[colData]) === date);
+        console.log(`[COLETAS_PREVISTAS] Fallback cliente encontrou ${allItems.length} itens para ${date}.`);
       }
 
       console.log(`[COLETAS_PREVISTAS] Raw data count: ${allItems.length}`);
@@ -1809,7 +1862,11 @@ export const SharePointService = {
 
       // Busca configurações do usuário para filtrar pelas operações dele
       const userConfigs = await this.getRouteConfigs(token, userEmail, true);
-      const myOps = new Set(userConfigs.map(c => c.operacao));
+      const myOps = new Set(
+        userConfigs
+          .map(c => normalizeOperation(c.operacao))
+          .filter(Boolean)
+      );
 
       console.log(`[COLETAS_PREVISTAS] Operações do usuário (${userEmail}):`, Array.from(myOps));
 
@@ -1817,11 +1874,13 @@ export const SharePointService = {
         .map((item: any): ColetaPrevista => {
           const f = item.fields;
           const dataRaw = f[colData];
-          const dataISO = dataRaw ? (dataRaw.includes('T') ? dataRaw : `${dataRaw}T12:00:00Z`) : '';
+          const normalizedDate = normalizeDateField(dataRaw);
+          const dataISO = normalizedDate ? `${normalizedDate}T12:00:00Z` : '';
+          const operacaoTitle = String(f.Title || '').trim();
 
           return {
             id: String(item.id),
-            Title: f.Title || '',
+            Title: operacaoTitle,
             QntColeta: Number(f[resolveFieldName(mapping, 'QntColeta')] || 0),
             Data: dataISO
           };
@@ -1829,7 +1888,15 @@ export const SharePointService = {
 
       console.log(`[COLETAS_PREVISTAS] Antes do filtro:`, result.map(c => `${c.Title}=${c.QntColeta}`));
 
-      const filtered = result.filter(c => myOps.size === 0 || myOps.has(c.Title));
+      const filtered = result.filter(c => myOps.size === 0 || myOps.has(normalizeOperation(c.Title)));
+
+      if (myOps.size > 0) {
+        const resultOps = new Set(result.map(r => normalizeOperation(r.Title)).filter(Boolean));
+        const missingOps = Array.from(myOps).filter(op => !resultOps.has(op));
+        if (missingOps.length > 0) {
+          console.warn('[COLETAS_PREVISTAS] Operações do usuário sem correspondência na lista de previstas:', missingOps);
+        }
+      }
 
       console.log(`[COLETAS_PREVISTAS] Depois do filtro:`, filtered.map(c => `${c.Title}=${c.QntColeta}`));
       console.log(`[COLETAS_PREVISTAS] Total: ${filtered.length}, Soma QntColeta: ${filtered.reduce((sum, c) => sum + c.QntColeta, 0)}`);
