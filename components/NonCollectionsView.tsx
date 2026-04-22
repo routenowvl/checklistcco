@@ -185,6 +185,40 @@ const NonCollectionsView: React.FC<{
   const [editingHistoryId, setEditingHistoryId] = useState<string | null>(null);
   const [editingHistoryField, setEditingHistoryField] = useState<keyof NonCollection | null>(null);
   const [isSavingHistoryEdits, setIsSavingHistoryEdits] = useState(false);
+  const [coletasPrevistasDataRef, setColetasPrevistasDataRef] = useState<string>('');
+  const [isRefreshingColetasPrevistas, setIsRefreshingColetasPrevistas] = useState(false);
+  const COLETAS_PREVISTAS_MANUAL_REFRESH_LIMIT = 2;
+
+  const getColetasPrevistasManualRefreshStorageKey = () =>
+    `coletas_previstas_manual_refresh_${(currentUser.email || '').toLowerCase()}`;
+
+  const readColetasPrevistasManualRefreshUsage = (): { date: string; used: number } => {
+    try {
+      const raw = localStorage.getItem(getColetasPrevistasManualRefreshStorageKey());
+      if (!raw) return { date: getBrazilDate(), used: 0 };
+      const parsed = JSON.parse(raw);
+      return {
+        date: String(parsed?.date || getBrazilDate()),
+        used: Number(parsed?.used || 0)
+      };
+    } catch {
+      return { date: getBrazilDate(), used: 0 };
+    }
+  };
+
+  const getColetasPrevistasManualRefreshUsedToday = (): number => {
+    const today = getBrazilDate();
+    const usage = readColetasPrevistasManualRefreshUsage();
+    return usage.date === today ? usage.used : 0;
+  };
+
+  const saveColetasPrevistasManualRefreshUsage = (used: number) => {
+    const today = getBrazilDate();
+    localStorage.setItem(
+      getColetasPrevistasManualRefreshStorageKey(),
+      JSON.stringify({ date: today, used })
+    );
+  };
 
   const updateGhostCell = (field: keyof NonCollection, value: string) => {
     const updatedGhost = { ...ghostRow, [field]: value };
@@ -482,10 +516,10 @@ const NonCollectionsView: React.FC<{
    * Busca coletas previstas para uma data específica e atualiza o estado.
    * @param dataDDMMYYYY Data no formato DD/MM/YYYY
    */
-  const fetchColetasPrevistas = async (dataDDMMYYYY: string) => {
+  const fetchColetasPrevistas = async (dataDDMMYYYY: string): Promise<boolean> => {
     try {
       const token = await getValidToken() || currentUser.accessToken;
-      if (!token) return;
+      if (!token) return false;
 
       const dataISO = dataDDMMYYYY.split('/').reverse().join('-');
       console.log('[COLETAS_PREVISTAS] Buscando para data:', dataISO);
@@ -494,11 +528,14 @@ const NonCollectionsView: React.FC<{
 
       const coletas = await SharePointService.getColetasPrevistas(token, dataISO, currentUser.email);
       setColetasPrevistas(coletas);
+      setColetasPrevistasDataRef(dataDDMMYYYY);
       console.log('[COLETAS_PREVISTAS] Total retornado:', coletas.length);
       console.log('[COLETAS_PREVISTAS] Detalhes:', coletas.map(c => `${c.Title}=${c.QntColeta}`));
       console.log('[COLETAS_PREVISTAS] Soma QntColeta:', coletas.reduce((sum, c) => sum + c.QntColeta, 0));
+      return true;
     } catch (e: any) {
       console.error('[COLETAS_PREVISTAS] Erro ao buscar:', e.message);
+      return false;
     }
   };
 
@@ -540,6 +577,7 @@ const NonCollectionsView: React.FC<{
         await fetchColetasPrevistas(dataNC);
       } else {
         setColetasPrevistas([]);
+        setColetasPrevistasDataRef(getNonCollectionDateForCurrentTime());
       }
 
       console.log('[NonCollections] ? Dados carregados com sucesso');
@@ -547,6 +585,29 @@ const NonCollectionsView: React.FC<{
       console.error('[NonCollections] Erro ao carregar dados:', e.message);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleManualRefreshColetasPrevistas = async () => {
+    if (isRefreshingColetasPrevistas) return;
+
+    const usedToday = getColetasPrevistasManualRefreshUsedToday();
+
+    if (usedToday >= COLETAS_PREVISTAS_MANUAL_REFRESH_LIMIT) {
+      alert('Limite diário atingido: você pode atualizar manualmente o card de Coletas Previstas no máximo 2 vezes por dia.');
+      return;
+    }
+
+    const targetDate = coletasPrevistasDataRef || nonCollections[0]?.data || getNonCollectionDateForCurrentTime();
+
+    setIsRefreshingColetasPrevistas(true);
+    try {
+      const success = await fetchColetasPrevistas(targetDate);
+      if (success) {
+        saveColetasPrevistasManualRefreshUsage(usedToday + 1);
+      }
+    } finally {
+      setIsRefreshingColetasPrevistas(false);
     }
   };
 
@@ -1384,9 +1445,15 @@ const NonCollectionsView: React.FC<{
             </div>
 
             {/* Card Coletas Previstas */}
-            <div className={`flex items-center gap-3 px-6 py-3 rounded-2xl min-w-[160px] ${
-              isDarkMode ? 'bg-emerald-900/30 border border-emerald-700/50' : 'bg-emerald-100 border border-emerald-300'
-            }`}>
+            <div
+              onClick={() => {
+                void handleManualRefreshColetasPrevistas();
+              }}
+              title="Clique para atualizar coletas previstas"
+              className={`flex items-center gap-3 px-6 py-3 rounded-2xl min-w-[160px] transition-all ${
+                isDarkMode ? 'bg-emerald-900/30 border border-emerald-700/50' : 'bg-emerald-100 border border-emerald-300'
+              } cursor-pointer hover:scale-105`}
+            >
               <div className="text-center flex-1">
                 <p className={`text-[9px] font-black uppercase tracking-wider mb-1 ${isDarkMode ? 'text-emerald-400' : 'text-emerald-700'}`}>Coletas Previstas</p>
                 <p className={`text-2xl font-black leading-none ${isDarkMode ? 'text-emerald-400' : 'text-emerald-700'}`}>{coletasPrevistas.reduce((sum, c) => sum + c.QntColeta, 0)}</p>
