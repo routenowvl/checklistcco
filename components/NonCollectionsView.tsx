@@ -482,17 +482,21 @@ const NonCollectionsView: React.FC<{
    * Busca coletas previstas para uma data específica e atualiza o estado.
    * @param dataDDMMYYYY Data no formato DD/MM/YYYY
    */
-  const fetchColetasPrevistas = async (dataDDMMYYYY: string): Promise<boolean> => {
+  const fetchColetasPrevistas = async (dataDDMMYYYY: string, operationsOverride: string[] = []): Promise<boolean> => {
     try {
       const token = await getValidToken() || currentUser.accessToken;
       if (!token) return false;
 
       const dataISO = dataDDMMYYYY.split('/').reverse().join('-');
+      const userOperations = operationsOverride.length > 0
+        ? operationsOverride
+        : userConfigs.map(c => c.operacao);
+
       console.log('[COLETAS_PREVISTAS] Buscando para data:', dataISO);
       console.log('[COLETAS_PREVISTAS] Email do usuário:', currentUser.email);
-      console.log('[COLETAS_PREVISTAS] Operações do usuário (userConfigs):', userConfigs.map(c => c.operacao));
+      console.log('[COLETAS_PREVISTAS] Operações do usuário (userConfigs):', userOperations);
 
-      const coletas = await SharePointService.getColetasPrevistas(token, dataISO, currentUser.email);
+      const coletas = await SharePointService.getColetasPrevistas(token, dataISO, currentUser.email, userOperations);
       setColetasPrevistas(coletas);
       console.log('[COLETAS_PREVISTAS] Total retornado:', coletas.length);
       console.log('[COLETAS_PREVISTAS] Detalhes:', coletas.map(c => `${c.Title}=${c.QntColeta}`));
@@ -539,7 +543,7 @@ const NonCollectionsView: React.FC<{
       if (filtered.length > 0) {
         // Pega a data da primeira não coleta (todas são da mesma data)
         const dataNC = filtered[0].data;
-        await fetchColetasPrevistas(dataNC);
+        await fetchColetasPrevistas(dataNC, (configs || []).map(c => c.operacao));
       } else {
         setColetasPrevistas([]);
       }

@@ -1777,7 +1777,12 @@ export const SharePointService = {
    * Busca coletas previstas da lista Coletas_previstas_cco.
    * Filtra por data e retorna operação + quantidade.
    */
-  async getColetasPrevistas(token: string, date: string, userEmail: string): Promise<ColetaPrevista[]> {
+  async getColetasPrevistas(
+    token: string,
+    date: string,
+    userEmail: string,
+    userOperations: string[] = []
+  ): Promise<ColetaPrevista[]> {
     try {
       const siteId = await getResolvedSiteId(token);
       const list = await findListByIdOrName(siteId, 'Coletas_previstas_cco', token);
@@ -1861,12 +1866,12 @@ export const SharePointService = {
       }
 
       // Busca configurações do usuário para filtrar pelas operações dele
-      const userConfigs = await this.getRouteConfigs(token, userEmail, true);
-      const myOps = new Set(
-        userConfigs
-          .map(c => normalizeOperation(c.operacao))
-          .filter(Boolean)
-      );
+      const operationSource =
+        userOperations.length > 0
+          ? userOperations
+          : (await this.getRouteConfigs(token, userEmail, true)).map(c => c.operacao);
+
+      const myOps = new Set(operationSource.map(normalizeOperation).filter(Boolean));
 
       console.log(`[COLETAS_PREVISTAS] Operações do usuário (${userEmail}):`, Array.from(myOps));
 
