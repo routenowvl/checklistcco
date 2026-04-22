@@ -44,6 +44,9 @@ export default defineConfig(({ mode }) => {
             ]
           },
           workbox: {
+            clientsClaim: true,
+            skipWaiting: true,
+            cleanupOutdatedCaches: true,
             globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
             runtimeCaching: [
               {
@@ -82,20 +85,6 @@ export default defineConfig(({ mode }) => {
                   expiration: {
                     maxEntries: 3,
                     maxAgeSeconds: 60 * 60 * 24 // 1 dia
-                  },
-                  cacheableResponse: {
-                    statuses: [0, 200]
-                  }
-                }
-              },
-              {
-                urlPattern: /^https:\/\/graph\.microsoft\.com\/.*/i,
-                handler: 'NetworkFirst',
-                options: {
-                  cacheName: 'microsoft-graph-cache',
-                  expiration: {
-                    maxEntries: 50,
-                    maxAgeSeconds: 60 * 5 // 5 minutos
                   },
                   cacheableResponse: {
                     statuses: [0, 200]
