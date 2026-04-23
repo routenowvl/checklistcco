@@ -59,7 +59,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
   const sendCooldownCacheKey = `send_report_cooldown_${(currentUser.email || '').toLowerCase()}`;
   const pendingSyncRef = useRef(false);
   const [pendingCloudSync, setPendingCloudSync] = useState({ saidas: 0, naoColetas: 0 });
-  const SEND_COOLDOWN_MS = 5 * 60 * 1000;
+  const SEND_COOLDOWN_MS = 60 * 60 * 1000;
 
   const cloudPendingTotal = pendingCloudSync.saidas + pendingCloudSync.naoColetas;
   const hasPendingCloudSync = cloudPendingTotal > 0;
@@ -123,9 +123,17 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     writeSendCooldownCache(cache);
   };
 
-  const formatRemainingMinutes = (remainingMs: number): string => {
-    const minutes = Math.ceil(remainingMs / 60000);
-    return `${minutes} minuto${minutes === 1 ? '' : 's'}`;
+  const formatRemainingTime = (remainingMs: number): string => {
+    const totalMinutes = Math.ceil(remainingMs / 60000);
+    if (totalMinutes >= 60) {
+      const hours = Math.floor(totalMinutes / 60);
+      const minutes = totalMinutes % 60;
+      if (minutes === 0) {
+        return `${hours} hora${hours === 1 ? '' : 's'}`;
+      }
+      return `${hours} hora${hours === 1 ? '' : 's'} e ${minutes} minuto${minutes === 1 ? '' : 's'}`;
+    }
+    return `${totalMinutes} minuto${totalMinutes === 1 ? '' : 's'}`;
   };
 
   const writePendingCache = (key: string, cache: Record<string, any>) => {
@@ -391,7 +399,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     const operationCooldownKey = `saida_operacao_${anchorOperation}`;
     const cooldownRemaining = getCooldownRemainingMs(operationCooldownKey);
     if (cooldownRemaining > 0) {
-      const tempoRestante = formatRemainingMinutes(cooldownRemaining);
+      const tempoRestante = formatRemainingTime(cooldownRemaining);
       setSendError(`⚠️ O próximo email de ${selectedOperacao} poderá ser enviado daqui a ${tempoRestante}.`);
       setTimeout(() => setSendError(null), 6000);
       return;
@@ -710,7 +718,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     const operationCooldownKey = `naocoleta_operacao_${anchorOperation}`;
     const cooldownRemaining = getCooldownRemainingMs(operationCooldownKey);
     if (cooldownRemaining > 0) {
-      const tempoRestante = formatRemainingMinutes(cooldownRemaining);
+      const tempoRestante = formatRemainingTime(cooldownRemaining);
       setNcSendError(`⚠️ O próximo email de ${selectedOperacaoNC} poderá ser enviado daqui a ${tempoRestante}.`);
       setTimeout(() => setNcSendError(null), 6000);
       return;
@@ -1030,7 +1038,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     const summaryCooldownKey = 'resumo_saidas_total';
     const summaryCooldownRemaining = getCooldownRemainingMs(summaryCooldownKey);
     if (summaryCooldownRemaining > 0) {
-      const tempoRestante = formatRemainingMinutes(summaryCooldownRemaining);
+      const tempoRestante = formatRemainingTime(summaryCooldownRemaining);
       setSendError(`⚠️ O próximo email de resumo de saídas poderá ser enviado daqui a ${tempoRestante}.`);
       setTimeout(() => setSendError(null), 6000);
       return;
@@ -1221,7 +1229,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     const summaryCooldownKey = 'resumo_naocoletas_total';
     const summaryCooldownRemaining = getCooldownRemainingMs(summaryCooldownKey);
     if (summaryCooldownRemaining > 0) {
-      const tempoRestante = formatRemainingMinutes(summaryCooldownRemaining);
+      const tempoRestante = formatRemainingTime(summaryCooldownRemaining);
       setNcSendError(`⚠️ O próximo email de resumo de não coletas poderá ser enviado daqui a ${tempoRestante}.`);
       setTimeout(() => setNcSendError(null), 6000);
       return;
