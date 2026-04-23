@@ -56,8 +56,10 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
   const [realNonCollections, setRealNonCollections] = useState<any[]>([]);
   const routePendingCacheKey = `route_departure_pending_cache_${(currentUser.email || '').toLowerCase()}`;
   const nonCollectionPendingCacheKey = `non_collections_pending_cache_${(currentUser.email || '').toLowerCase()}`;
+  const sendCooldownCacheKey = `send_report_cooldown_${(currentUser.email || '').toLowerCase()}`;
   const pendingSyncRef = useRef(false);
   const [pendingCloudSync, setPendingCloudSync] = useState({ saidas: 0, naoColetas: 0 });
+  const SEND_COOLDOWN_MS = 5 * 60 * 1000;
 
   const cloudPendingTotal = pendingCloudSync.saidas + pendingCloudSync.naoColetas;
   const hasPendingCloudSync = cloudPendingTotal > 0;
@@ -71,6 +73,59 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     } catch {
       return {};
     }
+  };
+
+  const readSendCooldownCache = (): Record<string, number> => {
+    try {
+      const raw = localStorage.getItem(sendCooldownCacheKey);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') return {};
+      return parsed;
+    } catch {
+      return {};
+    }
+  };
+
+  const writeSendCooldownCache = (cache: Record<string, number>) => {
+    try {
+      if (!cache || Object.keys(cache).length === 0) {
+        localStorage.removeItem(sendCooldownCacheKey);
+        return;
+      }
+      localStorage.setItem(sendCooldownCacheKey, JSON.stringify(cache));
+    } catch (err) {
+      console.warn('[SEND_COOLDOWN] Falha ao salvar cache local de cooldown:', err);
+    }
+  };
+
+  const getCooldownRemainingMs = (cooldownKey: string): number => {
+    const now = Date.now();
+    const cache = readSendCooldownCache();
+    const lastSentTs = Number(cache[cooldownKey] || 0);
+    if (!lastSentTs || Number.isNaN(lastSentTs)) return 0;
+
+    const elapsed = now - lastSentTs;
+    const remaining = SEND_COOLDOWN_MS - elapsed;
+
+    if (remaining <= 0) {
+      delete cache[cooldownKey];
+      writeSendCooldownCache(cache);
+      return 0;
+    }
+
+    return remaining;
+  };
+
+  const activateCooldown = (cooldownKey: string) => {
+    const cache = readSendCooldownCache();
+    cache[cooldownKey] = Date.now();
+    writeSendCooldownCache(cache);
+  };
+
+  const formatRemainingMinutes = (remainingMs: number): string => {
+    const minutes = Math.ceil(remainingMs / 60000);
+    return `${minutes} minuto${minutes === 1 ? '' : 's'}`;
   };
 
   const writePendingCache = (key: string, cache: Record<string, any>) => {
@@ -333,6 +388,15 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       return;
     }
 
+    const operationCooldownKey = `saida_operacao_${anchorOperation}`;
+    const cooldownRemaining = getCooldownRemainingMs(operationCooldownKey);
+    if (cooldownRemaining > 0) {
+      const tempoRestante = formatRemainingMinutes(cooldownRemaining);
+      setSendError(`⚠️ O próximo email de ${selectedOperacao} poderá ser enviado daqui a ${tempoRestante}.`);
+      setTimeout(() => setSendError(null), 6000);
+      return;
+    }
+
     // VERIFICA TRAVA PARA EVITAR ENVIO DUPLICADO (usa operação âncora para DEALE)
     const token = await getValidToken() || currentUser.accessToken;
     if (!token) {
@@ -577,6 +641,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
         }
 
         setSendSuccess(true);
+        activateCooldown(operationCooldownKey);
         setTimeout(() => setSendSuccess(false), 3000);
       } else {
         throw new Error(`Erro na resposta do webhook: ${response.status}`);
@@ -639,6 +704,15 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       console.error(`[SEND_NAO_COLETA_BLOCKED] Usuário tentou enviar operação não pertencente: ${selectedOperacaoNC}`);
       setNcSendError(`Erro: Você não tem permissão para enviar esta operação.`);
       setTimeout(() => setNcSendError(null), 5000);
+      return;
+    }
+
+    const operationCooldownKey = `naocoleta_operacao_${anchorOperation}`;
+    const cooldownRemaining = getCooldownRemainingMs(operationCooldownKey);
+    if (cooldownRemaining > 0) {
+      const tempoRestante = formatRemainingMinutes(cooldownRemaining);
+      setNcSendError(`⚠️ O próximo email de ${selectedOperacaoNC} poderá ser enviado daqui a ${tempoRestante}.`);
+      setTimeout(() => setNcSendError(null), 6000);
       return;
     }
 
@@ -923,6 +997,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
         }
 
         setNcSendSuccess(true);
+        activateCooldown(operationCooldownKey);
         setTimeout(() => setNcSendSuccess(false), 3000);
       } else {
         throw new Error(`Erro na resposta do webhook: ${response.status}`);
@@ -948,6 +1023,15 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
   const handleSendSummary = async () => {
     if (hasPendingCloudSync) {
       setSendError(cloudPendingMessage);
+      setTimeout(() => setSendError(null), 6000);
+      return;
+    }
+
+    const summaryCooldownKey = 'resumo_saidas_total';
+    const summaryCooldownRemaining = getCooldownRemainingMs(summaryCooldownKey);
+    if (summaryCooldownRemaining > 0) {
+      const tempoRestante = formatRemainingMinutes(summaryCooldownRemaining);
+      setSendError(`⚠️ O próximo email de resumo de saídas poderá ser enviado daqui a ${tempoRestante}.`);
       setTimeout(() => setSendError(null), 6000);
       return;
     }
@@ -1112,6 +1196,8 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
             }
           }
         }
+
+        activateCooldown(summaryCooldownKey);
       } else {
         throw new Error(`Erro na resposta do webhook: ${response.status}`);
       }
@@ -1128,6 +1214,15 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
   const handleSendNCSummary = async () => {
     if (hasPendingCloudSync) {
       setNcSendError(cloudPendingMessage);
+      setTimeout(() => setNcSendError(null), 6000);
+      return;
+    }
+
+    const summaryCooldownKey = 'resumo_naocoletas_total';
+    const summaryCooldownRemaining = getCooldownRemainingMs(summaryCooldownKey);
+    if (summaryCooldownRemaining > 0) {
+      const tempoRestante = formatRemainingMinutes(summaryCooldownRemaining);
+      setNcSendError(`⚠️ O próximo email de resumo de não coletas poderá ser enviado daqui a ${tempoRestante}.`);
       setTimeout(() => setNcSendError(null), 6000);
       return;
     }
@@ -1260,6 +1355,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       if (response.ok) {
         console.log('[RESUMO_NC] ✅ Resumo de não coletas enviado com sucesso');
         setNcSendSuccess(true);
+        activateCooldown(summaryCooldownKey);
         setTimeout(() => setNcSendSuccess(false), 3000);
       } else {
         throw new Error(`Erro na resposta do webhook: ${response.status}`);
