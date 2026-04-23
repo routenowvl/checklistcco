@@ -495,9 +495,6 @@ const NonCollectionsView: React.FC<{
       console.log('[COLETAS_PREVISTAS] Buscando para data:', dataISO);
       console.log('[COLETAS_PREVISTAS] Email do usuário:', currentUser.email);
       console.log('[COLETAS_PREVISTAS] Operações do usuário (userConfigs):', userOperations);
-      if (!userOperations.length) {
-        console.warn('[COLETAS_PREVISTAS] ALERTA: lista de operações vazia no momento da busca.');
-      }
 
       const coletas = await SharePointService.getColetasPrevistas(token, dataISO, currentUser.email, userOperations);
       setColetasPrevistas(coletas);

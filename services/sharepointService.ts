@@ -1787,11 +1787,13 @@ export const SharePointService = {
       const siteId = await getResolvedSiteId(token);
       const list = await findListByIdOrName(siteId, 'Coletas_previstas_cco', token);
       const { mapping } = await getListColumnMapping(siteId, list.id, token);
-      const colData = resolveFieldName(mapping, 'Data');
-      const colQnt = resolveFieldName(mapping, 'QntColeta');
-      const tzSaopaulo = 'America/Sao_Paulo';
 
-      const fetchAllItems = async (initialUrl: string, tag: string): Promise<any[]> => {
+      // Data em formato ISO para filtro
+      const startISO = `${date}T00:00:00Z`;
+      const endISO = `${date}T23:59:59Z`;
+      const colData = resolveFieldName(mapping, 'Data');
+
+      const fetchAllItems = async (initialUrl: string): Promise<any[]> => {
         let allItems: any[] = [];
         let nextUrl: string | null = initialUrl;
         let page = 0;
@@ -1801,9 +1803,9 @@ export const SharePointService = {
           allItems = allItems.concat(data.value || []);
           nextUrl = data['@odata.nextLink'] || null;
           page++;
-          console.log(`[COLETAS_PREVISTAS] (${tag}) Página ${page} carregada. Total acumulado: ${allItems.length}`);
-          if (page > 2000) {
-            console.warn(`[COLETAS_PREVISTAS] (${tag}) Limite de segurança de paginação atingido (2000 páginas).`);
+          console.log(`[COLETAS_PREVISTAS] Página ${page} carregada. Total acumulado: ${allItems.length}`);
+          if (page > 500) {
+            console.warn('[COLETAS_PREVISTAS] Limite de segurança de paginação atingido (500 páginas).');
             break;
           }
         }
@@ -1831,92 +1833,37 @@ export const SharePointService = {
           .toUpperCase()
           .replace(/\s+/g, ' ');
 
-      const formatYmdInTz = (dateObj: Date, timeZone: string): string => {
-        const parts = new Intl.DateTimeFormat('en-CA', {
-          timeZone,
-          year: 'numeric',
-          month: '2-digit',
-          day: '2-digit'
-        }).formatToParts(dateObj);
-        const y = parts.find(p => p.type === 'year')?.value || '';
-        const m = parts.find(p => p.type === 'month')?.value || '';
-        const d = parts.find(p => p.type === 'day')?.value || '';
-        return `${y}-${m}-${d}`;
-      };
+      const rangeFilter = `fields/${colData} ge '${startISO}' and fields/${colData} le '${endISO}'`;
+      console.log(`[COLETAS_PREVISTAS] URL base: /sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${rangeFilter}`);
 
-      const matchesTargetDate = (rawValue: any) => {
-        const raw = String(rawValue ?? '').trim();
-        if (!raw) {
-          return { match: false, mode: 'empty', ymdUTC: '', ymdSP: '', normalized: '' };
-        }
-
-        const normalized = normalizeDateField(raw);
-        if (/^\d{2}\/\d{2}\/\d{4}$/.test(raw)) {
-          const ymdBr = normalized;
-          return {
-            match: ymdBr === date,
-            mode: ymdBr === date ? 'br-date' : 'br-date-miss',
-            ymdUTC: ymdBr,
-            ymdSP: ymdBr,
-            normalized: ymdBr
-          };
-        }
-
-        const parsed = new Date(raw);
-        if (isNaN(parsed.getTime())) {
-          return { match: normalized === date, mode: normalized === date ? 'normalized-only' : 'invalid-date', ymdUTC: normalized, ymdSP: normalized, normalized };
-        }
-
-        const ymdUTC = parsed.toISOString().slice(0, 10);
-        const ymdSP = formatYmdInTz(parsed, tzSaopaulo);
-        const byNormalized = normalized === date;
-        const byUTC = ymdUTC === date;
-        const bySP = ymdSP === date;
-        const match = byUTC || bySP || byNormalized;
-
-        let mode = 'miss';
-        if (bySP) mode = 'tz-sp';
-        else if (byUTC) mode = 'tz-utc';
-        else if (byNormalized) mode = 'normalized';
-
-        return { match, mode, ymdUTC, ymdSP, normalized };
-      };
-
-      console.log('[COLETAS_PREVISTAS] --------------------------------------------------');
-      console.log(`[COLETAS_PREVISTAS] Início da consulta. dateTarget=${date} email=${userEmail}`);
-      console.log(`[COLETAS_PREVISTAS] timezoneOffset(min)=${new Date().getTimezoneOffset()} nowISO=${new Date().toISOString()} nowSP=${new Date().toLocaleString('pt-BR', { timeZone: tzSaopaulo })}`);
-      console.log(`[COLETAS_PREVISTAS] Lista=${list.id} colunaData=${colData} colunaQnt=${colQnt}`);
-
-      // Busca tudo paginado e filtra a data no cliente
-      const allRawItems = await fetchAllItems(
-        `/sites/${siteId}/lists/${list.id}/items?expand=fields&$top=200`,
-        'broad-fetch'
+      // 1) Tentativa padrão por intervalo de data/hora
+      let allItems = await fetchAllItems(
+        `/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${rangeFilter}&$top=100`
       );
 
-      console.log(`[COLETAS_PREVISTAS] Itens brutos totais da lista: ${allRawItems.length}`);
-      if (allRawItems.length > 0) {
-        console.log(`[COLETAS_PREVISTAS] Primeiro item bruto:`, JSON.stringify(allRawItems[0], null, 2));
+      // 2) Fallback para colunas Date-only (sem hora)
+      if (allItems.length === 0) {
+        const eqDateFilter = `fields/${colData} eq '${date}'`;
+        console.warn('[COLETAS_PREVISTAS] Busca por range retornou 0. Tentando filtro date-only (eq).');
+        allItems = await fetchAllItems(
+          `/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${eqDateFilter}&$top=100`
+        );
       }
 
-      let countEmpty = 0;
-      let countInvalid = 0;
-      let countMatchSp = 0;
-      let countMatchUtc = 0;
-      let countMatchNormalized = 0;
+      // 3) Fallback final: busca ampla com paginação e filtra a data no cliente
+      if (allItems.length === 0) {
+        console.warn('[COLETAS_PREVISTAS] Filtro no servidor retornou 0. Aplicando fallback com filtro de data no cliente.');
+        const broadItems = await fetchAllItems(
+          `/sites/${siteId}/lists/${list.id}/items?expand=fields&$top=100`
+        );
+        allItems = broadItems.filter((item: any) => normalizeDateField(item?.fields?.[colData]) === date);
+        console.log(`[COLETAS_PREVISTAS] Fallback cliente encontrou ${allItems.length} itens para ${date}.`);
+      }
 
-      const dayItems = allRawItems.filter((item: any) => {
-        const rawDate = item?.fields?.[colData];
-        const analysis = matchesTargetDate(rawDate);
-        if (analysis.mode === 'empty') countEmpty++;
-        if (analysis.mode === 'invalid-date') countInvalid++;
-        if (analysis.mode === 'tz-sp') countMatchSp++;
-        if (analysis.mode === 'tz-utc') countMatchUtc++;
-        if (analysis.mode === 'normalized' || analysis.mode === 'normalized-only' || analysis.mode === 'br-date') countMatchNormalized++;
-        return analysis.match;
-      });
-
-      console.log(`[COLETAS_PREVISTAS] Diagnóstico data: matchSP=${countMatchSp} matchUTC=${countMatchUtc} matchNormalized=${countMatchNormalized} emptyData=${countEmpty} invalidData=${countInvalid}`);
-      console.log(`[COLETAS_PREVISTAS] Total do dia (${date}) após filtro de data no cliente: ${dayItems.length}`);
+      console.log(`[COLETAS_PREVISTAS] Raw data count: ${allItems.length}`);
+      if (allItems.length > 0) {
+        console.log(`[COLETAS_PREVISTAS] Primeiro item raw:`, JSON.stringify(allItems[0], null, 2));
+      }
 
       // Busca configurações do usuário para filtrar pelas operações dele
       const operationSource =
@@ -1928,7 +1875,7 @@ export const SharePointService = {
 
       console.log(`[COLETAS_PREVISTAS] Operações do usuário (${userEmail}):`, Array.from(myOps));
 
-      const result = (dayItems || [])
+      const result = (allItems || [])
         .map((item: any): ColetaPrevista => {
           const f = item.fields;
           const dataRaw = f[colData];
@@ -1939,12 +1886,12 @@ export const SharePointService = {
           return {
             id: String(item.id),
             Title: operacaoTitle,
-            QntColeta: Number(f[colQnt] || 0),
+            QntColeta: Number(f[resolveFieldName(mapping, 'QntColeta')] || 0),
             Data: dataISO
           };
         });
 
-      console.log(`[COLETAS_PREVISTAS] Antes do filtro por operação:`, result.map(c => `${c.Title}=${c.QntColeta}`));
+      console.log(`[COLETAS_PREVISTAS] Antes do filtro:`, result.map(c => `${c.Title}=${c.QntColeta}`));
 
       const filtered = result.filter(c => myOps.size === 0 || myOps.has(normalizeOperation(c.Title)));
 
@@ -1956,9 +1903,8 @@ export const SharePointService = {
         }
       }
 
-      console.log(`[COLETAS_PREVISTAS] Depois do filtro por operação:`, filtered.map(c => `${c.Title}=${c.QntColeta}`));
+      console.log(`[COLETAS_PREVISTAS] Depois do filtro:`, filtered.map(c => `${c.Title}=${c.QntColeta}`));
       console.log(`[COLETAS_PREVISTAS] Total: ${filtered.length}, Soma QntColeta: ${filtered.reduce((sum, c) => sum + c.QntColeta, 0)}`);
-      console.log('[COLETAS_PREVISTAS] --------------------------------------------------');
 
       return filtered;
     } catch (e: any) {
