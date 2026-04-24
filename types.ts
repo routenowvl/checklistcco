@@ -56,6 +56,7 @@ export interface RouteDeparture {
   tempo: string;
   createdAt: string;
   checklistMotorista?: string; // Dados do checklist: "DD/MM/AAAA - **% - motivos"
+  causaRaiz?: string; // Causa raiz para rotas de Manutenção
   editingUser?: string; // E-mail do usuário editando esta linha (lock temporário)
   lockExpiresAt?: number; // Timestamp em ms quando o lock expira
 }

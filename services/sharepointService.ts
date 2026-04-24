@@ -893,7 +893,8 @@ export const SharePointService = {
           statusOp: f[resolveFieldName(mapping, 'StatusOp')] || "Previsto",
           tempo: f[resolveFieldName(mapping, 'TempGab')] || f[resolveFieldName(mapping, 'TempoGap')] || "",
           createdAt: f.Created || new Date().toISOString(),
-          checklistMotorista: f[resolveFieldName(mapping, 'ChecklistMotorista')] || ""
+          checklistMotorista: f[resolveFieldName(mapping, 'ChecklistMotorista')] || "",
+          causaRaiz: f[resolveFieldName(mapping, 'CausaRaiz')] || ""
         };
       });
 
@@ -970,7 +971,8 @@ export const SharePointService = {
             statusOp: f[resolveFieldName(mapping, 'StatusOp')] || "Pendente",
             tempo: f[resolveFieldName(mapping, 'TempGab')] || f[resolveFieldName(mapping, 'TempoGap')] || "",
             createdAt: f.Created || new Date().toISOString(),
-            checklistMotorista: f[resolveFieldName(mapping, 'ChecklistMotorista')] || ""
+            checklistMotorista: f[resolveFieldName(mapping, 'ChecklistMotorista')] || "",
+            causaRaiz: f[resolveFieldName(mapping, 'CausaRaiz')] || ""
           };
         });
 
@@ -1018,7 +1020,8 @@ export const SharePointService = {
         Operacao: departure.operacao,
         StatusOp: departure.statusOp,
         TempGab: departure.tempo,
-        ChecklistMotorista: departure.checklistMotorista || ''
+        ChecklistMotorista: departure.checklistMotorista || '',
+        CausaRaiz: departure.causaRaiz || ''
     };
 
     const fields: any = {};
@@ -1068,7 +1071,8 @@ export const SharePointService = {
         Operacao: departure.operacao,
         StatusOp: departure.statusOp,
         TempGab: departure.tempo,
-        ChecklistMotorista: departure.checklistMotorista || ''
+        ChecklistMotorista: departure.checklistMotorista || '',
+        CausaRaiz: departure.causaRaiz || ''
     };
 
     const fields: any = {};
@@ -1138,7 +1142,8 @@ export const SharePointService = {
                 Operacao: item.operacao, 
                 StatusOp: item.statusOp, 
                 TempGab: item.tempo, 
-                ChecklistMotorista: item.checklistMotorista || '' 
+                ChecklistMotorista: item.checklistMotorista || '',
+                CausaRaiz: item.causaRaiz || '' 
             };
             const histFields: any = {};
             Object.keys(raw).forEach(k => { const int = resolveFieldName(histMapping, k); if (histInternals.has(int)) histFields[int] = raw[k]; });

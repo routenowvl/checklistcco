@@ -30,6 +30,82 @@ const OBSERVATION_TEMPLATES: Record<string, string[]> = {
   'Infraestrutura': []
 };
 
+const CAUSAS_RAIZ_MANUTENCAO = [
+  'Ar condicionado',
+  'Cabo do cambio',
+  'Cambio',
+  'Transmissão',
+  'Embreagem',
+  'Retentor da Caixa Cambio',
+  'Trinca no Chassi',
+  'Tirante do Eixo',
+  'Ponta de eixo',
+  'Bomba de coleta',
+  'Multiplicadora',
+  'Cardan da bomba',
+  'Tomada de força',
+  'Cruzeta Bomba de Coleta',
+  'Geladeira do caminhão',
+  'Rastreador e camenras',
+  'Cruzeta Diferencial',
+  'Cardan do Diferencial',
+  'Rolamento do cardã',
+  'Diferencial',
+  'Alternador',
+  'Lanterna traseira',
+  'Farol',
+  'Correia do alternador',
+  'Vidro Eletrico',
+  'Sensor do filtro racor',
+  'Motor de partida',
+  'Fusiveis',
+  'Fusiveis : Farois / Ventuinha',
+  'Perca de força',
+  'Luz vermelha no Painel',
+  'Freio Estacionario',
+  'Cuica de Freio',
+  'Mangueira de ar Freio',
+  'Vazamento Cuica',
+  'Retentor de Cubo',
+  'Borrachas do tanque',
+  'DSPL',
+  'Vazamento Tanque de leite',
+  'Caminhão esquentando',
+  'Vazamento de Agua',
+  'Radiador',
+  'Valcula termostática',
+  'Motor Aquecendo',
+  'Motor Vazamento',
+  'Regeneração (DPF)',
+  'Retentor do Motor',
+  'Pneu furado',
+  'Pneu Careca',
+  'Revisão Atrasada',
+  'Lubrificação',
+  'Revisão do Cubo',
+  'Revisão do Freio',
+  'Valvula de engate',
+  'Engate do reboque',
+  'Mangueira de ar Suspensor',
+  'Suspensor do Truck',
+  'Suspensão',
+  'Molas',
+  'Balão do Truck',
+  'Pino de centro',
+  'Mola Tensora',
+  'Barra de direção',
+  'Levante do Trcuk',
+  'Bolsa de ar Suspensor do truck',
+  'Atrasos por manutenção anterior'
+];
+
+const normalizeCauseText = (value: string): string =>
+  String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+
 type ArchiveDivergentRoute = {
   route: RouteDeparture;
   missingFields: string[];
@@ -254,7 +330,7 @@ const RouteDepartureView: React.FC<{
   const [isDeale, setIsDeale] = useState(false);
 
   const [ghostRow, setGhostRow] = useState<Partial<RouteDeparture>>({
-    id: 'ghost', rota: '', data: getRouteDateForCurrentTime(), inicio: '', saida: '', motorista: '', placa: '', statusGeral: '', aviso: 'NÃO', operacao: '', statusOp: 'Previsto', tempo: '', semana: ''
+    id: 'ghost', rota: '', data: getRouteDateForCurrentTime(), inicio: '', saida: '', motorista: '', placa: '', statusGeral: '', aviso: 'NÃO', operacao: '', statusOp: 'Previsto', tempo: '', semana: '', causaRaiz: ''
   });
 
   // Controla qual célula da coluna SAÍDA está sendo editada (para mostrar valor completo com data)
@@ -368,7 +444,7 @@ const RouteDepartureView: React.FC<{
 
   // Estado para o popup de edição do checklist (GERAL)
   const [isChecklistEditModalOpen, setIsChecklistEditModalOpen] = useState(false);
-  const [checklistEditData, setChecklistEditData] = useState<{ routeId: string; data: string; porcentagem: string; motivos: string } | null>(null);
+  const [checklistEditData, setChecklistEditData] = useState<{ routeId: string; data: string; porcentagem: string; motivos: string; causaRaiz: string } | null>(null);
 
   const [histStart, setHistStart] = useState(getBrazilDate());
   const [histEnd, setHistEnd] = useState(getBrazilDate());
@@ -1371,16 +1447,18 @@ const RouteDepartureView: React.FC<{
     
     const porcentagem = percentMatch ? percentMatch[1] : '100';
     const motivos = motivosMatch && !currentText.includes(percentMatch ? percentMatch[0] : '') ? motivosMatch[1] : '';
+    const currentRoute = routes.find(r => r.id === routeId);
+    const causaRaiz = (currentRoute?.causaRaiz || '').trim();
 
-    setChecklistEditData({ routeId, data, porcentagem, motivos });
+    setChecklistEditData({ routeId, data, porcentagem, motivos, causaRaiz });
     setIsChecklistEditModalOpen(true);
   };
 
   // Aplica a edição do checklist
-  const applyChecklistEdit = () => {
+  const applyChecklistEdit = async () => {
     if (!checklistEditData) return;
 
-    const { routeId, data, porcentagem, motivos } = checklistEditData;
+    const { routeId, data, porcentagem, motivos, causaRaiz } = checklistEditData;
 
     // Salva apenas os dados do checklist (sem o texto "Último checklist realizado")
     let result = `${data} - ${porcentagem}%`;
@@ -1390,13 +1468,16 @@ const RouteDepartureView: React.FC<{
       result += ` - ${motivos}`;
     }
 
-    console.log('[CHECKLIST] Salvando:', { routeId, result });
-    setIsSyncing(true);
+    const causaRaizSanitizada = (causaRaiz || '').trim();
+    console.log('[CHECKLIST] Salvando:', { routeId, result, causaRaiz: causaRaizSanitizada });
+
     try {
-      updateCell(routeId, 'checklistMotorista', result);
-    } finally {
-      setIsSyncing(false);
+      await updateCell(routeId, 'checklistMotorista', result);
+      await updateCell(routeId, 'causaRaiz' as keyof RouteDeparture, causaRaizSanitizada);
+    } catch (e) {
+      console.error('[CHECKLIST] Erro ao salvar checklist/causa raiz:', e);
     }
+
     setIsChecklistEditModalOpen(false);
     setChecklistEditData(null);
   };
@@ -1566,7 +1647,8 @@ const RouteDepartureView: React.FC<{
                 prev.tempo !== route.tempo ||
                 prev.aviso !== route.aviso ||
                 prev.operacao !== route.operacao ||
-                prev.checklistMotorista !== route.checklistMotorista
+                prev.checklistMotorista !== route.checklistMotorista ||
+                prev.causaRaiz !== route.causaRaiz
               ) {
                 hasChanges = true;
                 break;
@@ -1849,6 +1931,7 @@ const RouteDepartureView: React.FC<{
     const saida = (route.saida || '').trim();
     const motivo = (route.motivo || '').trim();
     const observacao = (route.observacao || '').trim();
+    const causaRaiz = (route.causaRaiz || '').trim();
     const geral = (route.statusGeral || '').trim().toUpperCase();
 
     if (geral !== 'OK') {
@@ -1866,6 +1949,10 @@ const RouteDepartureView: React.FC<{
       if (!observacao) {
         missing.push('OBSERVAÇÃO');
       }
+    }
+
+    if (motivo === 'Manutenção' && !causaRaiz) {
+      missing.push('CAUSA RAIZ');
     }
 
     return missing;
@@ -2140,7 +2227,8 @@ const RouteDepartureView: React.FC<{
         operacao: newRouteData.operacao,
         statusOp: status,
         tempo: gap,
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        causaRaiz: ''
       };
 
       const newId = await SharePointService.updateDeparture(token, newRoute);
@@ -2211,7 +2299,7 @@ const RouteDepartureView: React.FC<{
     setRoutes(prev => [...prev, ...newRoutes]);
     setBulkStatus(null);
     setPendingBulkRoutes([]);
-    setGhostRow({ id: 'ghost', rota: '', data: getRouteDateForCurrentTime(), inicio: '', saida: '', motorista: '', placa: '', statusGeral: '', aviso: 'NÃO', operacao: '', statusOp: 'Previsto', tempo: '' });
+    setGhostRow({ id: 'ghost', rota: '', data: getRouteDateForCurrentTime(), inicio: '', saida: '', motorista: '', placa: '', statusGeral: '', aviso: 'NÃO', operacao: '', statusOp: 'Previsto', tempo: '', causaRaiz: '' });
 
     // DESABILITA o filtro por horário para não misturar as novas rotas na ordenação
     setIsSortByTimeEnabled(false);
@@ -2275,6 +2363,9 @@ const RouteDepartureView: React.FC<{
             finalValue = finalValue.replace(/[\s-]/g, '').toUpperCase();
         }
         const updatedRoute: RouteDeparture = { ...route, [field]: finalValue };
+        if (field === 'motivo' && (finalValue || '').trim() !== 'Manutenção') {
+            updatedRoute.causaRaiz = '';
+        }
         const config = userConfigs.find(c => c.operacao === updatedRoute.operacao);
         const { status, gap } = calculateStatusWithTolerance(updatedRoute.inicio, updatedRoute.saida, config?.tolerancia || "00:00:00", updatedRoute.data);
         updatedRoute.statusOp = status;
@@ -2343,7 +2434,7 @@ const RouteDepartureView: React.FC<{
             if (hasActiveFiltersOrSort) {
                 console.warn('[GHOST_ROTA] Bloqueado - filtros ou ordenação ativos');
                 setFilterBlockReason('ghost');
-                setGhostRow({ id: 'ghost', rota: '', data: getRouteDateForCurrentTime(), inicio: '', saida: '', motorista: '', placa: '', statusGeral: '', aviso: 'NÃO', operacao: '', statusOp: 'Previsto', tempo: '' });
+                setGhostRow({ id: 'ghost', rota: '', data: getRouteDateForCurrentTime(), inicio: '', saida: '', motorista: '', placa: '', statusGeral: '', aviso: 'NÃO', operacao: '', statusOp: 'Previsto', tempo: '', causaRaiz: '' });
                 setIsFilterBlockModalOpen(true);
                 return;
             }
@@ -2373,7 +2464,7 @@ const RouteDepartureView: React.FC<{
                 console.error('[UPDATE_BLOCKED] Usuário tentou salvar rota com operação não pertencente:', updatedGhost.operacao);
                 alert('⚠️ Erro: Você não tem permissão para adicionar rotas desta operação.');
                 // Reseta a ghost row para evitar dados inconsistentes
-                setGhostRow({ id: 'ghost', rota: '', data: getRouteDateForCurrentTime(), inicio: '', saida: '', motorista: '', placa: '', statusGeral: '', aviso: 'NÃO', operacao: '', statusOp: 'Previsto', tempo: '' });
+                setGhostRow({ id: 'ghost', rota: '', data: getRouteDateForCurrentTime(), inicio: '', saida: '', motorista: '', placa: '', statusGeral: '', aviso: 'NÃO', operacao: '', statusOp: 'Previsto', tempo: '', causaRaiz: '' });
                 return;
             }
 
@@ -2393,7 +2484,7 @@ const RouteDepartureView: React.FC<{
                 setIsSortByTimeEnabled(false);
                 setIsSortByOperacao(false);
 
-                setGhostRow({ id: 'ghost', rota: '', data: getRouteDateForCurrentTime(), inicio: '', saida: '', motorista: '', placa: '', statusGeral: '', aviso: 'NÃO', operacao: '', statusOp: 'Previsto', tempo: '' });
+                setGhostRow({ id: 'ghost', rota: '', data: getRouteDateForCurrentTime(), inicio: '', saida: '', motorista: '', placa: '', statusGeral: '', aviso: 'NÃO', operacao: '', statusOp: 'Previsto', tempo: '', causaRaiz: '' });
             } catch (e) {} finally { setIsSyncing(false); }
         } else {
             setGhostRow(updatedGhost);
@@ -2441,6 +2532,9 @@ const RouteDepartureView: React.FC<{
     // Se o campo alterado é 'motivo', reavalia o alerta de motorista
     if (field === 'motivo' && updatedRoute.motorista) {
       reevaluateMotoristAlert(id, updatedRoute.motorista, value);
+      if ((value || '').trim() !== 'Manutenção') {
+        updatedRoute.causaRaiz = '';
+      }
     }
 
     // O status GERAL é apenas um marcador visual, NÃO altera o statusOp da rota
@@ -2455,6 +2549,7 @@ const RouteDepartureView: React.FC<{
       if (updatedRoute.motivo !== 'Manutenção') {
         updatedRoute.motivo = "";
         updatedRoute.observacao = "";
+        updatedRoute.causaRaiz = "";
       }
     }
 
@@ -5221,6 +5316,40 @@ const RouteDepartureView: React.FC<{
                   />
                 </div>
               )}
+
+              <div className="space-y-2">
+                <label className="text-[10px] font-black uppercase text-slate-400">Causa Raiz (Manutenção)</label>
+                <input
+                  type="text"
+                  value={checklistEditData.causaRaiz}
+                  onChange={(e) => setChecklistEditData({ ...checklistEditData, causaRaiz: e.target.value })}
+                  placeholder="Digite para filtrar e selecione a causa..."
+                  className="w-full p-3 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-800 text-[11px] font-bold outline-none dark:text-white"
+                />
+                <div className="max-h-32 overflow-y-auto scrollbar-thin border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-900">
+                  {CAUSAS_RAIZ_MANUTENCAO
+                    .filter(item => {
+                      const query = normalizeCauseText(checklistEditData.causaRaiz || '');
+                      if (!query) return true;
+                      return normalizeCauseText(item).includes(query);
+                    })
+                    .slice(0, 10)
+                    .map((item) => (
+                      <button
+                        key={item}
+                        type="button"
+                        onClick={() => setChecklistEditData({ ...checklistEditData, causaRaiz: item })}
+                        className={`w-full text-left px-3 py-2 text-[10px] font-bold border-b border-slate-100 dark:border-slate-800 last:border-b-0 hover:bg-primary-50 dark:hover:bg-slate-800 transition-colors ${
+                          checklistEditData.causaRaiz === item
+                            ? 'text-primary-700 dark:text-primary-300 bg-primary-50/60 dark:bg-primary-900/20'
+                            : 'text-slate-700 dark:text-slate-300'
+                        }`}
+                      >
+                        {item}
+                      </button>
+                    ))}
+                </div>
+              </div>
             </div>
 
             <div className="flex gap-3">
