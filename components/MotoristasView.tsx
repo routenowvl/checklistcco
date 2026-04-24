@@ -25,6 +25,14 @@ const normalizeText = (value: string): string =>
     .toLowerCase()
     .trim();
 
+type CadastroFilterMode = 'complete' | 'incomplete';
+
+const hasOperationData = (value: string): boolean => String(value || '').trim().length > 0;
+const hasContactData = (value: string): boolean => {
+  const digits = sanitizeContact(value);
+  return digits.length >= 10;
+};
+
 const MotoristasView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
   const [motoristas, setMotoristas] = useState<Motorista[]>([]);
   const [userOperations, setUserOperations] = useState<string[]>([]);
@@ -39,6 +47,7 @@ const MotoristasView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [sortMode, setSortMode] = useState<'default' | 'az' | 'za'>('default');
+  const [cadastroFilter, setCadastroFilter] = useState<CadastroFilterMode>('incomplete');
   const backgroundSyncTimeoutRef = useRef<number | null>(null);
 
   const filteredAndSortedRows = useMemo(() => {
@@ -58,6 +67,13 @@ const MotoristasView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       });
     }
 
+    rows = rows.filter((row) => {
+      const operationOk = hasOperationData(row.operacao);
+      const contactOk = hasContactData(row.contato);
+      if (cadastroFilter === 'complete') return operationOk && contactOk;
+      return !operationOk || !contactOk;
+    });
+
     if (sortMode === 'az') {
       return [...rows].sort((a, b) =>
         String(a.motorista || '').localeCompare(String(b.motorista || ''), 'pt-BR', { sensitivity: 'base' })
@@ -71,7 +87,7 @@ const MotoristasView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     }
 
     return rows;
-  }, [motoristas, searchTerm, sortMode]);
+  }, [motoristas, searchTerm, sortMode, cadastroFilter]);
 
   const totalPages = Math.max(1, Math.ceil(filteredAndSortedRows.length / PAGE_SIZE));
 
@@ -122,7 +138,7 @@ const MotoristasView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
   useEffect(() => {
     setPage(1);
-  }, [searchTerm, sortMode]);
+  }, [searchTerm, sortMode, cadastroFilter]);
 
   const scheduleBackgroundSync = (): void => {
     if (backgroundSyncTimeoutRef.current !== null) {
@@ -258,7 +274,7 @@ const MotoristasView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
             </div>
           )}
 
-          <div className="mt-4 grid grid-cols-1 gap-3">
+          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
               <label className="text-[10px] font-black uppercase text-slate-400">Pesquisa</label>
               <div className="mt-1 flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-sm">
@@ -270,6 +286,17 @@ const MotoristasView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
                   className="w-full bg-transparent outline-none text-[11px] font-bold text-slate-800 dark:text-white placeholder:text-slate-400"
                 />
               </div>
+            </div>
+            <div>
+              <label className="text-[10px] font-black uppercase text-slate-400">Filtro de cadastro</label>
+              <select
+                value={cadastroFilter}
+                onChange={(e) => setCadastroFilter(e.target.value as CadastroFilterMode)}
+                className="mt-1 w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px] font-bold text-slate-800 dark:text-white outline-none"
+              >
+                <option value="complete">Cadastro completo</option>
+                <option value="incomplete">Cadastro incompleto (operação ou contato)</option>
+              </select>
             </div>
           </div>
         </div>
