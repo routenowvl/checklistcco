@@ -77,6 +77,8 @@ const MOTIVOS_COM_CAUSA_RAIZ = [
 ];
 
 const Culpabilidade_OPCOES = ['VIA', 'Cliente', 'Outros'];
+const COLETAS_PREVISTAS_CACHE_TTL_MS = 30 * 60 * 1000;
+const COLETAS_PREVISTAS_CACHE_PREFIX = 'nc_coletas_previstas_cache_v1';
 
 const NonCollectionsView: React.FC<{
   currentUser: User;
@@ -491,6 +493,32 @@ const NonCollectionsView: React.FC<{
       const userOperations = operationsOverride.length > 0
         ? operationsOverride
         : userConfigs.map(c => c.operacao);
+      const normalizedOps = Array.from(
+        new Set(
+          userOperations
+            .map(op => String(op || '').trim())
+            .filter(Boolean)
+        )
+      ).sort();
+
+      const cacheKey = `${COLETAS_PREVISTAS_CACHE_PREFIX}_${(currentUser.email || '').toLowerCase()}_${dataISO}_${normalizedOps.join('|')}`;
+
+      try {
+        const cachedRaw = localStorage.getItem(cacheKey);
+        if (cachedRaw) {
+          const cached = JSON.parse(cachedRaw) as { timestamp: number; data: ColetaPrevista[] };
+          const cacheAgeMs = Date.now() - Number(cached?.timestamp || 0);
+
+          if (Array.isArray(cached?.data) && cacheAgeMs >= 0 && cacheAgeMs <= COLETAS_PREVISTAS_CACHE_TTL_MS) {
+            setColetasPrevistas(cached.data);
+            console.log('[COLETAS_PREVISTAS][CACHE_HIT] Usando cache (idade em ms):', cacheAgeMs);
+            console.log('[COLETAS_PREVISTAS][CACHE_HIT] Total retornado:', cached.data.length);
+            return true;
+          }
+        }
+      } catch (cacheErr) {
+        console.warn('[COLETAS_PREVISTAS][CACHE] Falha ao ler cache local:', cacheErr);
+      }
 
       console.log('[COLETAS_PREVISTAS] Buscando para data:', dataISO);
       console.log('[COLETAS_PREVISTAS] Email do usuário:', currentUser.email);
@@ -498,6 +526,16 @@ const NonCollectionsView: React.FC<{
 
       const coletas = await SharePointService.getColetasPrevistas(token, dataISO, currentUser.email, userOperations);
       setColetasPrevistas(coletas);
+
+      try {
+        localStorage.setItem(cacheKey, JSON.stringify({
+          timestamp: Date.now(),
+          data: coletas
+        }));
+      } catch (cacheErr) {
+        console.warn('[COLETAS_PREVISTAS][CACHE] Falha ao salvar cache local:', cacheErr);
+      }
+
       console.log('[COLETAS_PREVISTAS] Total retornado:', coletas.length);
       console.log('[COLETAS_PREVISTAS] Detalhes:', coletas.map(c => `${c.Title}=${c.QntColeta}`));
       console.log('[COLETAS_PREVISTAS] Soma QntColeta:', coletas.reduce((sum, c) => sum + c.QntColeta, 0));
