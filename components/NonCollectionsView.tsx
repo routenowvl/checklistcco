@@ -28,6 +28,7 @@ interface NonCollection {
   ultimaColeta: string;
   Culpabilidade: string;
   operacao: string;
+  causaRaiz?: string;
 }
 
 // Lista de MOTIVOS no padrão "MOTIVO - Culpabilidade"
@@ -73,12 +74,89 @@ const MOTIVOS_COM_CAUSA_RAIZ = [
   'Eqp. Cheio/Eqp Menor',
   'Eqp. Cheio/Rota Atrasada',
   'Coletado Por Outra Transportadora',
-  'Descumprimento de roteirização'
+  'Descumprimento de roteirização',
+  'Problemas Mecânicos Equipamento'
 ];
 
 const Culpabilidade_OPCOES = ['VIA', 'Cliente', 'Outros'];
+const MOTIVO_CAUSA_RAIZ_OBRIGATORIA = 'Problemas Mecânicos Equipamento';
+const CAUSAS_RAIZ_MANUTENCAO = [
+  'Ar condicionado',
+  'Cabo do cambio',
+  'Cambio',
+  'Transmissão',
+  'Embreagem',
+  'Retentor da Caixa Cambio',
+  'Trinca no Chassi',
+  'Tirante do Eixo',
+  'Ponta de eixo',
+  'Bomba de coleta',
+  'Multiplicadora',
+  'Cardan da bomba',
+  'Tomada de força',
+  'Cruzeta Bomba de Coleta',
+  'Geladeira do caminhão',
+  'Rastreador e camenras',
+  'Cruzeta Diferencial',
+  'Cardan do Diferencial',
+  'Rolamento do cardã',
+  'Diferencial',
+  'Alternador',
+  'Lanterna traseira',
+  'Farol',
+  'Correia do alternador',
+  'Vidro Eletrico',
+  'Sensor do filtro racor',
+  'Motor de partida',
+  'Fusiveis',
+  'Fusiveis : Farois / Ventuinha',
+  'Perca de força',
+  'Luz vermelha no Painel',
+  'Freio Estacionario',
+  'Cuica de Freio',
+  'Mangueira de ar Freio',
+  'Vazamento Cuica',
+  'Retentor de Cubo',
+  'Borrachas do tanque',
+  'DSPL',
+  'Vazamento Tanque de leite',
+  'Caminhão esquentando',
+  'Vazamento de Agua',
+  'Radiador',
+  'Valcula termostática',
+  'Motor Aquecendo',
+  'Motor Vazamento',
+  'Regeneração (DPF)',
+  'Retentor do Motor',
+  'Pneu furado',
+  'Pneu Careca',
+  'Revisão Atrasada',
+  'Lubrificação',
+  'Revisão do Cubo',
+  'Revisão do Freio',
+  'Valvula de engate',
+  'Engate do reboque',
+  'Mangueira de ar Suspensor',
+  'Suspensor do Truck',
+  'Suspensão',
+  'Molas',
+  'Balão do Truck',
+  'Pino de centro',
+  'Mola Tensora',
+  'Barra de direção',
+  'Levante do Trcuk',
+  'Bolsa de ar Suspensor do truck',
+  'Atrasos por manutenção anterior'
+];
 const COLETAS_PREVISTAS_CACHE_TTL_MS = 30 * 60 * 1000;
 const COLETAS_PREVISTAS_CACHE_PREFIX = 'nc_coletas_previstas_cache_v1';
+
+const normalizeCauseText = (value: string): string =>
+  String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
 
 const NonCollectionsView: React.FC<{
   currentUser: User;
@@ -157,10 +235,13 @@ const NonCollectionsView: React.FC<{
     dataAcao: '',
     ultimaColeta: '',
     Culpabilidade: '',
-    operacao: ''
+    operacao: '',
+    causaRaiz: ''
   });
 
   const [showCausaRaiz, setShowCausaRaiz] = useState(false);
+  const [isCausaRaizModalOpen, setIsCausaRaizModalOpen] = useState(false);
+  const [causaRaizModalData, setCausaRaizModalData] = useState<{ rowId: string; causaRaiz: string } | null>(null);
 
   // Estados para modal de seleção de Operação (bulk paste)
   const [isOperationModalOpen, setIsOperationModalOpen] = useState(false);
@@ -197,11 +278,61 @@ const NonCollectionsView: React.FC<{
       if (CulpabilidadeAuto) {
         updatedGhost.Culpabilidade = CulpabilidadeAuto;
       }
+      if (!isMotivoComCausaRaizObrigatoria(value)) {
+        updatedGhost.causaRaiz = '';
+      }
       // Verifica se é motivo com causa raiz
       setShowCausaRaiz(MOTIVOS_COM_CAUSA_RAIZ.includes(value));
     }
 
     setGhostRow(updatedGhost);
+  };
+
+  const isMotivoComCausaRaizObrigatoria = (motivo?: string): boolean =>
+    String(motivo || '').trim() === MOTIVO_CAUSA_RAIZ_OBRIGATORIA;
+
+  const openCausaRaizModal = (rowId: string, currentValue: string) => {
+    setCausaRaizModalData({ rowId, causaRaiz: currentValue || '' });
+    setIsCausaRaizModalOpen(true);
+  };
+
+  const closeCausaRaizModal = () => {
+    setIsCausaRaizModalOpen(false);
+    setCausaRaizModalData(null);
+  };
+
+  const applyCausaRaizModal = async () => {
+    if (!causaRaizModalData) return;
+
+    const value = (causaRaizModalData.causaRaiz || '').trim();
+    const rowId = causaRaizModalData.rowId;
+
+    if (rowId === 'ghost') {
+      updateGhostCell('causaRaiz', value);
+      closeCausaRaizModal();
+      return;
+    }
+
+    setNonCollections(prev =>
+      prev.map(r => (r.id === rowId ? { ...r, causaRaiz: value } : r))
+    );
+
+    closeCausaRaizModal();
+
+    if (rowId && !rowId.startsWith('temp')) {
+      const token = await getValidToken() || currentUser.accessToken;
+      if (token) {
+        const rowToPersist = nonCollections.find(r => r.id === rowId);
+        if (rowToPersist) {
+          try {
+            await SharePointService.updateNonCollection(token, { ...rowToPersist, causaRaiz: value });
+            console.log('[NC_SAVE] Causa Raiz salva:', rowToPersist.rota);
+          } catch (e: any) {
+            console.error('[NC_SAVE] Erro ao salvar causa raiz:', e?.message || e);
+          }
+        }
+      }
+    }
   };
 
   const handleAddFromGhost = async () => {
@@ -263,7 +394,8 @@ const NonCollectionsView: React.FC<{
         dataAcao: calcularDataAcao(),
         ultimaColeta: '',
         Culpabilidade: ghostRow.Culpabilidade || 'Não se aplica',
-        operacao: ghostRow.operacao!
+        operacao: ghostRow.operacao!,
+        causaRaiz: ghostRow.causaRaiz || ''
       };
 
       // Salva no SharePoint e obtém o ID real
@@ -289,7 +421,8 @@ const NonCollectionsView: React.FC<{
         dataAcao: '',
         ultimaColeta: '',
         Culpabilidade: '',
-        operacao: ''
+        operacao: '',
+        causaRaiz: ''
       });
       setShowCausaRaiz(false);
     } catch (e: any) {
@@ -333,7 +466,8 @@ const NonCollectionsView: React.FC<{
           dataAcao: '',
           ultimaColeta: '',
           Culpabilidade: 'Não se aplica',
-          operacao
+          operacao,
+          causaRaiz: ''
         }));
         setNonCollections(prev => [...prev, ...newRecords]);
 
@@ -361,7 +495,8 @@ const NonCollectionsView: React.FC<{
           dataAcao: '',
           ultimaColeta: '',
           Culpabilidade: 'Não se aplica',
-          operacao
+          operacao,
+          causaRaiz: ''
         };
 
         try {
@@ -396,7 +531,8 @@ const NonCollectionsView: React.FC<{
         dataAcao: '',
         ultimaColeta: '',
         Culpabilidade: 'Não se aplica',
-        operacao
+        operacao,
+        causaRaiz: ''
       }));
       setNonCollections(prev => [...prev, ...newRecords]);
     } finally {
@@ -787,7 +923,8 @@ const NonCollectionsView: React.FC<{
         dataAcao: '',
         ultimaColeta: '',
         Culpabilidade: 'Não se aplica',
-        operacao: newNonCollectionData.operacao
+        operacao: newNonCollectionData.operacao,
+        causaRaiz: ''
       };
 
       // Salva no SharePoint e obtém o ID real
@@ -834,6 +971,23 @@ const NonCollectionsView: React.FC<{
 
     if (validNonCollections.length === 0) {
       alert("Não há não coletas das suas operações para arquivar.");
+      return;
+    }
+
+    const missingCausaRaiz = validNonCollections.filter(
+      nc => isMotivoComCausaRaizObrigatoria(nc.motivo) && !String(nc.causaRaiz || '').trim()
+    );
+    if (missingCausaRaiz.length > 0) {
+      const routeList = missingCausaRaiz
+        .map(nc => nc.rota || `ID ${nc.id}`)
+        .slice(0, 10)
+        .join(', ');
+      const complemento = missingCausaRaiz.length > 10 ? ` e mais ${missingCausaRaiz.length - 10}` : '';
+      alert(
+        `Não é possível arquivar.\n\n` +
+        `Preencha a Causa Raiz nas rotas com motivo "${MOTIVO_CAUSA_RAIZ_OBRIGATORIA}".\n` +
+        `Rotas pendentes: ${routeList}${complemento}.`
+      );
       return;
     }
 
@@ -1268,7 +1422,8 @@ const NonCollectionsView: React.FC<{
             dataAcao: field === 'dataAcao' ? finalValue : '',
             ultimaColeta: field === 'ultimaColeta' ? finalValue : '',
             Culpabilidade: field === 'Culpabilidade' ? finalValue : 'Não se aplica',
-            operacao: '' // Será definido pelo modal de operação
+            operacao: '', // Será definido pelo modal de operação
+            causaRaiz: ''
           };
 
           updatedRecords.push(newRecord);
@@ -1899,7 +2054,8 @@ const NonCollectionsView: React.FC<{
                                 motivo: selectedMotivo,
                                 Culpabilidade: CulpabilidadeAuto || row.Culpabilidade || '',
                                 acao: acaoAuto,
-                                dataAcao: dataAcaoAuto
+                                dataAcao: dataAcaoAuto,
+                                causaRaiz: isMotivoComCausaRaizObrigatoria(selectedMotivo) ? (row.causaRaiz || '') : ''
                               };
                               setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
                             }}
@@ -1929,6 +2085,8 @@ const NonCollectionsView: React.FC<{
 
                     // OBSERVAÇÃO - Textarea editável
                     if (key === 'observacao') {
+                      const precisaCausaRaiz = isMotivoComCausaRaizObrigatoria(row.motivo);
+                      const causaRaizPreenchida = !!String(row.causaRaiz || '').trim();
                       return (
                         <td
                           key={key}
@@ -1937,27 +2095,53 @@ const NonCollectionsView: React.FC<{
                           }`}
                           style={{ minWidth: colWidths[key] }}
                         >
-                          <textarea
-                            value={row.observacao}
-                            onChange={(e) => {
-                              const updated = { ...row, observacao: e.target.value };
-                              setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
-                            }}
-                            onBlur={() => {
-                              if (row.id !== 'ghost' && !row.id.startsWith('temp')) {
-                                void persistNonCollectionRow(row.id, 'Observação');
-                              }
-                            }}
-                            onPaste={(e) => {
-                              const val = e.clipboardData.getData('text');
-                              if (val.includes('\n')) {
-                                e.preventDefault();
-                                handleBulkPaste('observacao', val);
-                              }
-                            }}
-                            rows={1}
-                            className={`${inputClass} resize-none whitespace-pre-wrap break-words min-h-[48px]`}
-                          />
+                          <div className="relative">
+                            <textarea
+                              value={row.observacao}
+                              onChange={(e) => {
+                                const updated = { ...row, observacao: e.target.value };
+                                setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
+                              }}
+                              onBlur={() => {
+                                if (row.id !== 'ghost' && !row.id.startsWith('temp')) {
+                                  void persistNonCollectionRow(row.id, 'Observação');
+                                }
+                              }}
+                              onPaste={(e) => {
+                                const val = e.clipboardData.getData('text');
+                                if (val.includes('\n')) {
+                                  e.preventDefault();
+                                  handleBulkPaste('observacao', val);
+                                }
+                              }}
+                              rows={1}
+                              className={`${inputClass} resize-none whitespace-pre-wrap break-words min-h-[48px] ${precisaCausaRaiz ? 'pr-10' : ''}`}
+                            />
+                            {precisaCausaRaiz && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openCausaRaizModal(row.id, row.causaRaiz || '');
+                                }}
+                                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 opacity-70 hover:opacity-100 transition-opacity"
+                                title={causaRaizPreenchida ? 'Causa Raiz preenchida (clique para editar)' : 'Clique para preencher Causa Raiz'}
+                              >
+                                <svg
+                                  width="16"
+                                  height="16"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke={causaRaizPreenchida ? '#10b981' : '#ef4444'}
+                                  strokeWidth="3"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                >
+                                  <polyline points="20 6 9 17 4 12" />
+                                </svg>
+                              </button>
+                            )}
+                          </div>
                         </td>
                       );
                     }
@@ -2425,6 +2609,7 @@ const NonCollectionsView: React.FC<{
                             if (CulpabilidadeAuto) updateGhostCell('Culpabilidade', CulpabilidadeAuto);
                             if (acaoAuto) updateGhostCell('acao', acaoAuto);
                             if (dataAcaoAuto) updateGhostCell('dataAcao', dataAcaoAuto);
+                            if (!isMotivoComCausaRaizObrigatoria(selectedMotivo)) updateGhostCell('causaRaiz', '');
                           }}
                           className={`${inputClass} text-left cursor-pointer`}
                         >
@@ -2455,21 +2640,49 @@ const NonCollectionsView: React.FC<{
                   }
 
                   if (key === 'observacao') {
+                    const precisaCausaRaizGhost = isMotivoComCausaRaizObrigatoria(ghostRow.motivo || '');
+                    const causaRaizGhostPreenchida = !!String(ghostRow.causaRaiz || '').trim();
                     return (
                       <td key={`ghost-${key}`} className="p-0 border border-slate-200/30 dark:border-slate-800/30" style={{ verticalAlign: 'middle' }}>
-                        <textarea
-                          value={ghostRow.observacao || ''}
-                          onChange={(e) => updateGhostCell('observacao', e.target.value)}
-                          onPaste={(e) => {
-                            const val = e.clipboardData.getData('text');
-                            if (val.includes('\n')) {
-                              e.preventDefault();
-                              handleBulkPaste('observacao', val);
-                            }
-                          }}
-                          rows={1}
-                          className={`${inputClass} resize-none whitespace-pre-wrap break-words min-h-[48px]`}
-                        />
+                        <div className="relative">
+                          <textarea
+                            value={ghostRow.observacao || ''}
+                            onChange={(e) => updateGhostCell('observacao', e.target.value)}
+                            onPaste={(e) => {
+                              const val = e.clipboardData.getData('text');
+                              if (val.includes('\n')) {
+                                e.preventDefault();
+                                handleBulkPaste('observacao', val);
+                              }
+                            }}
+                            rows={1}
+                            className={`${inputClass} resize-none whitespace-pre-wrap break-words min-h-[48px] ${precisaCausaRaizGhost ? 'pr-10' : ''}`}
+                          />
+                          {precisaCausaRaizGhost && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openCausaRaizModal('ghost', ghostRow.causaRaiz || '');
+                              }}
+                              className="absolute right-2 top-1/2 -translate-y-1/2 p-1 opacity-70 hover:opacity-100 transition-opacity"
+                              title={causaRaizGhostPreenchida ? 'Causa Raiz preenchida (clique para editar)' : 'Clique para preencher Causa Raiz'}
+                            >
+                              <svg
+                                width="16"
+                                height="16"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke={causaRaizGhostPreenchida ? '#10b981' : '#ef4444'}
+                                strokeWidth="3"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              >
+                                <polyline points="20 6 9 17 4 12" />
+                              </svg>
+                            </button>
+                          )}
+                        </div>
                       </td>
                     );
                   }
@@ -3018,6 +3231,101 @@ const NonCollectionsView: React.FC<{
               >
                 Fechar
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isCausaRaizModalOpen && causaRaizModalData && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[220] flex items-center justify-center p-4 animate-in fade-in zoom-in-95 duration-200">
+          <div className={`rounded-[2rem] shadow-2xl w-full max-w-xl overflow-hidden border ${
+            isDarkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'
+          }`}>
+            <div className={`p-6 flex justify-between items-center ${
+              isDarkMode ? 'bg-slate-800 border-b border-slate-700' : 'bg-slate-100 border-b border-slate-200'
+            }`}>
+              <div className="flex items-center gap-3">
+                <Check size={20} className={isDarkMode ? 'text-emerald-400' : 'text-emerald-600'} />
+                <div>
+                  <h3 className={`text-sm font-black uppercase tracking-widest ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>
+                    Causa Raiz
+                  </h3>
+                  <p className={`text-[10px] font-bold uppercase tracking-wide ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                    Motivo: {MOTIVO_CAUSA_RAIZ_OBRIGATORIA}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={closeCausaRaizModal}
+                className={`p-2 rounded-full transition-all ${isDarkMode ? 'hover:bg-slate-700' : 'hover:bg-slate-200'}`}
+              >
+                <X size={18} className={isDarkMode ? 'text-slate-300' : 'text-slate-600'} />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <input
+                type="text"
+                value={causaRaizModalData.causaRaiz}
+                onChange={(e) => setCausaRaizModalData({ ...causaRaizModalData, causaRaiz: e.target.value })}
+                placeholder="Digite para filtrar e selecione a causa..."
+                className={`w-full p-3 rounded-xl border text-[11px] font-bold outline-none ${
+                  isDarkMode
+                    ? 'bg-slate-800 border-slate-700 text-white'
+                    : 'bg-slate-50 border-slate-300 text-slate-800'
+                }`}
+              />
+
+              <div className={`max-h-52 overflow-y-auto rounded-xl border ${
+                isDarkMode ? 'border-slate-700 bg-slate-900' : 'border-slate-200 bg-white'
+              }`}>
+                {CAUSAS_RAIZ_MANUTENCAO
+                  .filter(item => {
+                    const query = normalizeCauseText(causaRaizModalData.causaRaiz || '');
+                    if (!query) return true;
+                    return normalizeCauseText(item).includes(query);
+                  })
+                  .slice(0, 10)
+                  .map(item => (
+                    <button
+                      key={item}
+                      type="button"
+                      onClick={() => setCausaRaizModalData({ ...causaRaizModalData, causaRaiz: item })}
+                      className={`w-full text-left px-3 py-2 text-[10px] font-bold border-b last:border-b-0 transition-colors ${
+                        isDarkMode
+                          ? 'border-slate-800 hover:bg-slate-800 text-slate-300'
+                          : 'border-slate-100 hover:bg-slate-100 text-slate-700'
+                      } ${
+                        causaRaizModalData.causaRaiz === item
+                          ? isDarkMode
+                            ? 'bg-emerald-900/30 text-emerald-300'
+                            : 'bg-emerald-50 text-emerald-700'
+                          : ''
+                      }`}
+                    >
+                      {item}
+                    </button>
+                  ))}
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  onClick={applyCausaRaizModal}
+                  className="flex-1 py-3 bg-emerald-600 text-white rounded-xl font-black uppercase text-[10px] hover:bg-emerald-700 transition-all flex items-center justify-center gap-2"
+                >
+                  <Check size={16} /> Aplicar
+                </button>
+                <button
+                  onClick={closeCausaRaizModal}
+                  className={`flex-1 py-3 rounded-xl font-black uppercase text-[10px] transition-all flex items-center justify-center gap-2 ${
+                    isDarkMode
+                      ? 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  <X size={16} /> Cancelar
+                </button>
+              </div>
             </div>
           </div>
         </div>

@@ -29,6 +29,7 @@ export interface SPNonCollection {
   UltimaColeta: string;
   Culpabilidade: string;
   Operacao: string;
+  CausaRaiz?: string;
 }
 
 const SITE_PATH = import.meta.env.VITE_SHAREPOINT_SITE_PATH || "vialacteoscombr.sharepoint.com:/sites/CCO";
@@ -1508,7 +1509,8 @@ export const SharePointService = {
           dataAcao: f.DataA_x00e7__x00e3_o ? formatDateFromSharePoint(f.DataA_x00e7__x00e3_o) : '',
           ultimaColeta: f._x00da_ltimaColeta ? formatDateFromSharePoint(f._x00da_ltimaColeta) : '',
           Culpabilidade: f.Culpabilidade || '',
-          operacao: f.Opera_x00e7__x00e3_o || ''
+          operacao: f.Opera_x00e7__x00e3_o || '',
+          causaRaiz: f.CausaRaiz || ''
         };
       });
     } catch (e: any) {
@@ -1558,6 +1560,7 @@ export const SharePointService = {
       { const v = parseDateForSharePoint(nonCollection.ultimaColeta); if (v) payload._x00da_ltimaColeta = v; }
       if (nonCollection.Culpabilidade) payload.Culpabilidade = nonCollection.Culpabilidade;
       if (nonCollection.operacao) payload.Opera_x00e7__x00e3_o = nonCollection.operacao;
+      if (nonCollection.causaRaiz) payload.CausaRaiz = nonCollection.causaRaiz;
 
       console.log('[NonCollections] Salvando payload:', JSON.stringify(payload));
 
@@ -1603,6 +1606,7 @@ export const SharePointService = {
       { const v = parseDateForSharePoint(nonCollection.ultimaColeta); if (v) payload._x00da_ltimaColeta = v; }
       if (nonCollection.Culpabilidade) payload.Culpabilidade = nonCollection.Culpabilidade;
       if (nonCollection.operacao) payload.Opera_x00e7__x00e3_o = nonCollection.operacao;
+      if (nonCollection.causaRaiz) payload.CausaRaiz = nonCollection.causaRaiz;
 
       console.log('[NonCollections] Atualizando payload:', JSON.stringify(payload));
       console.log('[NonCollections] ID do item:', nonCollection.id);
@@ -1649,6 +1653,7 @@ export const SharePointService = {
       { const v = parseDateForSharePoint(nonCollection.ultimaColeta); if (v) payload._x00da_ltimaColeta = v; }
       if (nonCollection.Culpabilidade) payload.Culpabilidade = nonCollection.Culpabilidade;
       if (nonCollection.operacao) payload.Opera_x00e7__x00e3_o = nonCollection.operacao;
+      if (nonCollection.causaRaiz) payload.CausaRaiz = nonCollection.causaRaiz;
 
       await graphFetch(`/sites/${siteId}/lists/${historyListId}/items/${nonCollection.id}`, token, {
         method: 'PATCH',
@@ -1754,7 +1759,8 @@ export const SharePointService = {
             dataAcao: dataAcaoStr,
             ultimaColeta: ultimaColetaStr,
             Culpabilidade: f[resolveFieldName(mapping, 'Culpabilidade')] || "",
-            operacao: f[colOp] || ""
+            operacao: f[colOp] || "",
+            causaRaiz: f[resolveFieldName(mapping, 'CausaRaiz')] || ""
           };
         });
 
@@ -1972,7 +1978,8 @@ export const SharePointService = {
           'DataAção': safeToISO(item.dataAcao),
           'ÚltimaColeta': safeToISO(item.ultimaColeta),
           Culpabilidade: item.Culpabilidade,
-          'Operação': item.operacao
+          'Operação': item.operacao,
+          CausaRaiz: item.causaRaiz || ''
         };
 
         // Campos read-only que NÃO podem ser escritos via Graph API

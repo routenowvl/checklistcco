@@ -117,6 +117,7 @@ export interface NonCollection {
   ultimaColeta: string;
   Culpabilidade: string;
   operacao: string;
+  causaRaiz?: string;
 }
 
 export interface ColetaPrevista {
