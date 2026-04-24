@@ -3,7 +3,7 @@ import { RouteConfig, User, ColetaPrevista } from '../types';
 import { SharePointService } from '../services/sharepointService';
 import { getValidToken } from '../services/tokenService';
 import * as XLSX from 'xlsx';
-import { getWeekString, getNonCollectionDateForCurrentTime } from '../utils/dateUtils';
+import { getWeekString, getNonCollectionDateForCurrentTime, getBrazilDate } from '../utils/dateUtils';
 import {
   Clock, X, Loader2, RefreshCw, ShieldCheck,
   CheckCircle2, ChevronDown,
@@ -35,6 +35,9 @@ type NonCollectionArchiveDivergence = {
   row: NonCollection;
   missingFields: string[];
 };
+
+const HISTORY_EDIT_MAX_DAYS = 2;
+const DAY_IN_MS = 24 * 60 * 60 * 1000;
 
 // Lista de MOTIVOS no padrão "MOTIVO - Culpabilidade"
 const MOTIVOS_CulpabilidadeS: Record<string, string> = {
@@ -272,6 +275,7 @@ const NonCollectionsView: React.FC<{
   const [pendingHistoryEdits, setPendingHistoryEdits] = useState<Record<string, Partial<NonCollection>>>({});
   const [editingHistoryId, setEditingHistoryId] = useState<string | null>(null);
   const [editingHistoryField, setEditingHistoryField] = useState<keyof NonCollection | null>(null);
+  const [historyEditWarning, setHistoryEditWarning] = useState<string | null>(null);
   const [isSavingHistoryEdits, setIsSavingHistoryEdits] = useState(false);
   const [archiveValidationDivergences, setArchiveValidationDivergences] = useState<NonCollectionArchiveDivergence[] | null>(null);
 
@@ -1067,6 +1071,7 @@ const NonCollectionsView: React.FC<{
     archiveAbortRef.current = controller;
 
     setIsSearchingArchive(true);
+    setHistoryEditWarning(null);
     try {
       console.log('[NC_SEARCH_ARCHIVE] Requesting history from SharePoint list nao_coletas_web_hist...');
       const results = await SharePointService.getArchivedNonCollections(await getAccessToken(), currentUser.email, histStart, histEnd, controller.signal);
@@ -1079,10 +1084,11 @@ const NonCollectionsView: React.FC<{
           ? results.filter(r => !myOps.size || myOps.has(r.operacao))
           : [];
 
-        setArchivedResults(filtered);
-        setPendingHistoryEdits({});
-        setEditingHistoryId(null);
-        setEditingHistoryField(null);
+      setArchivedResults(filtered);
+      setPendingHistoryEdits({});
+      setEditingHistoryId(null);
+      setEditingHistoryField(null);
+      setHistoryEditWarning(null);
       }
     } catch (err: any) {
       if (err.name === 'AbortError') {
@@ -1153,6 +1159,57 @@ const NonCollectionsView: React.FC<{
     return '';
   };
 
+  const parseDateOnly = (dateStr: string | undefined): Date | null => {
+    const raw = String(dateStr || '').trim();
+    if (!raw) return null;
+
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+      const [year, month, day] = raw.split('-').map(Number);
+      return new Date(year, month - 1, day);
+    }
+
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(raw)) {
+      const [day, month, year] = raw.split('/').map(Number);
+      return new Date(year, month - 1, day);
+    }
+
+    if (raw.includes('T')) {
+      return parseDateOnly(raw.split('T')[0]);
+    }
+
+    return null;
+  };
+
+  const canEditHistoryRow = (row: NonCollection | undefined): boolean => {
+    if (!row) return false;
+
+    const rowISODate = normalizeDateToISO(row.data);
+    const rowDate = parseDateOnly(rowISODate);
+    const todayDate = parseDateOnly(getBrazilDate());
+    if (!rowDate || !todayDate) return true;
+
+    const diffDays = Math.floor((todayDate.getTime() - rowDate.getTime()) / DAY_IN_MS);
+    return diffDays <= HISTORY_EDIT_MAX_DAYS;
+  };
+
+  const showHistoryEditBlockedWarning = (row: NonCollection | undefined): void => {
+    const dataExibicao = row ? formatDisplayDate(row.data) : 'sem data';
+    setHistoryEditWarning(
+      `Edição bloqueada para ${row?.rota || 'o registro selecionado'} (${dataExibicao}). Apenas registros dos últimos ${HISTORY_EDIT_MAX_DAYS} dias podem ser alterados.`
+    );
+  };
+
+  const startHistoryCellEdit = (row: NonCollection, field: keyof NonCollection): void => {
+    if (!canEditHistoryRow(row)) {
+      showHistoryEditBlockedWarning(row);
+      return;
+    }
+
+    setHistoryEditWarning(null);
+    setEditingHistoryId(row.id);
+    setEditingHistoryField(field);
+  };
+
   const applyDateMask = (value: string): string => {
     if (value === '-') return value;
     let digits = value.replace(/\D/g, '').slice(0, 8);
@@ -1162,6 +1219,12 @@ const NonCollectionsView: React.FC<{
   };
 
   const handleUpdateHistoryCell = (id: string, field: keyof NonCollection, value: string) => {
+    const currentRow = archivedResults.find(r => r.id === id);
+    if (currentRow && !canEditHistoryRow(currentRow)) {
+      showHistoryEditBlockedWarning(currentRow);
+      return;
+    }
+
     setPendingHistoryEdits(prev => {
       const current = prev[id] || {};
       const next: Partial<NonCollection> = { ...current, [field]: value };
@@ -1185,6 +1248,35 @@ const NonCollectionsView: React.FC<{
     const editIds = Object.keys(pendingHistoryEdits);
     if (editIds.length === 0) return;
 
+    const blockedIds = editIds.filter((id) => {
+      const row = archivedResults.find(r => r.id === id);
+      return row ? !canEditHistoryRow(row) : false;
+    });
+
+    if (blockedIds.length > 0) {
+      const blockedRows = blockedIds
+        .map((id) => archivedResults.find(r => r.id === id))
+        .filter(Boolean) as NonCollection[];
+
+      setHistoryEditWarning(
+        `Edição bloqueada para ${blockedIds.length} registro(s) antigos (${blockedRows.slice(0, 3).map(r => r.rota || `ID ${r.id}`).join(', ')}${blockedRows.length > 3 ? '...' : ''}). Apenas registros dos últimos ${HISTORY_EDIT_MAX_DAYS} dias podem ser alterados.`
+      );
+
+      setPendingHistoryEdits((prev) => {
+        const next = { ...prev };
+        blockedIds.forEach((id) => { delete next[id]; });
+        return next;
+      });
+
+      if (editingHistoryId && blockedIds.includes(editingHistoryId)) {
+        setEditingHistoryId(null);
+        setEditingHistoryField(null);
+      }
+    }
+
+    const editableIds = editIds.filter((id) => !blockedIds.includes(id));
+    if (editableIds.length === 0) return;
+
     setIsSavingHistoryEdits(true);
     let successCount = 0;
     let errorCount = 0;
@@ -1196,7 +1288,7 @@ const NonCollectionsView: React.FC<{
         return;
       }
 
-      for (const id of editIds) {
+      for (const id of editableIds) {
         const edits = pendingHistoryEdits[id];
         const current = archivedResults.find(r => r.id === id);
         if (!current) continue;
@@ -1218,8 +1310,9 @@ const NonCollectionsView: React.FC<{
       }
 
       // Atualiza UI local após persistência
+      const editableIdsSet = new Set(editableIds);
       setArchivedResults(prev => prev.map(r => {
-        const edits = pendingHistoryEdits[r.id];
+        const edits = editableIdsSet.has(r.id) ? pendingHistoryEdits[r.id] : undefined;
         if (!edits) return r;
         const updated = { ...r, ...edits };
         const dataISO = normalizeDateToISO(updated.data);
@@ -1229,9 +1322,16 @@ const NonCollectionsView: React.FC<{
         return updated;
       }));
 
-      setPendingHistoryEdits({});
+      setPendingHistoryEdits((prev) => {
+        const next = { ...prev };
+        editableIds.forEach((id) => { delete next[id]; });
+        return next;
+      });
       setEditingHistoryId(null);
       setEditingHistoryField(null);
+      if (blockedIds.length === 0) {
+        setHistoryEditWarning(null);
+      }
 
       if (errorCount > 0) {
         alert(`Salvas ${successCount} edição(ões), com ${errorCount} erro(s).`);
@@ -1253,6 +1353,7 @@ const NonCollectionsView: React.FC<{
     setPendingHistoryEdits({});
     setEditingHistoryId(null);
     setEditingHistoryField(null);
+    setHistoryEditWarning(null);
   };
 
   // Enter salva todas as alterações pendentes no histórico
@@ -1698,7 +1799,7 @@ const NonCollectionsView: React.FC<{
           </button>
 
           <button
-            onClick={() => setIsHistoryModalOpen(true)}
+            onClick={() => { setHistoryEditWarning(null); setIsHistoryModalOpen(true); }}
             className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-black uppercase text-[10px] tracking-widest transition-all shadow-lg ${
               isDarkMode
                 ? 'bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700'
@@ -3474,6 +3575,13 @@ const NonCollectionsView: React.FC<{
               </div>
             </div>
 
+            {historyEditWarning && (
+              <div className="mx-6 mt-4 mb-2 px-4 py-3 rounded-xl border border-amber-300 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-700 text-amber-800 dark:text-amber-200 text-[11px] font-bold flex items-start gap-2">
+                <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+                <span>{historyEditWarning}</span>
+              </div>
+            )}
+
             {/* Filtros */}
             <div className={`p-4 border-b shrink-0 ${isDarkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'}`}>
               <div className="flex items-center gap-4 flex-wrap">
@@ -3659,7 +3767,7 @@ const NonCollectionsView: React.FC<{
                               />
                             ) : (
                               <div
-                                onClick={() => { setEditingHistoryId(nc.id); setEditingHistoryField('rota'); }}
+                                onClick={() => startHistoryCellEdit(nc, 'rota')}
                                 className={`font-bold cursor-pointer hover:bg-slate-200/60 dark:hover:bg-slate-700/60 rounded px-1 ${
                                   pending.rota ? 'bg-amber-200 dark:bg-amber-800/50' : ''
                                 }`}
@@ -3681,7 +3789,7 @@ const NonCollectionsView: React.FC<{
                               />
                             ) : (
                               <div
-                                onClick={() => { setEditingHistoryId(nc.id); setEditingHistoryField('data'); }}
+                                onClick={() => startHistoryCellEdit(nc, 'data')}
                                 className={`font-bold cursor-pointer hover:bg-slate-200/60 dark:hover:bg-slate-700/60 rounded px-1 ${
                                   pending.data ? 'bg-amber-200 dark:bg-amber-800/50' : ''
                                 }`}
@@ -3703,7 +3811,7 @@ const NonCollectionsView: React.FC<{
                               />
                             ) : (
                               <div
-                                onClick={() => { setEditingHistoryId(nc.id); setEditingHistoryField('codigo'); }}
+                                onClick={() => startHistoryCellEdit(nc, 'codigo')}
                                 className={`font-bold cursor-pointer hover:bg-slate-200/60 dark:hover:bg-slate-700/60 rounded px-1 ${
                                   pending.codigo ? 'bg-amber-200 dark:bg-amber-800/50' : ''
                                 }`}
@@ -3725,7 +3833,7 @@ const NonCollectionsView: React.FC<{
                               />
                             ) : (
                               <div
-                                onClick={() => { setEditingHistoryId(nc.id); setEditingHistoryField('produtor'); }}
+                                onClick={() => startHistoryCellEdit(nc, 'produtor')}
                                 className={`font-bold cursor-pointer hover:bg-slate-200/60 dark:hover:bg-slate-700/60 rounded px-1 ${
                                   pending.produtor ? 'bg-amber-200 dark:bg-amber-800/50' : ''
                                 }`}
@@ -3751,7 +3859,7 @@ const NonCollectionsView: React.FC<{
                               </select>
                             ) : (
                               <div
-                                onClick={() => { setEditingHistoryId(nc.id); setEditingHistoryField('motivo'); }}
+                                onClick={() => startHistoryCellEdit(nc, 'motivo')}
                                 className={`font-bold cursor-pointer hover:bg-slate-200/60 dark:hover:bg-slate-700/60 rounded px-1 truncate ${
                                   pending.motivo ? 'bg-amber-200 dark:bg-amber-800/50' : ''
                                 }`}
@@ -3774,7 +3882,7 @@ const NonCollectionsView: React.FC<{
                               />
                             ) : (
                               <div
-                                onClick={() => { setEditingHistoryId(nc.id); setEditingHistoryField('acao'); }}
+                                onClick={() => startHistoryCellEdit(nc, 'acao')}
                                 className={`font-bold cursor-pointer hover:bg-slate-200/60 dark:hover:bg-slate-700/60 rounded px-1 truncate ${
                                   pending.acao ? 'bg-amber-200 dark:bg-amber-800/50' : ''
                                 }`}
@@ -3797,7 +3905,7 @@ const NonCollectionsView: React.FC<{
                               />
                             ) : (
                               <div
-                                onClick={() => { setEditingHistoryId(nc.id); setEditingHistoryField('dataAcao'); }}
+                                onClick={() => startHistoryCellEdit(nc, 'dataAcao')}
                                 className={`font-bold cursor-pointer hover:bg-slate-200/60 dark:hover:bg-slate-700/60 rounded px-1 ${
                                   pending.dataAcao ? 'bg-amber-200 dark:bg-amber-800/50' : ''
                                 }`}
@@ -3826,7 +3934,7 @@ const NonCollectionsView: React.FC<{
                               />
                             ) : (
                               <div
-                                onClick={() => { setEditingHistoryId(nc.id); setEditingHistoryField('ultimaColeta'); }}
+                                onClick={() => startHistoryCellEdit(nc, 'ultimaColeta')}
                                 className={`font-bold cursor-pointer hover:bg-slate-200/60 dark:hover:bg-slate-700/60 rounded px-1 ${
                                   pending.ultimaColeta ? 'bg-amber-200 dark:bg-amber-800/50' : ''
                                 }`}
@@ -3852,7 +3960,7 @@ const NonCollectionsView: React.FC<{
                               </select>
                             ) : (
                               <div
-                                onClick={() => { setEditingHistoryId(nc.id); setEditingHistoryField('Culpabilidade'); }}
+                                onClick={() => startHistoryCellEdit(nc, 'Culpabilidade')}
                                 className={`inline-flex px-2 py-1 rounded-full text-[9px] font-black uppercase cursor-pointer ${
                                   (pending.Culpabilidade || nc.Culpabilidade) === 'VIA'
                                     ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'
@@ -3883,7 +3991,7 @@ const NonCollectionsView: React.FC<{
                               </select>
                             ) : (
                               <div
-                                onClick={() => { setEditingHistoryId(nc.id); setEditingHistoryField('operacao'); }}
+                                onClick={() => startHistoryCellEdit(nc, 'operacao')}
                                 className={`font-bold cursor-pointer hover:bg-slate-200/60 dark:hover:bg-slate-700/60 rounded px-1 ${
                                   pending.operacao ? 'bg-amber-200 dark:bg-amber-800/50' : ''
                                 }`}

@@ -45,6 +45,8 @@ export interface RouteDeparture {
   data: string;
   inicio: string;
   motorista: string;
+  codPessoa?: string;
+  contato?: string;
   placa: string;
   saida: string;
   motivo: string;

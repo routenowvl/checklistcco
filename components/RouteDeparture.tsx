@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { RouteDeparture, User, RouteOperationMapping, RouteConfig } from '../types';
+import { RouteDeparture, User, RouteOperationMapping, RouteConfig, Motorista } from '../types';
 import { SharePointService } from '../services/sharepointService';
 import { getValidToken } from '../services/tokenService';
 import * as XLSX from 'xlsx';
@@ -106,6 +106,37 @@ const normalizeCauseText = (value: string): string =>
     .toLowerCase()
     .trim();
 
+const normalizeOperationKey = (value: string): string =>
+  String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toUpperCase();
+
+type PredefinedMotoristaOption = {
+  nome: string;
+  codigo: string;
+  contato: string;
+};
+
+const mergeMotoristaOption = (
+  current: PredefinedMotoristaOption,
+  incoming: PredefinedMotoristaOption
+): PredefinedMotoristaOption => {
+  const keepCurrent =
+    Boolean(current.codigo) && Boolean(current.contato) &&
+    (!incoming.codigo || !incoming.contato);
+
+  if (keepCurrent) return current;
+
+  return {
+    nome: current.nome || incoming.nome,
+    codigo: current.codigo || incoming.codigo,
+    contato: current.contato || incoming.contato
+  };
+};
+
 type ArchiveDivergentRoute = {
   route: RouteDeparture;
   missingFields: string[];
@@ -116,6 +147,9 @@ type ArchiveStatusDivergence = {
   operacao: string;
   status: string;
 };
+
+const HISTORY_EDIT_MAX_DAYS = 2;
+const DAY_IN_MS = 24 * 60 * 60 * 1000;
 
 const FilterDropdown = ({ col, routes, colFilters, setColFilters, selectedFilters, setSelectedFilters, onClose, dropdownRef }: any) => {
     // Mapeia o nome da coluna para o campo real no objeto RouteDeparture
@@ -315,6 +349,7 @@ const RouteDepartureView: React.FC<{
   const [routes, setRoutes] = useState<RouteDeparture[]>([]);
   const [userConfigs, setUserConfigs] = useState<RouteConfig[]>([]);
   const [routeMappings, setRouteMappings] = useState<RouteOperationMapping[]>([]);
+  const [motoristas, setMotoristas] = useState<Motorista[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
@@ -457,6 +492,7 @@ const RouteDepartureView: React.FC<{
   const [pendingHistoryEdits, setPendingHistoryEdits] = useState<Record<string, Partial<RouteDeparture>>>({});
   const [editingHistoryId, setEditingHistoryId] = useState<string | null>(null);
   const [editingHistoryField, setEditingHistoryField] = useState<keyof RouteDeparture | null>(null);
+  const [historyEditWarning, setHistoryEditWarning] = useState<string | null>(null);
 
   // Estados para modal de adicionar rota
   const [isAddRouteModalOpen, setIsAddRouteModalOpen] = useState(false);
@@ -496,6 +532,7 @@ const RouteDepartureView: React.FC<{
   const [isSortByOperacao, setIsSortByOperacao] = useState(false);
 
   const [activeObsId, setActiveObsId] = useState<string | null>(null);
+  const [activeMotoristaDropdownId, setActiveMotoristaDropdownId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [activeFilterCol, setActiveFilterCol] = useState<string | null>(null);
   const [colFilters, setColFilters] = useState<Record<string, string>>(() => {
@@ -552,6 +589,7 @@ const RouteDepartureView: React.FC<{
   // const blockedUntilRef = useRef<Record<string, number>>({});
 
   const obsDropdownRef = useRef<HTMLDivElement>(null);
+  const motoristaDropdownRef = useRef<HTMLDivElement>(null);
   const obsTextareaRefs = useRef<Record<string, HTMLTextAreaElement>>({});
   const resizingRef = useRef<{ col: string; startX: number; startWidth: number } | null>(null);
   const filterDropdownRef = useRef<HTMLDivElement>(null);
@@ -1003,6 +1041,9 @@ const RouteDepartureView: React.FC<{
     const handleClickOutside = (event: MouseEvent) => {
       if (filterDropdownRef.current && !filterDropdownRef.current.contains(event.target as Node)) {
         setActiveFilterCol(null);
+      }
+      if (motoristaDropdownRef.current && !motoristaDropdownRef.current.contains(event.target as Node)) {
+        setActiveMotoristaDropdownId(null);
       }
       // Fechar dropdown de observação ao clicar fora
       if (obsDropdownRef.current && !obsDropdownRef.current.contains(event.target as Node)) {
@@ -1566,10 +1607,11 @@ const RouteDepartureView: React.FC<{
       console.log('[LOAD_DATA] Buscando dados atualizados...', isBackgroundRefresh ? '(segundo plano)' : '(inicial)');
       console.log('[LOAD_DATA] Usuário logado:', currentUser.email);
 
-      const [configs, mappings, spData] = await Promise.all([
+      const [configs, mappings, spData, motoristasData] = await Promise.all([
         SharePointService.getRouteConfigs(token, currentUser.email, true), // force refresh
         SharePointService.getRouteOperationMappings(token),
-        SharePointService.getDepartures(token, true) // force refresh
+        SharePointService.getDepartures(token, true), // force refresh
+        SharePointService.getMotoristas(token, !isBackgroundRefresh)
       ]);
 
       console.log('[LOAD_DATA] Configurações carregadas:', configs?.length || 0);
@@ -1582,6 +1624,7 @@ const RouteDepartureView: React.FC<{
 
       setUserConfigs(configs || []);
       setRouteMappings(mappings || []);
+      setMotoristas(motoristasData || []);
 
       // Filtra rotas APENAS das operações do usuário logado
       const myOps = new Set((configs || []).map(c => c.operacao));
@@ -1639,6 +1682,8 @@ const RouteDepartureView: React.FC<{
                 prev.inicio !== route.inicio ||
                 prev.saida !== route.saida ||
                 prev.motorista !== route.motorista ||
+                prev.codPessoa !== route.codPessoa ||
+                prev.contato !== route.contato ||
                 prev.placa !== route.placa ||
                 prev.motivo !== route.motivo ||
                 prev.observacao !== route.observacao ||
@@ -1760,6 +1805,7 @@ const RouteDepartureView: React.FC<{
     archiveAbortRef.current = controller;
 
     setIsSearchingArchive(true);
+    setHistoryEditWarning(null);
     try {
         console.log('[SEARCH_ARCHIVE] Requesting history from SharePoint list {856bf9d5-6081-4360-bcad-e771cbabfda8}...');
         const results = await SharePointService.getArchivedDepartures(await getAccessToken(), null, histStart, histEnd, controller.signal);
@@ -1774,6 +1820,9 @@ const RouteDepartureView: React.FC<{
             : [];
 
           setArchivedResults(filtered);
+          setEditingHistoryId(null);
+          setEditingHistoryField(null);
+          setPendingHistoryEdits({});
         }
     } catch (err: any) {
         if (err.name === 'AbortError') {
@@ -2403,14 +2452,19 @@ const RouteDepartureView: React.FC<{
     setIsSyncing(false);
   };
 
-  const updateCell = async (id: string, field: keyof RouteDeparture, value: string) => {
+  const updateCell = async (
+    id: string,
+    field: keyof RouteDeparture,
+    value: string,
+    extraUpdates: Partial<RouteDeparture> = {}
+  ) => {
     // Normalização automática da placa: remove espaços e hífens
     if (field === 'placa') {
       value = value.replace(/[\s-]/g, '').toUpperCase();
     }
 
     if (id === 'ghost') {
-        let updatedGhost = { ...ghostRow, [field]: value };
+        let updatedGhost = { ...ghostRow, [field]: value, ...extraUpdates };
 
         // Verifica se é campo 'rota' e se tem múltiplas linhas (paste)
         if (field === 'rota' && (value.includes('\n') || value.includes(';'))) {
@@ -2423,7 +2477,7 @@ const RouteDepartureView: React.FC<{
             }
             // Se chegou aqui, é uma única linha com newline no final - remove o newline
             value = lines[0] || '';
-            updatedGhost = { ...ghostRow, [field]: value };
+            updatedGhost = { ...ghostRow, [field]: value, ...extraUpdates };
         }
 
         // Se é campo 'rota' e tem valor, abre popup de mapeamento SEMPRE
@@ -2519,7 +2573,7 @@ const RouteDepartureView: React.FC<{
       return;
     }
 
-    let updatedRoute = { ...route, [field]: value };
+    let updatedRoute = { ...route, [field]: value, ...extraUpdates };
 
     // Validação específica para MONTES CLAROS + FÁBRICA quando editar observação
     if (field === 'observacao' && value) {
@@ -2566,7 +2620,66 @@ const RouteDepartureView: React.FC<{
     }
   };
 
+  const parseHistoryDate = (value: string | undefined): Date | null => {
+    const raw = String(value || '').trim();
+    if (!raw) return null;
+
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+      const [year, month, day] = raw.split('-').map(Number);
+      return new Date(year, month - 1, day);
+    }
+
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(raw)) {
+      const [day, month, year] = raw.split('/').map(Number);
+      return new Date(year, month - 1, day);
+    }
+
+    if (raw.includes('T')) {
+      return parseHistoryDate(raw.split('T')[0]);
+    }
+
+    return null;
+  };
+
+  const formatHistoryDateBR = (value: string | undefined): string => {
+    const parsed = parseHistoryDate(value);
+    if (!parsed) return String(value || 'sem data');
+    return `${String(parsed.getDate()).padStart(2, '0')}/${String(parsed.getMonth() + 1).padStart(2, '0')}/${parsed.getFullYear()}`;
+  };
+
+  const canEditHistoryRoute = (route: RouteDeparture | undefined): boolean => {
+    if (!route) return false;
+
+    const routeDate = parseHistoryDate(route.data);
+    const todayDate = parseHistoryDate(getBrazilDate());
+    if (!routeDate || !todayDate) return true;
+
+    const diffDays = Math.floor((todayDate.getTime() - routeDate.getTime()) / DAY_IN_MS);
+    return diffDays <= HISTORY_EDIT_MAX_DAYS;
+  };
+
+  const startHistoryCellEdit = (route: RouteDeparture, field: keyof RouteDeparture): void => {
+    if (!canEditHistoryRoute(route)) {
+      setHistoryEditWarning(
+        `Edição bloqueada para ${route.rota || 'a rota selecionada'} (${formatHistoryDateBR(route.data)}). Apenas registros dos últimos ${HISTORY_EDIT_MAX_DAYS} dias podem ser alterados.`
+      );
+      return;
+    }
+
+    setHistoryEditWarning(null);
+    setEditingHistoryId(route.id);
+    setEditingHistoryField(field);
+  };
+
   const handleUpdateHistoryCell = (id: string, field: keyof RouteDeparture, value: string) => {
+    const route = archivedResults.find(r => r.id === id);
+    if (route && !canEditHistoryRoute(route)) {
+      setHistoryEditWarning(
+        `Edição bloqueada para ${route.rota || 'a rota selecionada'} (${formatHistoryDateBR(route.data)}). Apenas registros dos últimos ${HISTORY_EDIT_MAX_DAYS} dias podem ser alterados.`
+      );
+      return;
+    }
+
     // Normalização automática da placa: remove espaços e hífens
     if (field === 'placa') {
       value = value.replace(/[\s-]/g, '').toUpperCase();
@@ -2587,7 +2700,37 @@ const RouteDepartureView: React.FC<{
     const editIds = Object.keys(pendingHistoryEdits);
     if (editIds.length === 0) return;
 
-    console.log(`[HISTORY_BATCH_SAVE] Salvando ${editIds.length} edições pendentes...`);
+    const blockedIds = editIds.filter((id) => {
+      const route = archivedResults.find(r => r.id === id);
+      return route ? !canEditHistoryRoute(route) : false;
+    });
+
+    if (blockedIds.length > 0) {
+      const blockedNames = blockedIds
+        .map((id) => archivedResults.find(r => r.id === id))
+        .filter(Boolean)
+        .map((route) => route!.rota || `ID ${route!.id}`);
+
+      setHistoryEditWarning(
+        `Edição bloqueada para ${blockedIds.length} registro(s) antigos (${blockedNames.slice(0, 3).join(', ')}${blockedNames.length > 3 ? '...' : ''}). Apenas registros dos últimos ${HISTORY_EDIT_MAX_DAYS} dias podem ser alterados.`
+      );
+
+      setPendingHistoryEdits((prev) => {
+        const next = { ...prev };
+        blockedIds.forEach((id) => { delete next[id]; });
+        return next;
+      });
+
+      if (editingHistoryId && blockedIds.includes(editingHistoryId)) {
+        setEditingHistoryId(null);
+        setEditingHistoryField(null);
+      }
+    }
+
+    const editableIds = editIds.filter((id) => !blockedIds.includes(id));
+    if (editableIds.length === 0) return;
+
+    console.log(`[HISTORY_BATCH_SAVE] Salvando ${editableIds.length} edições pendentes...`);
     setIsSyncing(true);
 
     let successCount = 0;
@@ -2596,7 +2739,7 @@ const RouteDepartureView: React.FC<{
     try {
       const token = await getAccessToken();
       
-      for (const id of editIds) {
+      for (const id of editableIds) {
         const edits = pendingHistoryEdits[id];
         const route = archivedResults.find(r => r.id === id);
         
@@ -2633,8 +2776,9 @@ const RouteDepartureView: React.FC<{
       }
 
       // Atualiza archivedResults localmente com as edições salvas (feedback imediato)
+      const editableIdsSet = new Set(editableIds);
       setArchivedResults(prev => prev.map(r => {
-        const edits = pendingHistoryEdits[r.id!];
+        const edits = editableIdsSet.has(r.id!) ? pendingHistoryEdits[r.id!] : undefined;
         if (!edits) return r;
 
         const updated = { ...r, ...edits };
@@ -2656,9 +2800,16 @@ const RouteDepartureView: React.FC<{
       }));
 
       // Limpa edições pendentes
-      setPendingHistoryEdits({});
+      setPendingHistoryEdits((prev) => {
+        const next = { ...prev };
+        editableIds.forEach((id) => { delete next[id]; });
+        return next;
+      });
       setEditingHistoryId(null);
       setEditingHistoryField(null);
+      if (blockedIds.length === 0) {
+        setHistoryEditWarning(null);
+      }
 
       // Feedback para o usuário
       if (errorCount === 0) {
@@ -3059,6 +3210,70 @@ const RouteDepartureView: React.FC<{
     return hasTextFilters || hasSelectionFilters || hasSortEnabled;
   }, [colFilters, selectedFilters, isSortByTimeEnabled]);
 
+  const predefinedMotoristasByOperation = useMemo(() => {
+    const grouped = new Map<string, Map<string, PredefinedMotoristaOption>>();
+
+    motoristas.forEach((item) => {
+      const operationKey = normalizeOperationKey(item.operacao);
+      const motoristaNome = String(item.motorista || '').trim();
+      if (!operationKey || !motoristaNome) return;
+
+      if (!grouped.has(operationKey)) {
+        grouped.set(operationKey, new Map<string, PredefinedMotoristaOption>());
+      }
+
+      const motoristaKey = normalizeOperationKey(motoristaNome);
+      const motoristaOption: PredefinedMotoristaOption = {
+        nome: motoristaNome,
+        codigo: String(item.codigo || '').trim(),
+        contato: String(item.contato || '').replace(/\D/g, '')
+      };
+
+      const namesMap = grouped.get(operationKey)!;
+      const existing = namesMap.get(motoristaKey);
+      namesMap.set(motoristaKey, existing ? mergeMotoristaOption(existing, motoristaOption) : motoristaOption);
+    });
+
+    const result: Record<string, PredefinedMotoristaOption[]> = {};
+    grouped.forEach((value, key) => {
+      result[key] = Array.from(value.values()).sort((a, b) =>
+        a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' })
+      );
+    });
+
+    return result;
+  }, [motoristas]);
+
+  const dedupeMotoristaOptions = (options: PredefinedMotoristaOption[]): PredefinedMotoristaOption[] => {
+    const map = new Map<string, PredefinedMotoristaOption>();
+    options.forEach((option) => {
+      const key = normalizeOperationKey(option.nome);
+      const existing = map.get(key);
+      map.set(key, existing ? mergeMotoristaOption(existing, option) : option);
+    });
+
+    return Array.from(map.values()).sort((a, b) =>
+      a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' })
+    );
+  };
+
+  const getPredefinedMotoristasForOperation = (operacao: string): PredefinedMotoristaOption[] => {
+    const operationKey = normalizeOperationKey(operacao);
+    if (!operationKey) return [];
+
+    const direct = predefinedMotoristasByOperation[operationKey] || [];
+    if (direct.length > 0) return direct;
+
+    if (operationKey === 'DEALE') {
+      const dealeDrivers = getDealeRealOperations().flatMap(op =>
+        predefinedMotoristasByOperation[normalizeOperationKey(op)] || []
+      );
+      return dedupeMotoristaOptions(dealeDrivers);
+    }
+
+    return [];
+  };
+
   const filteredRoutes = useMemo(() => {
     // Mapeia o nome da coluna para o campo real no objeto RouteDeparture
     const fieldMap: Record<string, string> = {
@@ -3236,7 +3451,7 @@ const RouteDepartureView: React.FC<{
           >
             <CheckCircle2 size={16} /> Adicionar Rota
           </button>
-          <button onClick={() => setIsHistoryModalOpen(true)} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] tracking-wide transition-all shadow-sm ${isDarkMode ? 'bg-slate-800 text-slate-300 hover:bg-slate-700 border-slate-700' : 'bg-white text-slate-800 hover:bg-slate-50 hover:border-slate-500 border-slate-400'}`}><Database size={16} /> Histórico</button>
+          <button onClick={() => { setHistoryEditWarning(null); setIsHistoryModalOpen(true); }} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] tracking-wide transition-all shadow-sm ${isDarkMode ? 'bg-slate-800 text-slate-300 hover:bg-slate-700 border-slate-700' : 'bg-white text-slate-800 hover:bg-slate-50 hover:border-slate-500 border-slate-400'}`}><Database size={16} /> Histórico</button>
           <button onClick={handleArchiveAll} disabled={isSyncing || filteredRoutes.length === 0} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] tracking-wide transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed ${isDarkMode ? 'bg-slate-800 text-slate-300 hover:bg-slate-700 border-slate-700' : 'bg-white text-slate-800 hover:bg-slate-50 hover:border-slate-500 border-slate-400'}`}><Archive size={16} /> Arquivar</button>
         </div>
       </div>
@@ -3426,9 +3641,22 @@ const RouteDepartureView: React.FC<{
                     }
 
                     if (col.id === 'motorista') {
+                      const hasMotoristAlert = !!(
+                        route.motorista &&
+                        route.motivo === 'Mão de obra' &&
+                        motoristAlerts[route.motorista] &&
+                        motoristAlerts[route.motorista].count > 0
+                      );
+                      const predefinedMotoristaOptions = getPredefinedMotoristasForOperation(route.operacao || '');
+                      const showMotoristaPicker = predefinedMotoristaOptions.length > 0;
+                      const isMotoristaDropdownOpen = activeMotoristaDropdownId === route.id;
+
                       return (
                         <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
-                          <div className="relative flex items-center">
+                          <div
+                            ref={isMotoristaDropdownOpen ? motoristaDropdownRef : null}
+                            className="relative flex items-center"
+                          >
                             <input
                                 type="text"
                                 value={route.motorista}
@@ -3440,10 +3668,52 @@ const RouteDepartureView: React.FC<{
                                         handleMultilinePaste('motorista', rowIndex, val);
                                     }
                                 }}
-                                className={`${inputClass} text-center w-full`}
+                                className={`${inputClass} text-center w-full ${showMotoristaPicker ? (hasMotoristAlert ? 'pr-16' : 'pr-10') : ''}`}
                             />
+                            {showMotoristaPicker && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActiveMotoristaDropdownId((prev) => (prev === route.id ? null : route.id));
+                                }}
+                                className={`absolute top-1/2 -translate-y-1/2 ${hasMotoristAlert ? 'right-9' : 'right-2'} p-1 rounded-md ${isDarkMode ? 'text-slate-300 hover:bg-slate-700' : 'text-slate-600 hover:bg-slate-200'} transition-colors z-20`}
+                                title={`Selecionar motorista da operação ${route.operacao || '-'}`}
+                              >
+                                <ChevronDown size={14} className={`transition-transform ${isMotoristaDropdownOpen ? 'rotate-180' : ''}`} />
+                              </button>
+                            )}
+                            {isMotoristaDropdownOpen && showMotoristaPicker && (
+                              <div className={`absolute left-1 right-1 top-[calc(100%+2px)] z-[120] rounded-lg border shadow-2xl ${isDarkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'}`}>
+                                <div className="max-h-44 overflow-y-auto py-1">
+                                  {predefinedMotoristaOptions.map((motoristaOption) => (
+                                    <button
+                                      key={`${route.id}-${motoristaOption.nome}`}
+                                      type="button"
+                                      onMouseDown={(e) => e.preventDefault()}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        updateCell(
+                                          route.id!,
+                                          'motorista',
+                                          motoristaOption.nome,
+                                          {
+                                            codPessoa: motoristaOption.codigo,
+                                            contato: motoristaOption.contato
+                                          }
+                                        );
+                                        setActiveMotoristaDropdownId(null);
+                                      }}
+                                      className={`w-full px-3 py-1.5 text-left text-[10px] font-bold uppercase transition-colors ${isDarkMode ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-100'}`}
+                                    >
+                                      {motoristaOption.nome}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
                             {/* Indicador de alerta para motoristas com atrasos recorrentes por "Mão de obra" */}
-                            {route.motorista && route.motivo === 'Mão de obra' && motoristAlerts[route.motorista] && motoristAlerts[route.motorista].count > 0 && (
+                            {hasMotoristAlert && (
                                 <span
                                   onClick={(e) => {
                                     e.stopPropagation();
@@ -3909,17 +4179,72 @@ const RouteDepartureView: React.FC<{
                     }
 
                     if (col.id === 'motorista') {
+                      const hasMotoristAlert = !!(
+                        route.motorista &&
+                        route.motivo === 'Mão de obra' &&
+                        motoristAlerts[route.motorista] &&
+                        motoristAlerts[route.motorista].count > 0
+                      );
+                      const predefinedMotoristaOptions = getPredefinedMotoristasForOperation(route.operacao || '');
+                      const showMotoristaPicker = predefinedMotoristaOptions.length > 0;
+                      const isMotoristaDropdownOpen = activeMotoristaDropdownId === route.id;
+
                       return (
                         <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
-                          <div className="relative flex items-center">
+                          <div
+                            ref={isMotoristaDropdownOpen ? motoristaDropdownRef : null}
+                            className="relative flex items-center"
+                          >
                             <input
                                 type="text"
                                 value={route.motorista}
                                 onChange={(e) => updateCell(route.id!, 'motorista', e.target.value)}
-                                className={`${inputClass} text-center w-full`}
+                                className={`${inputClass} text-center w-full ${showMotoristaPicker ? (hasMotoristAlert ? 'pr-16' : 'pr-10') : ''}`}
                             />
+                            {showMotoristaPicker && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActiveMotoristaDropdownId((prev) => (prev === route.id ? null : route.id));
+                                }}
+                                className={`absolute top-1/2 -translate-y-1/2 ${hasMotoristAlert ? 'right-9' : 'right-2'} p-1 rounded-md ${isDarkMode ? 'text-slate-300 hover:bg-slate-700' : 'text-slate-600 hover:bg-slate-200'} transition-colors z-20`}
+                                title={`Selecionar motorista da operação ${route.operacao || '-'}`}
+                              >
+                                <ChevronDown size={14} className={`transition-transform ${isMotoristaDropdownOpen ? 'rotate-180' : ''}`} />
+                              </button>
+                            )}
+                            {isMotoristaDropdownOpen && showMotoristaPicker && (
+                              <div className={`absolute left-1 right-1 top-[calc(100%+2px)] z-[120] rounded-lg border shadow-2xl ${isDarkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'}`}>
+                                <div className="max-h-44 overflow-y-auto py-1">
+                                  {predefinedMotoristaOptions.map((motoristaOption) => (
+                                    <button
+                                      key={`${route.id}-${motoristaOption.nome}`}
+                                      type="button"
+                                      onMouseDown={(e) => e.preventDefault()}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        updateCell(
+                                          route.id!,
+                                          'motorista',
+                                          motoristaOption.nome,
+                                          {
+                                            codPessoa: motoristaOption.codigo,
+                                            contato: motoristaOption.contato
+                                          }
+                                        );
+                                        setActiveMotoristaDropdownId(null);
+                                      }}
+                                      className={`w-full px-3 py-1.5 text-left text-[10px] font-bold uppercase transition-colors ${isDarkMode ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-100'}`}
+                                    >
+                                      {motoristaOption.nome}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
                             {/* Indicador de alerta para motoristas com atrasos recorrentes por "Mão de obra" */}
-                            {route.motorista && route.motivo === 'Mão de obra' && motoristAlerts[route.motorista] && motoristAlerts[route.motorista].count > 0 && (
+                            {hasMotoristAlert && (
                                 <span
                                   onClick={(e) => {
                                     e.stopPropagation();
@@ -4367,11 +4692,17 @@ const RouteDepartureView: React.FC<{
                           >
                               {isHistoryFullscreen ? <Minimize2 size={20} /> : <Maximize2 size={20} />}
                           </button>
-                          <button onClick={() => setIsHistoryModalOpen(false)} className="p-2 hover:bg-slate-700 rounded-lg transition-colors">
+                          <button onClick={() => { setIsHistoryModalOpen(false); setHistoryEditWarning(null); setEditingHistoryId(null); setEditingHistoryField(null); setPendingHistoryEdits({}); }} className="p-2 hover:bg-slate-700 rounded-lg transition-colors">
                               <X size={28} />
                           </button>
                       </div>
                   </div>
+                  {historyEditWarning && (
+                      <div className="mx-6 mt-4 mb-2 px-4 py-3 rounded-xl border border-amber-300 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-700 text-amber-800 dark:text-amber-200 text-[11px] font-bold flex items-start gap-2">
+                          <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+                          <span>{historyEditWarning}</span>
+                      </div>
+                  )}
                   <div className="p-6 bg-slate-50 dark:bg-slate-900 border-b dark:border-slate-800 grid grid-cols-4 gap-4 shrink-0">
                       <input type="date" value={histStart} onChange={e => setHistStart(e.target.value)} className="p-3 border dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-[11px] font-bold outline-none dark:text-white" />
                       <input type="date" value={histEnd} onChange={e => setHistEnd(e.target.value)} className="p-3 border dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-[11px] font-bold outline-none dark:text-white" />
@@ -4727,7 +5058,7 @@ const RouteDepartureView: React.FC<{
                                                       />
                                                   ) : (
                                                       <div
-                                                          onClick={() => { setEditingHistoryId(r.id!); setEditingHistoryField('semana'); }}
+                                                          onClick={() => startHistoryCellEdit(r, 'semana')}
                                                           className={`cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 rounded px-1 ${pendingEdits?.semana ? 'bg-amber-200 dark:bg-amber-800 font-bold' : ''}`}
                                                       >
                                                           {pendingEdits?.semana || r.semana || '---'}
@@ -4746,7 +5077,7 @@ const RouteDepartureView: React.FC<{
                                                       />
                                                   ) : (
                                                       <div
-                                                          onClick={() => { setEditingHistoryId(r.id!); setEditingHistoryField('data'); }}
+                                                          onClick={() => startHistoryCellEdit(r, 'data')}
                                                           className={`cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 rounded px-1 ${pendingEdits?.data ? 'bg-amber-200 dark:bg-amber-800 font-bold' : ''}`}
                                                       >
                                                           {(() => {
@@ -4777,7 +5108,7 @@ const RouteDepartureView: React.FC<{
                                                       />
                                                   ) : (
                                                       <div
-                                                          onClick={() => { setEditingHistoryId(r.id!); setEditingHistoryField('rota'); }}
+                                                          onClick={() => startHistoryCellEdit(r, 'rota')}
                                                           className="font-bold text-primary-700 dark:text-primary-400 cursor-pointer hover:bg-primary-50 dark:hover:bg-primary-900/20 rounded px-1"
                                                       >
                                                           {r.rota}
@@ -4799,7 +5130,7 @@ const RouteDepartureView: React.FC<{
                                                       />
                                                   ) : (
                                                       <div
-                                                          onClick={() => { setEditingHistoryId(r.id!); setEditingHistoryField('inicio'); }}
+                                                          onClick={() => startHistoryCellEdit(r, 'inicio')}
                                                           className={`cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 rounded px-1 ${pendingEdits?.inicio ? 'bg-amber-200 dark:bg-amber-800 font-bold' : ''}`}
                                                       >
                                                           {pendingEdits?.inicio || r.inicio || '---'}
@@ -4818,7 +5149,7 @@ const RouteDepartureView: React.FC<{
                                                       />
                                                   ) : (
                                                       <div
-                                                          onClick={() => { setEditingHistoryId(r.id!); setEditingHistoryField('motorista'); }}
+                                                          onClick={() => startHistoryCellEdit(r, 'motorista')}
                                                           className={`cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 rounded px-1 ${pendingEdits?.motorista ? 'bg-amber-200 dark:bg-amber-800 font-bold' : ''}`}
                                                       >
                                                           {pendingEdits?.motorista || r.motorista || '---'}
@@ -4840,7 +5171,7 @@ const RouteDepartureView: React.FC<{
                                                       />
                                                   ) : (
                                                       <div
-                                                          onClick={() => { setEditingHistoryId(r.id!); setEditingHistoryField('placa'); }}
+                                                          onClick={() => startHistoryCellEdit(r, 'placa')}
                                                           className={`cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 rounded px-1 ${pendingEdits?.placa ? 'bg-amber-200 dark:bg-amber-800 font-bold' : ''}`}
                                                       >
                                                           {pendingEdits?.placa || r.placa || '---'}
@@ -4859,7 +5190,7 @@ const RouteDepartureView: React.FC<{
                                                       />
                                                   ) : (
                                                       <div
-                                                          onClick={() => { setEditingHistoryId(r.id!); setEditingHistoryField('saida'); }}
+                                                          onClick={() => startHistoryCellEdit(r, 'saida')}
                                                           className={`cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 rounded px-1 ${pendingEdits?.saida ? 'bg-amber-200 dark:bg-amber-800 font-bold' : ''}`}
                                                       >
                                                           {pendingEdits?.saida || r.saida || '---'}
@@ -4880,7 +5211,7 @@ const RouteDepartureView: React.FC<{
                                                       </select>
                                                   ) : (
                                                       <div
-                                                          onClick={() => { setEditingHistoryId(r.id!); setEditingHistoryField('motivo'); }}
+                                                          onClick={() => startHistoryCellEdit(r, 'motivo')}
                                                           className={`cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 rounded px-1 ${pendingEdits?.motivo ? 'bg-amber-200 dark:bg-amber-800 font-bold' : ''}`}
                                                       >
                                                           {pendingEdits?.motivo || r.motivo || '---'}
@@ -4904,7 +5235,7 @@ const RouteDepartureView: React.FC<{
                                                       />
                                                   ) : (
                                                       <div
-                                                          onClick={() => { setEditingHistoryId(r.id!); setEditingHistoryField('observacao'); }}
+                                                          onClick={() => startHistoryCellEdit(r, 'observacao')}
                                                           className={`cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 rounded px-1 whitespace-pre-wrap break-words ${pendingEdits?.observacao ? 'bg-amber-200 dark:bg-amber-800 font-bold' : ''}`}
                                                       >
                                                           {pendingEdits?.observacao || r.observacao || '---'}
