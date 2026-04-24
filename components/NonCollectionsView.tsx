@@ -31,6 +31,11 @@ interface NonCollection {
   causaRaiz?: string;
 }
 
+type NonCollectionArchiveDivergence = {
+  row: NonCollection;
+  missingFields: string[];
+};
+
 // Lista de MOTIVOS no padrão "MOTIVO - Culpabilidade"
 const MOTIVOS_CulpabilidadeS: Record<string, string> = {
   'Rota Atrasada/Fábrica': 'Cliente',
@@ -268,6 +273,7 @@ const NonCollectionsView: React.FC<{
   const [editingHistoryId, setEditingHistoryId] = useState<string | null>(null);
   const [editingHistoryField, setEditingHistoryField] = useState<keyof NonCollection | null>(null);
   const [isSavingHistoryEdits, setIsSavingHistoryEdits] = useState(false);
+  const [archiveValidationDivergences, setArchiveValidationDivergences] = useState<NonCollectionArchiveDivergence[] | null>(null);
 
   const updateGhostCell = (field: keyof NonCollection, value: string) => {
     const updatedGhost = { ...ghostRow, [field]: value };
@@ -290,6 +296,27 @@ const NonCollectionsView: React.FC<{
 
   const isMotivoComCausaRaizObrigatoria = (motivo?: string): boolean =>
     String(motivo || '').trim() === MOTIVO_CAUSA_RAIZ_OBRIGATORIA;
+
+  const hasRequiredValue = (value?: string): boolean => String(value || '').trim() !== '';
+
+  const getArchiveMissingFields = (nc: NonCollection): string[] => {
+    const missing: string[] = [];
+
+    if (!hasRequiredValue(nc.codigo)) missing.push('CÓDIGO');
+    if (!hasRequiredValue(nc.produtor)) missing.push('PRODUTOR');
+    if (!hasRequiredValue(nc.motivo)) missing.push('MOTIVO');
+    if (!hasRequiredValue(nc.observacao)) missing.push('OBSERVAÇÃO');
+    if (!hasRequiredValue(nc.acao)) missing.push('AÇÃO');
+    if (!hasRequiredValue(nc.dataAcao)) missing.push('DATA AÇÃO');
+    if (!hasRequiredValue(nc.ultimaColeta)) missing.push('ÚLTIMA COLETA');
+    if (!hasRequiredValue(nc.Culpabilidade)) missing.push('CULPABILIDADE');
+    if (!hasRequiredValue(nc.operacao)) missing.push('OPERAÇÃO');
+    if (isMotivoComCausaRaizObrigatoria(nc.motivo) && !hasRequiredValue(nc.causaRaiz)) {
+      missing.push('CAUSA RAIZ');
+    }
+
+    return missing;
+  };
 
   const openCausaRaizModal = (rowId: string, currentValue: string) => {
     setCausaRaizModalData({ rowId, causaRaiz: currentValue || '' });
@@ -974,20 +1001,12 @@ const NonCollectionsView: React.FC<{
       return;
     }
 
-    const missingCausaRaiz = validNonCollections.filter(
-      nc => isMotivoComCausaRaizObrigatoria(nc.motivo) && !String(nc.causaRaiz || '').trim()
-    );
-    if (missingCausaRaiz.length > 0) {
-      const routeList = missingCausaRaiz
-        .map(nc => nc.rota || `ID ${nc.id}`)
-        .slice(0, 10)
-        .join(', ');
-      const complemento = missingCausaRaiz.length > 10 ? ` e mais ${missingCausaRaiz.length - 10}` : '';
-      alert(
-        `Não é possível arquivar.\n\n` +
-        `Preencha a Causa Raiz nas rotas com motivo "${MOTIVO_CAUSA_RAIZ_OBRIGATORIA}".\n` +
-        `Rotas pendentes: ${routeList}${complemento}.`
-      );
+    const divergences: NonCollectionArchiveDivergence[] = validNonCollections
+      .map((nc) => ({ row: nc, missingFields: getArchiveMissingFields(nc) }))
+      .filter((entry) => entry.missingFields.length > 0);
+
+    if (divergences.length > 0) {
+      setArchiveValidationDivergences(divergences);
       return;
     }
 
@@ -3324,6 +3343,76 @@ const NonCollectionsView: React.FC<{
                   }`}
                 >
                   <X size={16} /> Cancelar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {archiveValidationDivergences && archiveValidationDivergences.length > 0 && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[230] flex items-center justify-center p-4 animate-in fade-in zoom-in-95 duration-200">
+          <div className={`rounded-[2rem] shadow-2xl w-full max-w-4xl overflow-hidden border ${
+            isDarkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'
+          }`}>
+            <div className={`p-6 flex justify-between items-center ${
+              isDarkMode ? 'bg-red-900/30 border-b border-red-800' : 'bg-red-50 border-b border-red-200'
+            }`}>
+              <div className="flex items-center gap-3">
+                <AlertTriangle size={22} className={isDarkMode ? 'text-red-400' : 'text-red-600'} />
+                <div>
+                  <h3 className={`text-sm font-black uppercase tracking-widest ${isDarkMode ? 'text-red-300' : 'text-red-700'}`}>
+                    Não é possível arquivar
+                  </h3>
+                  <p className={`text-[10px] font-bold uppercase tracking-wide ${isDarkMode ? 'text-red-300/80' : 'text-red-700/80'}`}>
+                    Preencha os campos obrigatórios antes de enviar para o histórico.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setArchiveValidationDivergences(null)}
+                className={`p-2 rounded-full transition-all ${isDarkMode ? 'hover:bg-slate-700' : 'hover:bg-red-100'}`}
+              >
+                <X size={18} className={isDarkMode ? 'text-slate-300' : 'text-red-600'} />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className={`rounded-xl border max-h-80 overflow-y-auto ${
+                isDarkMode ? 'border-slate-700 bg-slate-900' : 'border-slate-200 bg-white'
+              }`}>
+                <table className="w-full text-left border-collapse">
+                  <thead className={isDarkMode ? 'bg-slate-800' : 'bg-slate-100'}>
+                    <tr>
+                      <th className={`px-3 py-2 text-[10px] font-black uppercase ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>Rota</th>
+                      <th className={`px-3 py-2 text-[10px] font-black uppercase ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>Campos Faltando</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {archiveValidationDivergences.map((entry) => (
+                      <tr key={entry.row.id} className={isDarkMode ? 'border-t border-slate-800' : 'border-t border-slate-100'}>
+                        <td className={`px-3 py-2 text-[11px] font-bold ${isDarkMode ? 'text-slate-200' : 'text-slate-800'}`}>
+                          {entry.row.rota || `ID ${entry.row.id}`}
+                        </td>
+                        <td className={`px-3 py-2 text-[11px] font-bold ${isDarkMode ? 'text-amber-300' : 'text-amber-700'}`}>
+                          {entry.missingFields.join(', ')}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="flex justify-end">
+                <button
+                  onClick={() => setArchiveValidationDivergences(null)}
+                  className={`px-6 py-3 rounded-xl font-black uppercase text-[10px] transition-all flex items-center gap-2 ${
+                    isDarkMode
+                      ? 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  <X size={14} /> Fechar
                 </button>
               </div>
             </div>
