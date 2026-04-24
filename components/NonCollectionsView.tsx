@@ -305,9 +305,6 @@ const NonCollectionsView: React.FC<{
     if (!hasRequiredValue(nc.codigo)) missing.push('CÓDIGO');
     if (!hasRequiredValue(nc.produtor)) missing.push('PRODUTOR');
     if (!hasRequiredValue(nc.motivo)) missing.push('MOTIVO');
-    if (!hasRequiredValue(nc.observacao)) missing.push('OBSERVAÇÃO');
-    if (!hasRequiredValue(nc.acao)) missing.push('AÇÃO');
-    if (!hasRequiredValue(nc.dataAcao)) missing.push('DATA AÇÃO');
     if (!hasRequiredValue(nc.ultimaColeta)) missing.push('ÚLTIMA COLETA');
     if (!hasRequiredValue(nc.Culpabilidade)) missing.push('CULPABILIDADE');
     if (!hasRequiredValue(nc.operacao)) missing.push('OPERAÇÃO');
