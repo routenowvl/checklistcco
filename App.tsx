@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { HashRouter as Router, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
-import { CheckSquare, History, Truck, LogOut, ChevronLeft, ChevronRight, Loader2, TowerControl, RefreshCw, AlertTriangle, Settings2, Milk } from 'lucide-react';
+import { CheckSquare, History, Truck, LogOut, ChevronLeft, ChevronRight, Loader2, TowerControl, RefreshCw, AlertTriangle, Settings2, Milk, Users } from 'lucide-react';
 import TaskManager from './components/TaskManager';
 import HistoryViewer from './components/HistoryViewer';
 import RouteDepartureView from './components/RouteDeparture';
 import NonCollectionsView from './components/NonCollectionsView';
 import SendReportView from './components/SendReportView';
+import MotoristasView from './components/MotoristasView';
 import Login from './components/Login';
 import LoadingScreen from './components/LoadingScreen';
 import PWAInstallPrompt from './components/PWAInstallPrompt';
@@ -314,6 +315,7 @@ const AppContent = () => {
           <SidebarLink to="/nao-coletas" icon={Milk} label="Não Coletas" active={window.location.hash === '#/nao-coletas'} collapsed={collapsed} />
           <SidebarLink to="/resumo" icon={TowerControl} label="Resumo" active={window.location.hash === '#/resumo'} collapsed={collapsed} />
           <SidebarLink to="/history" icon={History} label="Histórico" active={window.location.hash === '#/history'} collapsed={collapsed} />
+          <SidebarLink to="/motoristas" icon={Users} label="Motoristas" active={window.location.hash === '#/motoristas'} collapsed={collapsed} />
         </nav>
         <div className="mt-auto space-y-2 border-t pt-4 dark:border-slate-800">
            {/* Botão de Configurações - aparece apenas na tela Saídas */}
@@ -361,6 +363,7 @@ const AppContent = () => {
             <Route path="/nao-coletas" element={<NonCollectionsView currentUser={currentUser} />} />
             <Route path="/resumo" element={<SendReportView currentUser={currentUser} />} />
             <Route path="/history" element={<HistoryViewer currentUser={currentUser} />} />
+            <Route path="/motoristas" element={<MotoristasView currentUser={currentUser} />} />
           </Routes>
         )}
       </main>

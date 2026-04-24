@@ -127,6 +127,14 @@ export interface ColetaPrevista {
   Data: string; // Data ISO
 }
 
+export interface Motorista {
+  id: string;
+  codigo: string;
+  motorista: string;
+  operacao: string;
+  contato: string;
+}
+
 export interface SPStatus {
   id?: string;
   DataReferencia: string;

@@ -2,7 +2,7 @@
 // @google/genai guidelines: Use direct process.env.API_KEY, no UI for keys, use correct model names.
 // Correct models: 'gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-2.5-flash-image', etc.
 
-import { SPTask, SPOperation, SPStatus, Task, OperationStatus, HistoryRecord, RouteDeparture, RouteOperationMapping, RouteConfig, NonCollection, ColetaPrevista } from '../types';
+import { SPTask, SPOperation, SPStatus, Task, OperationStatus, HistoryRecord, RouteDeparture, RouteOperationMapping, RouteConfig, NonCollection, ColetaPrevista, Motorista } from '../types';
 import { getBrazilDate, getBrazilISOString, getWeekString } from '../utils/dateUtils';
 
 export interface DailyWarning {
@@ -39,6 +39,8 @@ const columnMappingCache: Record<string, { mapping: Record<string, string>, read
 // Cache para dados estáticos/semi-estáticos (10 minutos — otimizado para reduzir chamadas à API)
 const dataCache: Record<string, { data: any, timestamp: number }> = {};
 const CACHE_TTL = 10 * 60 * 1000; // 10 minutos (aumentado de 5 para reduzir consumo de API)
+const MOTORISTAS_CACHE_TTL = 2 * 60 * 60 * 1000; // 2 horas
+const MOTORISTAS_LOCAL_CACHE_KEY = 'sp_cache_motoristas_cco_v1';
 
 // Deduplicação de requisições archive em andamento (evita chamadas duplicadas ao mesmo range)
 const inFlightArchiveRequests: Record<string, Promise<any>> = {};
@@ -84,6 +86,38 @@ function getCachedData<T>(key: string): T | null {
 function setCachedData(key: string, data: any): void {
   dataCache[key] = { data, timestamp: Date.now() };
   console.log(`[CACHE_SET] ${key}`);
+}
+
+function getMotoristasLocalCache(): Motorista[] | null {
+  try {
+    const raw = localStorage.getItem(MOTORISTAS_LOCAL_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { timestamp: number; data: Motorista[] };
+    if (!parsed || !Array.isArray(parsed.data)) return null;
+    if (Date.now() - Number(parsed.timestamp || 0) > MOTORISTAS_CACHE_TTL) return null;
+    return parsed.data;
+  } catch {
+    return null;
+  }
+}
+
+function setMotoristasLocalCache(data: Motorista[]): void {
+  try {
+    localStorage.setItem(MOTORISTAS_LOCAL_CACHE_KEY, JSON.stringify({
+      timestamp: Date.now(),
+      data
+    }));
+  } catch {
+    // Cache local é apenas otimização; erros aqui não devem quebrar o fluxo
+  }
+}
+
+function clearMotoristasLocalCache(): void {
+  try {
+    localStorage.removeItem(MOTORISTAS_LOCAL_CACHE_KEY);
+  } catch {
+    // noop
+  }
 }
 
 /**
@@ -481,6 +515,89 @@ export const SharePointService = {
         setCachedData(cacheKey, result);
         return result;
     } catch (e) { return []; }
+  },
+
+  async getMotoristas(token: string, forceRefresh: boolean = false): Promise<Motorista[]> {
+    try {
+      const memoryCacheKey = 'motoristas_cco';
+
+      if (!forceRefresh) {
+        const memoryCached = getCachedData<Motorista[]>(memoryCacheKey);
+        if (memoryCached) return memoryCached;
+
+        const localCached = getMotoristasLocalCache();
+        if (localCached) {
+          setCachedData(memoryCacheKey, localCached);
+          return localCached;
+        }
+      }
+
+      const siteId = await getResolvedSiteId(token);
+      const list = await findListByIdOrName(siteId, 'motoristas_cco', token);
+      const { mapping } = await getListColumnMapping(siteId, list.id, token);
+
+      const nomeField = resolveFieldName(mapping, 'nome');
+      const operacaoField = resolveFieldName(mapping, 'operacao');
+      const contatoField = resolveFieldName(mapping, 'Contato');
+
+      let allItems: any[] = [];
+      let nextUrl: string | null = `/sites/${siteId}/lists/${list.id}/items?expand=fields&$top=200`;
+
+      while (nextUrl) {
+        const data = await graphFetch(nextUrl, token);
+        allItems = allItems.concat(data.value || []);
+        nextUrl = data['@odata.nextLink'] || null;
+      }
+
+      const result: Motorista[] = allItems
+        .map((item: any) => ({
+          id: String(item.id || ''),
+          codigo: String(item.fields?.ID ?? item.id ?? ''),
+          motorista: String(item.fields?.[nomeField] || '').trim(),
+          operacao: String(item.fields?.[operacaoField] || '').trim(),
+          contato: String(item.fields?.[contatoField] || '').replace(/\D/g, '')
+        }))
+        .filter((item: Motorista) => item.id !== '')
+        .sort((a, b) => Number(a.codigo) - Number(b.codigo));
+
+      dataCache[memoryCacheKey] = { data: result, timestamp: Date.now() };
+      setMotoristasLocalCache(result);
+      return result;
+    } catch (e) {
+      return [];
+    }
+  },
+
+  async updateMotorista(token: string, id: string, fieldsToUpdate: { operacao?: string; contato?: string }): Promise<void> {
+    const siteId = await getResolvedSiteId(token);
+    const list = await findListByIdOrName(siteId, 'motoristas_cco', token);
+    const { mapping, internalNames, readOnly } = await getListColumnMapping(siteId, list.id, token);
+
+    const payload: Record<string, string> = {};
+
+    if (fieldsToUpdate.operacao !== undefined) {
+      const opField = resolveFieldName(mapping, 'operacao');
+      if (internalNames.has(opField) && !readOnly.has(opField)) {
+        payload[opField] = fieldsToUpdate.operacao;
+      }
+    }
+
+    if (fieldsToUpdate.contato !== undefined) {
+      const contatoField = resolveFieldName(mapping, 'Contato');
+      if (internalNames.has(contatoField) && !readOnly.has(contatoField)) {
+        payload[contatoField] = String(fieldsToUpdate.contato).replace(/\D/g, '');
+      }
+    }
+
+    if (Object.keys(payload).length === 0) return;
+
+    await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${id}/fields`, token, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    });
+
+    delete dataCache['motoristas_cco'];
+    clearMotoristasLocalCache();
   },
 
   async addRouteOperationMapping(token: string, routeName: string, operation: string): Promise<void> {
