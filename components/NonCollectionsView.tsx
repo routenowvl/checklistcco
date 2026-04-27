@@ -253,7 +253,8 @@ const NonCollectionsView: React.FC<{
 
   // Estados para modal de seleção de Operação (bulk paste)
   const [isOperationModalOpen, setIsOperationModalOpen] = useState(false);
-  const [pendingBulkRoutes, setPendingBulkRoutes] = useState<string[]>([]);
+  const [pendingBulkPaste, setPendingBulkPaste] = useState<{ field: keyof NonCollection; lines: string[] } | null>(null);
+  const [lastBulkOperation, setLastBulkOperation] = useState('');
   const [isCreatingRecords, setIsCreatingRecords] = useState(false); // Trava contra cliques duplos
 
   // Estados para arquivamento e histórico
@@ -272,6 +273,7 @@ const NonCollectionsView: React.FC<{
   const [historySelectedFilters, setHistorySelectedFilters] = useState<Record<string, string[]>>({});
   const [historyActiveFilterCol, setHistoryActiveFilterCol] = useState<string | null>(null);
   const historyFilterDropdownRef = useRef<HTMLDivElement>(null);
+  const nonCollectionPersistLockRef = useRef<Set<string>>(new Set());
   const [pendingHistoryEdits, setPendingHistoryEdits] = useState<Record<string, Partial<NonCollection>>>({});
   const [editingHistoryId, setEditingHistoryId] = useState<string | null>(null);
   const [editingHistoryField, setEditingHistoryField] = useState<keyof NonCollection | null>(null);
@@ -302,6 +304,17 @@ const NonCollectionsView: React.FC<{
     String(motivo || '').trim() === MOTIVO_CAUSA_RAIZ_OBRIGATORIA;
 
   const hasRequiredValue = (value?: string): boolean => String(value || '').trim() !== '';
+
+  const isPersistedNonCollectionId = (id?: string): boolean => {
+    const parsed = Number.parseInt(String(id || ''), 10);
+    return !Number.isNaN(parsed) && parsed > 0 && parsed < 1000000;
+  };
+
+  const canPersistNonCollection = (row: NonCollection): boolean =>
+    hasRequiredValue(row.rota) &&
+    hasRequiredValue(row.data) &&
+    hasRequiredValue(row.produtor) &&
+    hasRequiredValue(row.operacao);
 
   const getArchiveMissingFields = (nc: NonCollection): string[] => {
     const missing: string[] = [];
@@ -347,18 +360,10 @@ const NonCollectionsView: React.FC<{
 
     closeCausaRaizModal();
 
-    if (rowId && !rowId.startsWith('temp')) {
-      const token = await getValidToken() || currentUser.accessToken;
-      if (token) {
-        const rowToPersist = nonCollections.find(r => r.id === rowId);
-        if (rowToPersist) {
-          try {
-            await SharePointService.updateNonCollection(token, { ...rowToPersist, causaRaiz: value });
-            console.log('[NC_SAVE] Causa Raiz salva:', rowToPersist.rota);
-          } catch (e: any) {
-            console.error('[NC_SAVE] Erro ao salvar causa raiz:', e?.message || e);
-          }
-        }
+    if (rowId) {
+      const rowToPersist = nonCollections.find(r => r.id === rowId);
+      if (rowToPersist) {
+        await persistNonCollectionRow(rowId, 'Causa Raiz', { ...rowToPersist, causaRaiz: value });
       }
     }
   };
@@ -460,29 +465,46 @@ const NonCollectionsView: React.FC<{
   };
 
   /**
-   * Cria novas linhas de Não coleta após o usuário selecionar a Operação no modal.
-   * SALVA CADA REGISTRO NO SHAREPOINT IMEDIATAMENTE.
+   * Aplica colagem em massa após o usuário selecionar a Operação no modal.
+   * Para ROTA: cria novas linhas.
+   * Para demais campos: preenche linhas existentes/vazias e cria novas quando necessário.
    */
-  const createBulkRecordsWithOperation = async (operacao: string) => {
-    // Trava contra cliques duplos
+  const applyBulkPasteWithOperation = async (
+    operacao: string,
+    pasteOverride?: { field: keyof NonCollection; lines: string[] }
+  ) => {
     if (isCreatingRecords) {
       console.warn('[BULK_PASTE] Ignorando clique duplicado - criação em andamento');
       return;
     }
 
-    setIsCreatingRecords(true);
-    const dataFormatada = getNonCollectionDateForCurrentTime();
-    const dataParaSemana = dataFormatada.split('/').reverse().join('-');
-    const semana = getWeekString(dataParaSemana);
+    const payload = pasteOverride || pendingBulkPaste;
+    if (!payload || payload.lines.length === 0) {
+      setIsOperationModalOpen(false);
+      setPendingBulkPaste(null);
+      return;
+    }
 
-    // Tenta salvar no SharePoint imediatamente
+    const operacaoSelecionada = String(operacao || '').trim();
+    if (!operacaoSelecionada) {
+      setIsOperationModalOpen(false);
+      setPendingBulkPaste(null);
+      return;
+    }
+
+    setIsCreatingRecords(true);
+    setLastBulkOperation(operacaoSelecionada);
+    const { field, lines } = payload;
+
     try {
-      const token = await getValidToken() || currentUser.accessToken;
-      if (!token) {
-        console.error('[BULK_PASTE] Token Não encontrado, criando apenas localmente');
-        // Fallback: cria localmente (Não será salvo no SharePoint)
-        const newRecords: NonCollection[] = pendingBulkRoutes.map((rota, i) => ({
-          id: Date.now().toString() + i,
+      // COMPORTAMENTO 1: ROTA sempre cria novas linhas
+      if (field === 'rota') {
+        const dataFormatada = getNonCollectionDateForCurrentTime();
+        const dataParaSemana = dataFormatada.split('/').reverse().join('-');
+        const semana = getWeekString(dataParaSemana);
+        const localIdBase = Date.now();
+        const buildLocalRouteRecord = (rota: string, i: number): NonCollection => ({
+          id: (localIdBase + i).toString(),
           semana,
           rota,
           data: dataFormatada,
@@ -494,81 +516,264 @@ const NonCollectionsView: React.FC<{
           dataAcao: '',
           ultimaColeta: '',
           Culpabilidade: 'Não se aplica',
-          operacao,
+          operacao: operacaoSelecionada,
           causaRaiz: ''
-        }));
-        setNonCollections(prev => [...prev, ...newRecords]);
+        });
 
-        // Busca coletas previstas para a data inserida
-        await fetchColetasPrevistas(dataFormatada);
+        // 1) Primeiro preenche linhas já existentes com rota vazia (da mesma operação)
+        const updatedRecords: NonCollection[] = [...nonCollections];
+        const targetIndices = updatedRecords
+          .map((record, idx) => ({ record, idx }))
+          .filter(({ record }) => {
+            const rotaVazia = !String(record.rota || '').trim();
+            if (!rotaVazia) return false;
+
+            const opLinha = String(record.operacao || '').trim();
+            return !opLinha || opLinha === operacaoSelecionada;
+          })
+          .map(({ idx }) => idx);
+
+        let lineIndex = 0;
+        const updatedIndices: number[] = [];
+
+        for (let i = 0; i < targetIndices.length && lineIndex < lines.length; i++) {
+          const recordIndex = targetIndices[i];
+          const current = updatedRecords[recordIndex];
+
+          updatedRecords[recordIndex] = {
+            ...current,
+            rota: lines[lineIndex],
+            operacao: current.operacao?.trim() ? current.operacao : operacaoSelecionada
+          };
+
+          updatedIndices.push(recordIndex);
+          lineIndex++;
+        }
+
+        // 2) Se sobrar rota, cria novas linhas
+        const remainingLines = lines.slice(lineIndex);
+        const appendedRecords: NonCollection[] = [];
+
+        try {
+          const token = await getValidToken() || currentUser.accessToken;
+
+          if (token) {
+            const recordsToUpdate = updatedIndices
+              .map(idx => updatedRecords[idx])
+              .filter(record => isPersistedNonCollectionId(record.id));
+
+            if (recordsToUpdate.length > 0) {
+              await Promise.all(
+                recordsToUpdate.map(async (record) => {
+                  try {
+                    await SharePointService.updateNonCollection(token, record);
+                  } catch (e: any) {
+                    console.error('[BULK_PASTE] Erro ao atualizar rota no SharePoint:', record.id, e.message);
+                  }
+                })
+              );
+            }
+
+            const recordsToCreate = updatedIndices
+              .map(idx => ({ idx, record: updatedRecords[idx] }))
+              .filter(({ record }) => !isPersistedNonCollectionId(record.id) && canPersistNonCollection(record));
+
+            for (let i = 0; i < recordsToCreate.length; i++) {
+              const { idx, record } = recordsToCreate[i];
+              try {
+                const spId = await SharePointService.saveNonCollection(token, record);
+                updatedRecords[idx] = { ...record, id: spId };
+              } catch (e: any) {
+                console.error('[BULK_PASTE] Erro ao criar linha local preenchida no SharePoint:', record.rota, e.message);
+              }
+            }
+
+            for (let i = 0; i < remainingLines.length; i++) {
+              const rota = remainingLines[i];
+              const tempRecord: NonCollection = {
+                ...buildLocalRouteRecord(rota, i),
+                id: 'temp'
+              };
+
+              try {
+                const spId = await SharePointService.saveNonCollection(token, tempRecord);
+                appendedRecords.push({ ...tempRecord, id: spId });
+              } catch (e: any) {
+                console.error('[BULK_PASTE] Erro ao criar rota no SharePoint:', rota, e.message);
+                appendedRecords.push(buildLocalRouteRecord(rota, i));
+              }
+            }
+          } else {
+            console.error('[BULK_PASTE] Token não encontrado, criando novas linhas apenas localmente');
+            for (let i = 0; i < remainingLines.length; i++) {
+              appendedRecords.push(buildLocalRouteRecord(remainingLines[i], i));
+            }
+          }
+        } catch (e: any) {
+          console.error('[BULK_PASTE] Erro crítico no processamento de rotas:', e.message);
+          for (let i = 0; i < remainingLines.length; i++) {
+            appendedRecords.push(buildLocalRouteRecord(remainingLines[i], i));
+          }
+        }
+
+        setNonCollections([...updatedRecords, ...appendedRecords]);
+        console.log(
+          '[BULK_PASTE] ROTA processada:',
+          updatedIndices.length,
+          'linha(s) preenchida(s),',
+          appendedRecords.length,
+          'nova(s) linha(s) criada(s)'
+        );
+
+        if (remainingLines.length > 0) {
+          await fetchColetasPrevistas(dataFormatada);
+        }
         return;
       }
 
-      console.log('[BULK_PASTE] Criando', pendingBulkRoutes.length, 'registros no SharePoint...');
-      const savedRecords: NonCollection[] = [];
+      // COMPORTAMENTO 2: Demais campos preenchem linhas existentes/vazias
+      const colunasIndividuais: (keyof NonCollection)[] = ['codigo', 'produtor'];
+      const isColunaIndividual = colunasIndividuais.includes(field);
 
-      // Salva cada registro no SharePoint sequencialmente
-      for (let i = 0; i < pendingBulkRoutes.length; i++) {
-        const rota = pendingBulkRoutes[i];
-        const tempRecord: NonCollection = {
-          id: 'temp', // ID temporário, será substituído pelo ID real do SharePoint
-          semana,
-          rota,
-          data: dataFormatada,
-          codigo: '',
-          produtor: '',
-          motivo: '',
-          observacao: '',
-          acao: '',
-          dataAcao: '',
-          ultimaColeta: '',
-          Culpabilidade: 'Não se aplica',
-          operacao,
-          causaRaiz: ''
+      const emptyIndices: number[] = [];
+      nonCollections.forEach((nc, idx) => {
+        const isEmpty = !nc.rota?.trim() || !nc.produtor?.trim();
+        if (isEmpty) {
+          emptyIndices.push(idx);
+        }
+      });
+
+      console.log('[BULK_PASTE] Campo:', field, 'Valores:', lines);
+      console.log('[BULK_PASTE] Linhas vazias detectadas:', emptyIndices.length);
+
+      const updatedRecords: NonCollection[] = [...nonCollections];
+      let lineIndex = 0;
+
+      for (let i = 0; i < emptyIndices.length && lineIndex < lines.length; i++) {
+        const recordIndex = emptyIndices[i];
+        const record = updatedRecords[recordIndex];
+        let finalValue = lines[lineIndex];
+        let codigo = '';
+        let produtor = '';
+
+        if (!isColunaIndividual) {
+          const parsed = parseCodigoProdutor(lines[lineIndex]);
+          if (parsed) {
+            codigo = parsed.codigo;
+            produtor = parsed.produtor;
+          }
+        }
+
+        if (field === 'data' || field === 'dataAcao' || field === 'ultimaColeta') {
+          if (finalValue.includes('-')) {
+            const [year, month, day] = finalValue.split('-');
+            finalValue = `${day}/${month}/${year}`;
+          }
+        }
+
+        if (field === 'codigo') {
+          finalValue = finalValue.toUpperCase();
+        }
+
+        updatedRecords[recordIndex] = {
+          ...record,
+          ...(codigo && produtor ? { codigo, produtor } : { [field]: finalValue }),
+          operacao: record.operacao?.trim() ? record.operacao : operacaoSelecionada
         };
+        lineIndex++;
+      }
 
-        try {
-          const spId = await SharePointService.saveNonCollection(token, tempRecord);
-          console.log('[BULK_PASTE] ? Criado no SharePoint:', rota, 'ID:', spId);
-          savedRecords.push({ ...tempRecord, id: spId }); // Usa o ID real do SharePoint
-        } catch (e: any) {
-          console.error('[BULK_PASTE] Erro ao criar registro no SharePoint:', rota, e.message);
-          // Adiciona localmente com ID temporário mesmo com erro
-          savedRecords.push({ ...tempRecord, id: (Date.now() + i).toString() });
+      const remainingLines = lines.slice(lineIndex);
+      if (remainingLines.length > 0) {
+        const dataFormatada = getNonCollectionDateForCurrentTime();
+        const dataParaSemana = dataFormatada.split('/').reverse().join('-');
+        const semana = getWeekString(dataParaSemana);
+
+        for (let i = 0; i < remainingLines.length; i++) {
+          let finalValue = remainingLines[i];
+          let codigo = '';
+          let produtor = '';
+
+          if (!isColunaIndividual) {
+            const parsed = parseCodigoProdutor(remainingLines[i]);
+            if (parsed) {
+              codigo = parsed.codigo;
+              produtor = parsed.produtor;
+            }
+          }
+
+          if (field === 'data' || field === 'dataAcao' || field === 'ultimaColeta') {
+            if (finalValue.includes('-')) {
+              const [year, month, day] = finalValue.split('-');
+              finalValue = `${day}/${month}/${year}`;
+            }
+          }
+
+          if (field === 'codigo') {
+            finalValue = finalValue.toUpperCase();
+          }
+
+          const newRecord: NonCollection = {
+            id: (Date.now() + i).toString(),
+            semana,
+            rota: '',
+            data: dataFormatada,
+            codigo: codigo || (field === 'codigo' ? finalValue : ''),
+            produtor: produtor || (field === 'produtor' ? finalValue : ''),
+            motivo: field === 'motivo' ? finalValue : '',
+            observacao: field === 'observacao' ? finalValue : '',
+            acao: field === 'acao' ? finalValue : '',
+            dataAcao: field === 'dataAcao' ? finalValue : '',
+            ultimaColeta: field === 'ultimaColeta' ? finalValue : '',
+            Culpabilidade: field === 'Culpabilidade' ? finalValue : 'Não se aplica',
+            operacao: operacaoSelecionada,
+            causaRaiz: ''
+          };
+
+          updatedRecords.push(newRecord);
         }
       }
 
-      setNonCollections(prev => [...prev, ...savedRecords]);
-      console.log('[BULK_PASTE] -', savedRecords.length, 'linhas criadas e salvas com Operação:', operacao);
+      setNonCollections(updatedRecords);
 
-      // Busca coletas previstas para a data inserida
-      await fetchColetasPrevistas(dataFormatada);
-    } catch (e: any) {
-      console.error('[BULK_PASTE] Erro crítico ao salvar no SharePoint:', e.message);
-      // Fallback: cria localmente
-      const newRecords: NonCollection[] = pendingBulkRoutes.map((rota, i) => ({
-        id: Date.now().toString() + i,
-        semana,
-        rota,
-        data: dataFormatada,
-        codigo: '',
-        produtor: '',
-        motivo: '',
-        observacao: '',
-        acao: '',
-        dataAcao: '',
-        ultimaColeta: '',
-        Culpabilidade: 'Não se aplica',
-        operacao,
-        causaRaiz: ''
-      }));
-      setNonCollections(prev => [...prev, ...newRecords]);
+      try {
+        const token = await getValidToken() || currentUser.accessToken;
+        if (!token) {
+          console.error('[BULK_PASTE] Token não encontrado, pulando salvamento no SharePoint');
+          return;
+        }
+
+        const recordsToSave = updatedRecords.filter(r => isPersistedNonCollectionId(r.id));
+
+        if (recordsToSave.length === 0) {
+          console.log('[BULK_PASTE] Nenhum registro para salvar no SharePoint (todos são locais)');
+          return;
+        }
+
+        console.log('[BULK_PASTE] Salvando', recordsToSave.length, 'registros no SharePoint...');
+        const savePromises = recordsToSave.map(async (record) => {
+          try {
+            await SharePointService.updateNonCollection(token, record);
+            console.log('[BULK_PASTE] Salvo:', record.rota, '-', record.codigo);
+          } catch (e: any) {
+            console.error('[BULK_PASTE] Erro ao salvar registro:', record.rota, e.message);
+          }
+        });
+        await Promise.all(savePromises);
+      } catch (e: any) {
+        console.error('[BULK_PASTE] Erro ao salvar no SharePoint:', e.message);
+      }
+
+      if (remainingLines.length > 0 && updatedRecords.length > 0) {
+        const lastRecord = updatedRecords[updatedRecords.length - 1];
+        if (lastRecord.data) {
+          await fetchColetasPrevistas(lastRecord.data);
+        }
+      }
     } finally {
-      // Sempre libera a trava
       setIsCreatingRecords(false);
-      // Limpa estados do modal
       setIsOperationModalOpen(false);
-      setPendingBulkRoutes([]);
+      setPendingBulkPaste(null);
     }
   };
 
@@ -578,7 +783,7 @@ const NonCollectionsView: React.FC<{
   const cancelBulkPaste = () => {
     setIsCreatingRecords(false);
     setIsOperationModalOpen(false);
-    setPendingBulkRoutes([]);
+    setPendingBulkPaste(null);
   };
 
   // Fecha dropdown ao clicar fora
@@ -758,20 +963,38 @@ const NonCollectionsView: React.FC<{
     }
   };
 
-  const persistNonCollectionRow = async (rowId: string, fieldLabel: string) => {
-    if (!rowId || rowId === 'ghost' || rowId.startsWith('temp')) return;
+  const persistNonCollectionRow = async (rowId: string, fieldLabel: string, rowOverride?: NonCollection) => {
+    if (!rowId || rowId === 'ghost') return;
+    if (nonCollectionPersistLockRef.current.has(rowId)) return;
 
-    const currentRow = nonCollections.find(r => r.id === rowId);
-    if (!currentRow) return;
-
+    nonCollectionPersistLockRef.current.add(rowId);
     try {
+      const currentRow = rowOverride || nonCollections.find(r => r.id === rowId);
+      if (!currentRow) return;
+
       const token = await getValidToken() || currentUser.accessToken;
       if (!token) return;
 
-      await SharePointService.updateNonCollection(token, currentRow);
-      console.log(`[NC_SAVE] ${fieldLabel} salvo:`, currentRow.rota);
+      if (isPersistedNonCollectionId(rowId)) {
+        await SharePointService.updateNonCollection(token, currentRow);
+        console.log(`[NC_SAVE] ${fieldLabel} salvo:`, currentRow.rota);
+        return;
+      }
+
+      if (!canPersistNonCollection(currentRow)) {
+        console.log(`[NC_SAVE] Linha local ainda incompleta, aguardando dados obrigatórios (${fieldLabel})`);
+        return;
+      }
+
+      const spId = await SharePointService.saveNonCollection(token, currentRow);
+      setNonCollections(prev =>
+        prev.map(r => (r.id === rowId ? { ...r, ...currentRow, id: spId } : r))
+      );
+      console.log(`[NC_SAVE] ${fieldLabel} salvo criando novo item:`, currentRow.rota, 'ID:', spId);
     } catch (e: any) {
       console.error(`[NC_SAVE] Erro ao salvar ${fieldLabel.toLowerCase()}:`, e?.message || e);
+    } finally {
+      nonCollectionPersistLockRef.current.delete(rowId);
     }
   };
 
@@ -1396,208 +1619,22 @@ const NonCollectionsView: React.FC<{
     return null;
   };
 
-  const handleBulkPaste = async (field: keyof NonCollection, value: string) => {
+  const handleBulkPaste = async (field: keyof NonCollection, value: string, operationHint?: string) => {
     const lines = value.split(/[\n\r]/).map(l => l.trim()).filter(Boolean);
     if (lines.length === 0) return;
 
+    const operationToUse = String(operationHint || lastBulkOperation || '').trim();
     console.log('[BULK_PASTE] Campo:', field, 'Valores:', lines);
-    console.log('[BULK_PASTE] nonCollections.length:', nonCollections.length);
-
-    // Colunas que SEMPRE criam novas linhas (mesmo se já houver dados)
-    const colunasQueCriamLinhas: (keyof NonCollection)[] = ['rota'];
-    const criaNovasLinhas = colunasQueCriamLinhas.includes(field);
-
-    console.log('[BULK_PASTE] criaNovasLinhas:', criaNovasLinhas);
-
-    if (criaNovasLinhas) {
-      // COMPORTAMENTO 1: Criar novas linhas (apenas para ROTA)
-      // Abre modal para selecionar Operação antes de criar as linhas
-      setPendingBulkRoutes(lines);
-      setIsOperationModalOpen(true);
-      setIsCreatingRecords(false); // Garante que a trava esteja liberada ao abrir
-    } else {
-      // COMPORTAMENTO 2: Atualizar linhas existentes ou vazias
-      // Para outras colunas (CÓDIGO, PRODUTOR, MOTIVO, etc.)
-      console.log('[BULK_PASTE] Preenchendo linhas existentes e/ou vazias...');
-
-      // Colunas que devem ser tratadas individualmente (sem tentar separar Código/produtor)
-      const colunasIndividuais: (keyof NonCollection)[] = ['codigo', 'produtor'];
-      const isColunaIndividual = colunasIndividuais.includes(field);
-
-      // ============================================================
-      // IDENTIFICA LINHAS VAZIAS vs PREENCHIDAS
-      // ============================================================
-      // Uma linha é considerada "vazia" se NÃO tem rota OU NÃO tem produtor
-      // Isso evita sobrescrever dados que o usuário já preencheu
-      const emptyIndices: number[] = [];
-      const filledIndices: number[] = [];
-
-      nonCollections.forEach((nc, idx) => {
-        const isEmpty = !nc.rota?.trim() || !nc.produtor?.trim();
-        if (isEmpty) {
-          emptyIndices.push(idx);
-        } else {
-          filledIndices.push(idx);
-        }
-      });
-
-      console.log('[BULK_PASTE] Linhas vazias detectadas:', emptyIndices.length);
-      console.log('[BULK_PASTE] Linhas preenchidas detectadas:', filledIndices.length);
-
-      // ============================================================
-      // DISTRIBUI VALORES: PRIORIZA LINHAS VAZIAS
-      // ============================================================
-      const updatedRecords: NonCollection[] = [...nonCollections]; // Cópia completa
-      let lineIndex = 0; // índice do valor being processed
-
-      // Passo 1: Preenche primeiro nas linhas vazias
-      for (let i = 0; i < emptyIndices.length && lineIndex < lines.length; i++) {
-        const recordIndex = emptyIndices[i];
-        const record = updatedRecords[recordIndex];
-        let finalValue = lines[lineIndex];
-        let codigo = '';
-        let produtor = '';
-
-        // Tenta separar Código e produtor SOMENTE se NÃO for coluna individual
-        if (!isColunaIndividual) {
-          const parsed = parseCodigoProdutor(lines[lineIndex]);
-          if (parsed) {
-            codigo = parsed.codigo;
-            produtor = parsed.produtor;
-            console.log(`[BULK_PASTE] -o. Linha vazia ${recordIndex}: Código/produtor separados:`, parsed);
-          }
-        }
-
-        // Formata se for data
-        if (field === 'data' || field === 'dataAcao' || field === 'ultimaColeta') {
-          if (finalValue.includes('-')) {
-            const [year, month, day] = finalValue.split('-');
-            finalValue = `${day}/${month}/${year}`;
-          }
-        }
-
-        // CÓDIGO: converte para maiúsculo
-        if (field === 'codigo') {
-          finalValue = finalValue.toUpperCase();
-        }
-
-        // Aplica o valor na linha vazia
-        updatedRecords[recordIndex] = {
-          ...record,
-          ...(codigo && produtor ? { codigo, produtor } : { [field]: finalValue })
-        };
-        console.log(`[BULK_PASTE] Preenchida linha vazia ${recordIndex} (campo: ${field})`);
-        lineIndex++;
-      }
-
-      // Passo 2: Se ainda há valores e todas linhas vazias foram usadas, cria novas linhas
-      const remainingLines = lines.slice(lineIndex);
-      if (remainingLines.length > 0) {
-        console.log('[BULK_PASTE] Criando', remainingLines.length, 'novas linhas para valores restantes...');
-
-        const dataFormatada = getNonCollectionDateForCurrentTime();
-        const dataParaSemana = dataFormatada.split('/').reverse().join('-');
-        const semana = getWeekString(dataParaSemana);
-
-        for (let i = 0; i < remainingLines.length; i++) {
-          let finalValue = remainingLines[i];
-          let codigo = '';
-          let produtor = '';
-
-          // Tenta separar Código e produtor
-          if (!isColunaIndividual) {
-            const parsed = parseCodigoProdutor(remainingLines[i]);
-            if (parsed) {
-              codigo = parsed.codigo;
-              produtor = parsed.produtor;
-            }
-          }
-
-          // Formata se for data
-          if (field === 'data' || field === 'dataAcao' || field === 'ultimaColeta') {
-            if (finalValue.includes('-')) {
-              const [year, month, day] = finalValue.split('-');
-              finalValue = `${day}/${month}/${year}`;
-            }
-          }
-
-          // CÓDIGO: converte para maiúsculo
-          if (field === 'codigo') {
-            finalValue = finalValue.toUpperCase();
-          }
-
-          const newRecord: NonCollection = {
-            id: (Date.now() + i).toString(), // ID temporário
-            semana,
-            rota: '', // Será preenchido depois pelo usuário
-            data: dataFormatada,
-            codigo: codigo || (field === 'codigo' ? finalValue : ''),
-            produtor: produtor || (field === 'produtor' ? finalValue : ''),
-            motivo: field === 'motivo' ? finalValue : '',
-            observacao: field === 'observacao' ? finalValue : '',
-            acao: field === 'acao' ? finalValue : '',
-            dataAcao: field === 'dataAcao' ? finalValue : '',
-            ultimaColeta: field === 'ultimaColeta' ? finalValue : '',
-            Culpabilidade: field === 'Culpabilidade' ? finalValue : 'Não se aplica',
-            operacao: '', // Será definido pelo modal de operação
-            causaRaiz: ''
-          };
-
-          updatedRecords.push(newRecord);
-          console.log(`[BULK_PASTE] Criada nova linha ${updatedRecords.length - 1} para valor restante`);
-        }
-      }
-
-      // ============================================================
-      // ATUALIZA ESTADO E SALVA NO SHAREPOINT
-      // ============================================================
-      setNonCollections(updatedRecords);
-      console.log('[BULK_PASTE] -o.', lineIndex, 'valores distribuídos em linhas existentes/vazias,', remainingLines.length, 'novas linhas criadas');
-
-      // Salva no SharePoint APENAS registros que já existem no SharePoint
-      try {
-        const token = await getValidToken() || currentUser.accessToken;
-        if (!token) {
-          console.error('[BULK_PASTE] Token não encontrado, pulando salvamento no SharePoint');
-          return;
-        }
-
-        // Filtra apenas registros que já existem no SharePoint (IDs numéricos válidos)
-        const recordsToSave = updatedRecords.filter(r => {
-          const id = parseInt(r.id);
-          // SharePoint IDs são inteiros pequenos (< 1 milhão), locais são timestamps grandes
-          return !isNaN(id) && id < 1000000;
-        });
-
-        if (recordsToSave.length === 0) {
-          console.log('[BULK_PASTE] Nenhum registro para salvar no SharePoint (todos são locais)');
-          return;
-        }
-
-        console.log('[BULK_PASTE] Salvando', recordsToSave.length, 'registros no SharePoint...');
-        const savePromises = recordsToSave.map(async (record) => {
-          try {
-            await SharePointService.updateNonCollection(token, record);
-            console.log('[BULK_PASTE] -o. Salvo:', record.rota, '-', record.codigo);
-          } catch (e: any) {
-            console.error('[BULK_PASTE] Erro ao salvar registro:', record.rota, e.message);
-          }
-        });
-        await Promise.all(savePromises);
-        console.log('[BULK_PASTE] -o. Todos os registros salvos no SharePoint');
-      } catch (e: any) {
-        console.error('[BULK_PASTE] Erro ao salvar no SharePoint:', e.message);
-      }
-
-      // Busca coletas previstas se criou novas linhas
-      if (remainingLines.length > 0 && nonCollections.length > 0) {
-        // Pega a data do último registro adicionado (todos tém a mesma data)
-        const lastRecord = updatedRecords[updatedRecords.length - 1];
-        if (lastRecord.data) {
-          await fetchColetasPrevistas(lastRecord.data);
-        }
-      }
+    if (operationToUse) {
+      console.log('[BULK_PASTE] Colagem em massa com operação reaproveitada:', operationToUse);
+      await applyBulkPasteWithOperation(operationToUse, { field, lines });
+      return;
     }
+
+    console.log('[BULK_PASTE] Colagem em massa detectada, aguardando seleção de operação');
+    setPendingBulkPaste({ field, lines });
+    setIsOperationModalOpen(true);
+    setIsCreatingRecords(false);
   };
 
   const handleColumnResize = (col: string, startX: number, startWidth: number) => {
@@ -1654,6 +1691,7 @@ const NonCollectionsView: React.FC<{
     { key: 'codigo', label: 'Código' },
     { key: 'produtor', label: 'Produtor' },
     { key: 'motivo', label: 'Motivo' },
+    { key: 'observacao', label: 'Observação' },
     { key: 'acao', label: 'Ação' },
     { key: 'dataAcao', label: 'Data Ação' },
     { key: 'ultimaColeta', label: 'Última Coleta' },
@@ -1982,7 +2020,7 @@ const NonCollectionsView: React.FC<{
                               const val = e.clipboardData.getData('text');
                               if (val.includes('\n')) {
                                 e.preventDefault();
-                                handleBulkPaste('rota', val);
+                                handleBulkPaste('rota', val, row.operacao);
                               }
                             }}
                             className={`${inputClass} font-black text-center`}
@@ -2017,7 +2055,7 @@ const NonCollectionsView: React.FC<{
                               const val = e.clipboardData.getData('text');
                               if (val.includes('\n')) {
                                 e.preventDefault();
-                                handleBulkPaste('data', val);
+                                handleBulkPaste('data', val, row.operacao);
                               }
                             }}
                             className={`${inputClass} text-center font-mono`}
@@ -2050,7 +2088,7 @@ const NonCollectionsView: React.FC<{
                               // Múltiplas linhas: bulk paste
                               if (val.includes('\n')) {
                                 e.preventDefault();
-                                handleBulkPaste('produtor', val);
+                                handleBulkPaste('produtor', val, row.operacao);
                                 return;
                               }
                               
@@ -2096,7 +2134,7 @@ const NonCollectionsView: React.FC<{
                               // Múltiplas linhas: bulk paste
                               if (val.includes('\n')) {
                                 e.preventDefault();
-                                handleBulkPaste('codigo', val);
+                                handleBulkPaste('codigo', val, row.operacao);
                                 return;
                               }
                               
@@ -2228,7 +2266,7 @@ const NonCollectionsView: React.FC<{
                                 const val = e.clipboardData.getData('text');
                                 if (val.includes('\n')) {
                                   e.preventDefault();
-                                  handleBulkPaste('observacao', val);
+                                  handleBulkPaste('observacao', val, row.operacao);
                                 }
                               }}
                               rows={1}
@@ -2317,7 +2355,7 @@ const NonCollectionsView: React.FC<{
                               const val = e.clipboardData.getData('text');
                               if (val.includes('\n')) {
                                 e.preventDefault();
-                                handleBulkPaste('acao', val);
+                                handleBulkPaste('acao', val, row.operacao);
                               }
                             }}
                             rows={1}
@@ -2391,7 +2429,7 @@ const NonCollectionsView: React.FC<{
                               const val = e.clipboardData.getData('text');
                               if (val.includes('\n')) {
                                 e.preventDefault();
-                                handleBulkPaste('dataAcao', val);
+                                handleBulkPaste('dataAcao', val, row.operacao);
                               }
                             }}
                             className={`${inputClass} text-center font-mono`}
@@ -2437,7 +2475,7 @@ const NonCollectionsView: React.FC<{
                               const val = e.clipboardData.getData('text');
                               if (val.includes('\n')) {
                                 e.preventDefault();
-                                handleBulkPaste('ultimaColeta', val);
+                                handleBulkPaste('ultimaColeta', val, row.operacao);
                               }
                             }}
                             className={`${inputClass} text-center font-mono`}
@@ -2461,6 +2499,7 @@ const NonCollectionsView: React.FC<{
                             onChange={(e) => {
                               const updated = { ...row, operacao: e.target.value };
                               setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
+                              setLastBulkOperation(e.target.value);
                             }}
                             className={`${inputClass} text-center font-bold cursor-pointer bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-200`}
                           >
@@ -2545,7 +2584,7 @@ const NonCollectionsView: React.FC<{
                         // Remove localmente imediatamente para feedback visual
                         setNonCollections(prev => prev.filter(r => r.id !== rowId));
                         // Tenta excluir do SharePoint (apenas registros já persistidos)
-                        if (rowId !== 'ghost' && !rowId.startsWith('temp')) {
+                        if (rowId !== 'ghost' && isPersistedNonCollectionId(rowId)) {
                           try {
                             const token = await getValidToken() || currentUser.accessToken;
                             if (token) {
@@ -2575,6 +2614,10 @@ const NonCollectionsView: React.FC<{
                 className="border-b-2 border-blue-200 dark:border-blue-800 transition-colors bg-slate-50 dark:bg-slate-800 italic text-slate-400 border-l-4 border-dashed border-slate-300 dark:border-slate-600"
               >
                 {columns.map(({ key }) => {
+                  if (hiddenColumns.has(key)) {
+                    return null;
+                  }
+
                   const inputClass = `w-full bg-transparent outline-none border-none px-3 py-2 text-[11px] font-semibold uppercase transition-all ${
                     isDarkMode ? 'text-slate-200 placeholder-slate-500' : 'text-slate-900 placeholder-slate-400'
                   }`;
@@ -2590,7 +2633,7 @@ const NonCollectionsView: React.FC<{
                             const val = e.clipboardData.getData('text');
                             if (val.includes('\n')) {
                               e.preventDefault();
-                              handleBulkPaste('rota', val);
+                              handleBulkPaste('rota', val, ghostRow.operacao);
                             }
                           }}
                           placeholder="Cole rotas..."
@@ -2618,7 +2661,7 @@ const NonCollectionsView: React.FC<{
                             const val = e.clipboardData.getData('text');
                             if (val.includes('\n')) {
                               e.preventDefault();
-                              handleBulkPaste('data', val);
+                              handleBulkPaste('data', val, ghostRow.operacao);
                             }
                           }}
                           placeholder="DD/MM/AAAA"
@@ -2634,7 +2677,10 @@ const NonCollectionsView: React.FC<{
                       <td key={`ghost-${key}`} className="p-0 border border-slate-200/30 dark:border-slate-800/30" style={{ verticalAlign: 'middle' }}>
                         <select
                           value={ghostRow.operacao || ''}
-                          onChange={(e) => updateGhostCell('operacao', e.target.value)}
+                          onChange={(e) => {
+                            updateGhostCell('operacao', e.target.value);
+                            setLastBulkOperation(e.target.value);
+                          }}
                           className={`${inputClass} text-center font-bold cursor-pointer`}
                         >
                           <option value="">Selecione...</option>
@@ -2657,7 +2703,7 @@ const NonCollectionsView: React.FC<{
                             const val = e.clipboardData.getData('text');
                             if (val.includes('\n')) {
                               e.preventDefault();
-                              handleBulkPaste('produtor', val);
+                              handleBulkPaste('produtor', val, ghostRow.operacao);
                             }
                           }}
                           placeholder="Cole produtores..."
@@ -2678,7 +2724,7 @@ const NonCollectionsView: React.FC<{
                             const val = e.clipboardData.getData('text');
                             if (val.includes('\n')) {
                               e.preventDefault();
-                              handleBulkPaste('codigo', val);
+                              handleBulkPaste('codigo', val, ghostRow.operacao);
                             }
                           }}
                           placeholder="Cole Códigos..."
@@ -2769,7 +2815,7 @@ const NonCollectionsView: React.FC<{
                               const val = e.clipboardData.getData('text');
                               if (val.includes('\n')) {
                                 e.preventDefault();
-                                handleBulkPaste('observacao', val);
+                                handleBulkPaste('observacao', val, ghostRow.operacao);
                               }
                             }}
                             rows={1}
@@ -2843,7 +2889,7 @@ const NonCollectionsView: React.FC<{
                             const val = e.clipboardData.getData('text');
                             if (val.includes('\n')) {
                               e.preventDefault();
-                              handleBulkPaste('acao', val);
+                              handleBulkPaste('acao', val, ghostRow.operacao);
                             }
                           }}
                           rows={1}
@@ -2856,8 +2902,8 @@ const NonCollectionsView: React.FC<{
                   if (key === 'semana') {
                     return (
                       <td key={`ghost-${key}`} className="p-0 border border-slate-200/30 dark:border-slate-800/30" style={{ verticalAlign: 'middle' }}>
-                        <span className={`${inputClass} text-center block py-2`}>
-                          {ghostRow.data ? getWeekString(ghostRow.data.split('/').reverse().join('-')) : '-'}
+                        <span className={`${inputClass} text-center block py-2 opacity-0 select-none`}>
+                          SEMANA
                         </span>
                       </td>
                     );
@@ -3147,17 +3193,17 @@ const NonCollectionsView: React.FC<{
               selecionar Operação
             </div>
             <p className="text-sm text-slate-600 dark:text-slate-400 mb-2 font-medium">
-              {pendingBulkRoutes.length} rota(s) colada(s). Selecione a Operação:
+              {pendingBulkPaste?.lines.length || 0} valor(es) colado(s) em massa na coluna {(pendingBulkPaste?.field || '').toString().toUpperCase()}. Selecione a Operação:
             </p>
             <div className="mb-6 max-h-32 overflow-y-auto scrollbar-thin bg-slate-50 dark:bg-slate-800 rounded-xl p-3 border border-slate-200 dark:border-slate-700">
-              {pendingBulkRoutes.slice(0, 10).map((rota, i) => (
+              {(pendingBulkPaste?.lines || []).slice(0, 10).map((line, i) => (
                 <div key={i} className="text-[10px] font-bold text-slate-600 dark:text-slate-400 py-1 truncate">
-                  . {rota}
+                  . {line}
                 </div>
               ))}
-              {pendingBulkRoutes.length > 10 && (
+              {(pendingBulkPaste?.lines.length || 0) > 10 && (
                 <div className="text-[10px] font-bold text-slate-400 italic mt-1">
-                  ...e mais {pendingBulkRoutes.length - 10} rota(s)
+                  ...e mais {(pendingBulkPaste?.lines.length || 0) - 10} valor(es)
                 </div>
               )}
             </div>
@@ -3173,7 +3219,7 @@ const NonCollectionsView: React.FC<{
                 {userConfigs.map(op => (
                   <button
                     key={op.operacao}
-                    onClick={() => createBulkRecordsWithOperation(op.operacao)}
+                    onClick={() => applyBulkPasteWithOperation(op.operacao)}
                     disabled={isCreatingRecords}
                     className={`p-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl transition-all font-black text-xs uppercase relative
                       ${isCreatingRecords
@@ -3653,7 +3699,9 @@ const NonCollectionsView: React.FC<{
                         return (
                           <th
                             key={key}
-                            className={`relative px-3 py-2 text-left font-black uppercase text-[9px] tracking-wider ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}
+                            className={`relative px-3 py-2 text-left font-black uppercase text-[9px] tracking-wider ${
+                              key === 'observacao' ? 'min-w-[220px]' : ''
+                            } ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}
                           >
                             <div className="flex items-center gap-2">
                               <span>{label}</span>
@@ -3866,6 +3914,29 @@ const NonCollectionsView: React.FC<{
                                 title={pending.motivo || nc.motivo}
                               >
                                 {pending.motivo || nc.motivo || '---'}
+                              </div>
+                            )}
+                          </td>
+
+                          <td className={`px-3 py-2 min-w-[220px] max-w-[320px] ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>
+                            {editingHistoryId === nc.id && editingHistoryField === 'observacao' ? (
+                              <textarea
+                                value={pending.observacao ?? nc.observacao}
+                                onChange={(e) => handleUpdateHistoryCell(nc.id, 'observacao', e.target.value)}
+                                onBlur={() => { setEditingHistoryId(null); setEditingHistoryField(null); }}
+                                rows={2}
+                                className="w-full bg-blue-100 dark:bg-blue-900/30 border-2 border-blue-500 px-2 py-1 rounded font-bold outline-none resize-none"
+                                autoFocus
+                              />
+                            ) : (
+                              <div
+                                onClick={() => startHistoryCellEdit(nc, 'observacao')}
+                                className={`font-bold cursor-pointer hover:bg-slate-200/60 dark:hover:bg-slate-700/60 rounded px-1 whitespace-pre-wrap break-words ${
+                                  pending.observacao ? 'bg-amber-200 dark:bg-amber-800/50' : ''
+                                }`}
+                                title={pending.observacao || nc.observacao}
+                              >
+                                {pending.observacao || nc.observacao || '---'}
                               </div>
                             )}
                           </td>

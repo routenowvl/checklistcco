@@ -1487,7 +1487,12 @@ const RouteDepartureView: React.FC<{
     }
     
     const porcentagem = percentMatch ? percentMatch[1] : '100';
-    const motivos = motivosMatch && !currentText.includes(percentMatch ? percentMatch[0] : '') ? motivosMatch[1] : '';
+    const motivos = percentMatch
+      ? currentText
+          .substring((percentMatch.index || 0) + percentMatch[0].length)
+          .replace(/^\s*-\s*/, '')
+          .trim()
+      : (motivosMatch ? motivosMatch[1].trim() : '');
     const currentRoute = routes.find(r => r.id === routeId);
     const causaRaiz = (currentRoute?.causaRaiz || '').trim();
 
@@ -1513,8 +1518,10 @@ const RouteDepartureView: React.FC<{
     console.log('[CHECKLIST] Salvando:', { routeId, result, causaRaiz: causaRaizSanitizada });
 
     try {
-      await updateCell(routeId, 'checklistMotorista', result);
-      await updateCell(routeId, 'causaRaiz' as keyof RouteDeparture, causaRaizSanitizada);
+      // Atualiza checklist e causa raiz em uma única operação para evitar sobrescrita por estado antigo.
+      await updateCell(routeId, 'checklistMotorista', result, {
+        causaRaiz: causaRaizSanitizada
+      });
     } catch (e) {
       console.error('[CHECKLIST] Erro ao salvar checklist/causa raiz:', e);
     }

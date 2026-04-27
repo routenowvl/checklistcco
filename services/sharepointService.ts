@@ -1758,6 +1758,8 @@ export const SharePointService = {
     try {
       const siteId = await getResolvedSiteId(token);
       const historyListId = '1702fe62-6a47-4fd1-b935-0e3258073bb6';
+      const { mapping } = await getListColumnMapping(siteId, historyListId, token);
+      const historyObservacaoField = resolveFieldName(mapping, 'Observação');
 
       // Constrói payload removendo campos vazios (SharePoint rejeita DateTime com "")
       const payload: any = {};
@@ -1773,7 +1775,7 @@ export const SharePointService = {
       if (nonCollection.codigo) payload.C_x00f3_digo = nonCollection.codigo;
       if (nonCollection.produtor) payload.Produtor = nonCollection.produtor;
       if (nonCollection.motivo) payload.Motivo = nonCollection.motivo;
-      if (nonCollection.observacao) payload.Observa_x00e7__x00e3_o = nonCollection.observacao;
+      if (nonCollection.observacao) payload[historyObservacaoField] = nonCollection.observacao;
       if (nonCollection.acao) payload.A_x00e7__x00e3_o = nonCollection.acao;
       // Campos DateTime: só envia se parse resultou em valor válido
       { const v = parseDateForSharePoint(nonCollection.dataAcao); if (v) payload.DataA_x00e7__x00e3_o = v; }
@@ -1822,7 +1824,7 @@ export const SharePointService = {
    * Lista: nao_coletas_web_hist (ID: 1702fe62-6a47-4fd1-b935-0e3258073bb6)
    */
   async getArchivedNonCollections(token: string, userEmail: string, startDate: string, endDate: string, signal?: AbortSignal): Promise<NonCollection[]> {
-    const cacheKey = `archived_noncollections_${startDate}_${endDate}`;
+    const cacheKey = `archived_noncollections_v2_${startDate}_${endDate}`;
 
     // 1. Cache: retorna imediatamente se já buscou esse range recentemente
     const cached = getCachedData<NonCollection[]>(cacheKey);
@@ -1868,6 +1870,14 @@ export const SharePointService = {
           const dataStr = f[colData] ? f[colData].split('T')[0] : "";
           const ultimaColetaStr = f[resolveFieldName(mapping, 'ÚltimaColeta')] ? f[resolveFieldName(mapping, 'ÚltimaColeta')].split('T')[0] : "";
           const dataAcaoStr = f[resolveFieldName(mapping, 'DataAção')] ? f[resolveFieldName(mapping, 'DataAção')].split('T')[0] : "";
+          const observacaoValue =
+            f[resolveFieldName(mapping, 'Observação')] ||
+            f[resolveFieldName(mapping, 'Observacao')] ||
+            f[resolveFieldName(mapping, 'Observa_x00e7__x00e3_o')] ||
+            f.Observação ||
+            f.Observacao ||
+            f.Observa_x00e7__x00e3_o ||
+            "";
 
           // Histórico: Title armazena a rota.
           // "Semana" é apenas informativa na UI e é calculada pela data.
@@ -1881,7 +1891,7 @@ export const SharePointService = {
             codigo: f[resolveFieldName(mapping, 'Código')] || "",
             produtor: f[resolveFieldName(mapping, 'Produtor')] || "",
             motivo: f[resolveFieldName(mapping, 'Motivo')] || "",
-            observacao: f[resolveFieldName(mapping, 'Observação')] || "",
+            observacao: observacaoValue,
             acao: f[resolveFieldName(mapping, 'Ação')] || "",
             dataAcao: dataAcaoStr,
             ultimaColeta: ultimaColetaStr,
@@ -2101,6 +2111,8 @@ export const SharePointService = {
           Produtor: item.produtor,
           Motivo: item.motivo,
           'Observação': item.observacao,
+          Observacao: item.observacao,
+          'Observa_x00e7__x00e3_o': item.observacao,
           Ação: item.acao,
           'DataAção': safeToISO(item.dataAcao),
           'ÚltimaColeta': safeToISO(item.ultimaColeta),
