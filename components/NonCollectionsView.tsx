@@ -1669,6 +1669,69 @@ const NonCollectionsView: React.FC<{
     }
   };
 
+  const handleExportToExcel = () => {
+    if (filteredArchivedResults.length === 0) {
+      alert('Não há dados no histórico para exportar.');
+      return;
+    }
+
+    const data = filteredArchivedResults.map((item) => ({
+      Semana: item.semana || '',
+      Rota: item.rota || '',
+      Data: formatDisplayDate(item.data),
+      'Código': item.codigo || '',
+      Produtor: item.produtor || '',
+      Motivo: item.motivo || '',
+      'Observação': item.observacao || '',
+      'Ação': item.acao || '',
+      'Data Ação': formatDisplayDate(item.dataAcao),
+      'Última Coleta': formatDisplayDate(item.ultimaColeta),
+      Culpabilidade: item.Culpabilidade || '',
+      'Operação': item.operacao || ''
+    }));
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(data);
+
+    ws['!cols'] = [
+      { wch: 12 }, // Semana
+      { wch: 14 }, // Rota
+      { wch: 12 }, // Data
+      { wch: 14 }, // Código
+      { wch: 34 }, // Produtor
+      { wch: 32 }, // Motivo
+      { wch: 40 }, // Observação
+      { wch: 34 }, // Ação
+      { wch: 12 }, // Data Ação
+      { wch: 14 }, // Última Coleta
+      { wch: 16 }, // Culpabilidade
+      { wch: 20 }  // Operação
+    ];
+
+    const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const address = XLSX.utils.encode_cell({ r: 0, c });
+      if (!ws[address]) continue;
+      ws[address].s = {
+        font: { bold: true, color: { rgb: 'FFFFFF' } },
+        fill: { fgColor: { rgb: '2563EB' } },
+        alignment: { horizontal: 'center', vertical: 'center' }
+      };
+    }
+
+    XLSX.utils.book_append_sheet(wb, ws, 'Histórico');
+
+    const startLabel = formatDateToBR(histStart).replace(/\//g, '-');
+    const endLabel = formatDateToBR(histEnd).replace(/\//g, '-');
+    const fileName = `Historico_Nao_Coletas_${startLabel}_ate_${endLabel}.xlsx`;
+
+    XLSX.writeFile(wb, fileName, {
+      bookType: 'xlsx',
+      bookSST: false,
+      type: 'binary'
+    });
+  };
+
   const columns: { key: keyof NonCollection; label: string }[] = [
     { key: 'semana', label: 'SEMANA' },
     { key: 'rota', label: 'ROTA' },
@@ -3660,6 +3723,15 @@ const NonCollectionsView: React.FC<{
                 >
                   {isSearchingArchive ? <><Loader2 size={16} className="animate-spin" /> Buscando...</> : <><Search size={16} /> Buscar</>}
                 </button>
+                {filteredArchivedResults.length > 0 && (
+                  <button
+                    onClick={handleExportToExcel}
+                    className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black uppercase text-[10px] tracking-widest transition-all shadow-lg"
+                    title="Exportar para Excel (.xlsx)"
+                  >
+                    <Table size={16} /> Excel
+                  </button>
+                )}
                 <span className={`text-[10px] font-bold ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>
                   {filteredArchivedResults.length} resultado(s)
                 </span>
