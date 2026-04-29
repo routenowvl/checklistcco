@@ -494,6 +494,7 @@ const NonCollectionsView: React.FC<{
 
     setIsCreatingRecords(true);
     setLastBulkOperation(operacaoSelecionada);
+    setGhostRow(prev => ({ ...prev, operacao: operacaoSelecionada }));
     const { field, lines } = payload;
 
     try {
@@ -1623,11 +1624,19 @@ const NonCollectionsView: React.FC<{
     const lines = value.split(/[\n\r]/).map(l => l.trim()).filter(Boolean);
     if (lines.length === 0) return;
 
-    const operationToUse = String(operationHint || lastBulkOperation || '').trim();
+    const operationToUse = String(operationHint || '').trim();
+    const availableOperations = userConfigs.map(cfg => String(cfg.operacao || '').trim()).filter(Boolean);
     console.log('[BULK_PASTE] Campo:', field, 'Valores:', lines);
     if (operationToUse) {
       console.log('[BULK_PASTE] Colagem em massa com operação reaproveitada:', operationToUse);
       await applyBulkPasteWithOperation(operationToUse, { field, lines });
+      return;
+    }
+
+    if (availableOperations.length === 1) {
+      const singleOperation = availableOperations[0];
+      console.log('[BULK_PASTE] Única operação disponível, aplicando automaticamente:', singleOperation);
+      await applyBulkPasteWithOperation(singleOperation, { field, lines });
       return;
     }
 
@@ -2560,9 +2569,11 @@ const NonCollectionsView: React.FC<{
                           <select
                             value={row.operacao}
                             onChange={(e) => {
-                              const updated = { ...row, operacao: e.target.value };
+                              const operacaoSelecionada = e.target.value;
+                              const updated = { ...row, operacao: operacaoSelecionada };
                               setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
-                              setLastBulkOperation(e.target.value);
+                              setLastBulkOperation(operacaoSelecionada);
+                              void persistNonCollectionRow(row.id, 'Operação', updated);
                             }}
                             className={`${inputClass} text-center font-bold cursor-pointer bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-200`}
                           >

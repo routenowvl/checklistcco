@@ -1014,6 +1014,7 @@ export const SharePointService = {
           tempo: f[resolveFieldName(mapping, 'TempGab')] || f[resolveFieldName(mapping, 'TempoGap')] || "",
           createdAt: f.Created || new Date().toISOString(),
           checklistMotorista: f[resolveFieldName(mapping, 'ChecklistMotorista')] || "",
+          retornoMotorista: f[resolveFieldName(mapping, 'RetornoMotorista')] || f.RetornoMotorista || "",
           causaRaiz: f[resolveFieldName(mapping, 'CausaRaiz')] || ""
         };
       });
@@ -1094,6 +1095,7 @@ export const SharePointService = {
             tempo: f[resolveFieldName(mapping, 'TempGab')] || f[resolveFieldName(mapping, 'TempoGap')] || "",
             createdAt: f.Created || new Date().toISOString(),
             checklistMotorista: f[resolveFieldName(mapping, 'ChecklistMotorista')] || "",
+            retornoMotorista: f[resolveFieldName(mapping, 'RetornoMotorista')] || f.RetornoMotorista || "",
             causaRaiz: f[resolveFieldName(mapping, 'CausaRaiz')] || ""
           };
         });
@@ -1145,6 +1147,7 @@ export const SharePointService = {
         StatusOp: departure.statusOp,
         TempGab: departure.tempo,
         ChecklistMotorista: departure.checklistMotorista || '',
+        RetornoMotorista: departure.retornoMotorista || '',
         CausaRaiz: departure.causaRaiz || ''
     };
 
@@ -1198,6 +1201,7 @@ export const SharePointService = {
         StatusOp: departure.statusOp,
         TempGab: departure.tempo,
         ChecklistMotorista: departure.checklistMotorista || '',
+        RetornoMotorista: departure.retornoMotorista || '',
         CausaRaiz: departure.causaRaiz || ''
     };
 
@@ -1271,6 +1275,7 @@ export const SharePointService = {
                 StatusOp: item.statusOp, 
                 TempGab: item.tempo, 
                 ChecklistMotorista: item.checklistMotorista || '',
+                RetornoMotorista: item.retornoMotorista || '',
                 CausaRaiz: item.causaRaiz || '' 
             };
             const histFields: any = {};

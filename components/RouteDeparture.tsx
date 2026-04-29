@@ -13,7 +13,7 @@ import {
   ChevronRight, Maximize2, Minimize2,
   Archive, Database, Save, LinkIcon,
   Layers, Trash2, Settings2, Check, Table, SortAsc,
-  Sun, Moon, AlertTriangle, Calendar, ArrowUpDown
+  Sun, Moon, AlertTriangle, Calendar, ArrowUpDown, MessageCircle
 } from 'lucide-react';
 
 const MOTIVOS = [
@@ -146,6 +146,13 @@ type ArchiveHardBlockType = 'resumo' | 'status';
 type ArchiveStatusDivergence = {
   operacao: string;
   status: string;
+};
+
+type MotoristaChatMessage = {
+  horario: string;
+  remetente: string;
+  texto: string;
+  isBot: boolean;
 };
 
 const HISTORY_EDIT_MAX_DAYS = 2;
@@ -512,6 +519,7 @@ const RouteDepartureView: React.FC<{
   // Estado para alertas de motoristas com atrasos recorrentes por "Mão de obra"
   const [motoristAlerts, setMotoristAlerts] = useState<Record<string, { count: number; history: RouteDeparture[] }>>({});
   const [selectedMotoristAlert, setSelectedMotoristAlert] = useState<{ motorista: string; count: number; history: RouteDeparture[] } | null>(null);
+  const [selectedMotoristaChat, setSelectedMotoristaChat] = useState<{ route: RouteDeparture; messages: MotoristaChatMessage[] } | null>(null);
 
   // Estado para modal de aviso quando tentar adicionar rota com filtros/ordenação ativos
   const [isFilterBlockModalOpen, setIsFilterBlockModalOpen] = useState(false);
@@ -604,6 +612,73 @@ const RouteDepartureView: React.FC<{
     const fallback = currentUser?.accessToken || (window as any).__access_token;
     if (fallback) return fallback;
     throw new Error('Sessão expirada. Por favor, renove sua sessão.');
+  };
+
+  const parseRetornoMotoristaMessages = (raw: string): MotoristaChatMessage[] => {
+    const source = String(raw || '').trim();
+    if (!source) return [];
+
+    const entries: string[] = [];
+    let current = '';
+    let inQuotes = false;
+
+    for (let i = 0; i < source.length; i++) {
+      const char = source[i];
+
+      if (char === '"') {
+        // Trata aspas escapadas no formato CSV ("")
+        if (inQuotes && source[i + 1] === '"') {
+          current += '"';
+          i++;
+          continue;
+        }
+        inQuotes = !inQuotes;
+        continue;
+      }
+
+      const isSeparator = (char === ';' || char === '\n' || char === '\r') && !inQuotes;
+      if (isSeparator) {
+        const cleaned = current.trim().replace(/^"+|"+$/g, '');
+        if (cleaned) entries.push(cleaned);
+        current = '';
+        continue;
+      }
+
+      current += char;
+    }
+
+    const tail = current.trim().replace(/^"+|"+$/g, '');
+    if (tail) entries.push(tail);
+
+    return entries.map((entry) => {
+      const match = entry.match(/^(\d{1,2}:\d{2})\s*-\s*([^:]+):\s*(.+)$/);
+      if (!match) {
+        return {
+          horario: '',
+          remetente: 'Sistema',
+          texto: entry,
+          isBot: true
+        };
+      }
+
+      const [, horario, remetenteRaw, textoRaw] = match;
+      const remetente = remetenteRaw.trim();
+      const texto = textoRaw.trim();
+      const isBot = remetente.toLowerCase().includes('bot');
+
+      return {
+        horario,
+        remetente,
+        texto,
+        isBot
+      };
+    });
+  };
+
+  const openMotoristaChat = (route: RouteDeparture): void => {
+    const messages = parseRetornoMotoristaMessages(route.retornoMotorista || '');
+    setActiveMotoristaDropdownId(null);
+    setSelectedMotoristaChat({ route, messages });
   };
 
 
@@ -1700,6 +1775,7 @@ const RouteDepartureView: React.FC<{
                 prev.aviso !== route.aviso ||
                 prev.operacao !== route.operacao ||
                 prev.checklistMotorista !== route.checklistMotorista ||
+                prev.retornoMotorista !== route.retornoMotorista ||
                 prev.causaRaiz !== route.causaRaiz
               ) {
                 hasChanges = true;
@@ -3657,6 +3733,19 @@ const RouteDepartureView: React.FC<{
                       const predefinedMotoristaOptions = getPredefinedMotoristasForOperation(route.operacao || '');
                       const showMotoristaPicker = predefinedMotoristaOptions.length > 0;
                       const isMotoristaDropdownOpen = activeMotoristaDropdownId === route.id;
+                      const hasRetornoMotorista = Boolean(String(route.retornoMotorista || '').trim());
+                      const actionSlotCount =
+                        (showMotoristaPicker ? 1 : 0) +
+                        (hasRetornoMotorista ? 1 : 0) +
+                        (hasMotoristAlert ? 1 : 0);
+                      const motoristaInputPaddingClass =
+                        actionSlotCount >= 3 ? 'pr-24' : actionSlotCount === 2 ? 'pr-16' : actionSlotCount === 1 ? 'pr-10' : '';
+                      const motoristaPickerRightClass = hasMotoristAlert
+                        ? (hasRetornoMotorista ? 'right-16' : 'right-9')
+                        : 'right-2';
+                      const chatButtonRightClass = hasMotoristAlert
+                        ? (showMotoristaPicker ? 'right-24' : 'right-9')
+                        : (showMotoristaPicker ? 'right-9' : 'right-2');
 
                       return (
                         <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
@@ -3675,7 +3764,7 @@ const RouteDepartureView: React.FC<{
                                         handleMultilinePaste('motorista', rowIndex, val);
                                     }
                                 }}
-                                className={`${inputClass} text-center w-full ${showMotoristaPicker ? (hasMotoristAlert ? 'pr-16' : 'pr-10') : ''}`}
+                                className={`${inputClass} text-center w-full ${motoristaInputPaddingClass}`}
                             />
                             {showMotoristaPicker && (
                               <button
@@ -3684,10 +3773,23 @@ const RouteDepartureView: React.FC<{
                                   e.stopPropagation();
                                   setActiveMotoristaDropdownId((prev) => (prev === route.id ? null : route.id));
                                 }}
-                                className={`absolute top-1/2 -translate-y-1/2 ${hasMotoristAlert ? 'right-9' : 'right-2'} p-1 rounded-md ${isDarkMode ? 'text-slate-300 hover:bg-slate-700' : 'text-slate-600 hover:bg-slate-200'} transition-colors z-20`}
+                                className={`absolute top-1/2 -translate-y-1/2 ${motoristaPickerRightClass} p-1 rounded-md ${isDarkMode ? 'text-slate-300 hover:bg-slate-700' : 'text-slate-600 hover:bg-slate-200'} transition-colors z-20`}
                                 title={`Selecionar motorista da operação ${route.operacao || '-'}`}
                               >
                                 <ChevronDown size={14} className={`transition-transform ${isMotoristaDropdownOpen ? 'rotate-180' : ''}`} />
+                              </button>
+                            )}
+                            {hasRetornoMotorista && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openMotoristaChat(route);
+                                }}
+                                className={`absolute top-1/2 -translate-y-1/2 ${chatButtonRightClass} p-1 rounded-md ${isDarkMode ? 'text-cyan-300 hover:bg-slate-700' : 'text-cyan-700 hover:bg-slate-200'} transition-colors z-20`}
+                                title="Ver conversa bot x motorista"
+                              >
+                                <MessageCircle size={14} />
                               </button>
                             )}
                             {isMotoristaDropdownOpen && showMotoristaPicker && (
@@ -4195,6 +4297,19 @@ const RouteDepartureView: React.FC<{
                       const predefinedMotoristaOptions = getPredefinedMotoristasForOperation(route.operacao || '');
                       const showMotoristaPicker = predefinedMotoristaOptions.length > 0;
                       const isMotoristaDropdownOpen = activeMotoristaDropdownId === route.id;
+                      const hasRetornoMotorista = Boolean(String(route.retornoMotorista || '').trim());
+                      const actionSlotCount =
+                        (showMotoristaPicker ? 1 : 0) +
+                        (hasRetornoMotorista ? 1 : 0) +
+                        (hasMotoristAlert ? 1 : 0);
+                      const motoristaInputPaddingClass =
+                        actionSlotCount >= 3 ? 'pr-24' : actionSlotCount === 2 ? 'pr-16' : actionSlotCount === 1 ? 'pr-10' : '';
+                      const motoristaPickerRightClass = hasMotoristAlert
+                        ? (hasRetornoMotorista ? 'right-16' : 'right-9')
+                        : 'right-2';
+                      const chatButtonRightClass = hasMotoristAlert
+                        ? (showMotoristaPicker ? 'right-24' : 'right-9')
+                        : (showMotoristaPicker ? 'right-9' : 'right-2');
 
                       return (
                         <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
@@ -4206,7 +4321,7 @@ const RouteDepartureView: React.FC<{
                                 type="text"
                                 value={route.motorista}
                                 onChange={(e) => updateCell(route.id!, 'motorista', e.target.value)}
-                                className={`${inputClass} text-center w-full ${showMotoristaPicker ? (hasMotoristAlert ? 'pr-16' : 'pr-10') : ''}`}
+                                className={`${inputClass} text-center w-full ${motoristaInputPaddingClass}`}
                             />
                             {showMotoristaPicker && (
                               <button
@@ -4215,10 +4330,23 @@ const RouteDepartureView: React.FC<{
                                   e.stopPropagation();
                                   setActiveMotoristaDropdownId((prev) => (prev === route.id ? null : route.id));
                                 }}
-                                className={`absolute top-1/2 -translate-y-1/2 ${hasMotoristAlert ? 'right-9' : 'right-2'} p-1 rounded-md ${isDarkMode ? 'text-slate-300 hover:bg-slate-700' : 'text-slate-600 hover:bg-slate-200'} transition-colors z-20`}
+                                className={`absolute top-1/2 -translate-y-1/2 ${motoristaPickerRightClass} p-1 rounded-md ${isDarkMode ? 'text-slate-300 hover:bg-slate-700' : 'text-slate-600 hover:bg-slate-200'} transition-colors z-20`}
                                 title={`Selecionar motorista da operação ${route.operacao || '-'}`}
                               >
                                 <ChevronDown size={14} className={`transition-transform ${isMotoristaDropdownOpen ? 'rotate-180' : ''}`} />
+                              </button>
+                            )}
+                            {hasRetornoMotorista && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openMotoristaChat(route);
+                                }}
+                                className={`absolute top-1/2 -translate-y-1/2 ${chatButtonRightClass} p-1 rounded-md ${isDarkMode ? 'text-cyan-300 hover:bg-slate-700' : 'text-cyan-700 hover:bg-slate-200'} transition-colors z-20`}
+                                title="Ver conversa bot x motorista"
+                              >
+                                <MessageCircle size={14} />
                               </button>
                             )}
                             {isMotoristaDropdownOpen && showMotoristaPicker && (
@@ -5709,6 +5837,57 @@ const RouteDepartureView: React.FC<{
             </div>
           </div>
         </div>
+      )}
+
+      {selectedMotoristaChat && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[320] flex items-center justify-center p-4" onClick={() => setSelectedMotoristaChat(null)}>
+              <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] shadow-2xl w-full max-w-3xl border dark:border-slate-800 overflow-hidden" onClick={(e) => e.stopPropagation()}>
+                  <div className="bg-cyan-700 p-6 flex justify-between items-center text-white">
+                      <div className="flex items-center gap-4">
+                          <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center">
+                              <MessageCircle size={26} />
+                          </div>
+                          <div>
+                              <h3 className="font-black uppercase tracking-widest text-lg">Conversa Bot x Motorista</h3>
+                              <p className="text-[10px] font-bold text-white/80 uppercase tracking-wide">
+                                  Rota: {selectedMotoristaChat.route.rota || '-'} | Motorista: {selectedMotoristaChat.route.motorista || '-'}
+                              </p>
+                          </div>
+                      </div>
+                      <button onClick={() => setSelectedMotoristaChat(null)} className="p-2 hover:bg-white/20 rounded-xl transition-colors">
+                          <X size={28} />
+                      </button>
+                  </div>
+                  <div className="p-6 max-h-[60vh] overflow-y-auto scrollbar-thin bg-slate-100/70 dark:bg-slate-950/60">
+                      <div className="space-y-3">
+                          {selectedMotoristaChat.messages.length === 0 ? (
+                              <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-center">
+                                  <p className="text-[11px] font-bold text-slate-500 dark:text-slate-400">Sem mensagens válidas para exibir.</p>
+                              </div>
+                          ) : (
+                              selectedMotoristaChat.messages.map((message, idx) => (
+                                  <div key={`${selectedMotoristaChat.route.id}-chat-${idx}`} className={`flex ${message.isBot ? 'justify-end' : 'justify-start'}`}>
+                                      <div className={`max-w-[85%] px-4 py-3 rounded-2xl shadow-sm border ${
+                                          message.isBot
+                                            ? 'bg-cyan-600 border-cyan-500 text-white'
+                                            : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200'
+                                      }`}>
+                                          <div className={`mb-1 text-[9px] font-black uppercase tracking-wide ${
+                                            message.isBot ? 'text-cyan-100' : 'text-cyan-700 dark:text-cyan-300'
+                                          }`}>
+                                              {message.horario ? `${message.horario} - ` : ''}{message.remetente || (message.isBot ? 'Bot' : 'Motorista')}
+                                          </div>
+                                          <p className="text-[11px] font-semibold leading-relaxed whitespace-pre-wrap break-words">
+                                              {message.texto}
+                                          </p>
+                                      </div>
+                                  </div>
+                              ))
+                          )}
+                      </div>
+                  </div>
+              </div>
+          </div>
       )}
 
       {/* Modal de Alerta de Motorista com Histórico de Atrasos "Mão de obra" */}
