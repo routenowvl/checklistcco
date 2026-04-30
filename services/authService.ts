@@ -87,12 +87,19 @@ const getAccountByLoginHint = (
     return accounts.find((acc) => acc.username?.toLowerCase() === loginHint.toLowerCase()) || accounts[0];
 };
 
-export const ensureViewerAuthSession = async (loginHint?: string): Promise<string | null> => {
+type EnsureSessionOptions = {
+    interactive?: boolean;
+};
+
+export const ensureViewerAuthSession = async (
+    loginHint?: string,
+    options?: EnsureSessionOptions
+): Promise<string | null> => {
     if (!viewerMsalInstance) return null;
 
-    const mode = setAuthMode('viewer');
-    const instance = getMsalInstance(mode);
-    const scopes = getAuthScopes(mode);
+    const interactive = options?.interactive !== false;
+    const instance = getMsalInstance('viewer');
+    const scopes = getAuthScopes('viewer');
 
     await instance.initialize();
 
@@ -100,6 +107,7 @@ export const ensureViewerAuthSession = async (loginHint?: string): Promise<strin
     if (existingAccount) {
         try {
             const silent = await instance.acquireTokenSilent({ scopes, account: existingAccount });
+            setAuthMode('viewer');
             return silent.accessToken;
         } catch {
             // segue para SSO/popup
@@ -108,25 +116,33 @@ export const ensureViewerAuthSession = async (loginHint?: string): Promise<strin
 
     try {
         const sso = await instance.ssoSilent({ scopes, loginHint });
+        setAuthMode('viewer');
         return sso.accessToken;
     } catch {
         // fallback interativo
     }
 
+    if (!interactive) {
+        return null;
+    }
+
     try {
         const popup = await instance.acquireTokenPopup({ scopes, prompt: 'select_account', loginHint });
+        setAuthMode('viewer');
         return popup.accessToken;
     } catch (err) {
         console.error('[AUTH] Falha ao estabelecer sessão viewer:', (err as any)?.message || err);
-        setAuthMode('primary');
         return null;
     }
 };
 
-export const ensurePrimaryAuthSession = async (loginHint?: string): Promise<string | null> => {
-    const mode = setAuthMode('primary');
-    const instance = getMsalInstance(mode);
-    const scopes = getAuthScopes(mode);
+export const ensurePrimaryAuthSession = async (
+    loginHint?: string,
+    options?: EnsureSessionOptions
+): Promise<string | null> => {
+    const interactive = options?.interactive !== false;
+    const instance = getMsalInstance('primary');
+    const scopes = getAuthScopes('primary');
 
     await instance.initialize();
 
@@ -134,6 +150,7 @@ export const ensurePrimaryAuthSession = async (loginHint?: string): Promise<stri
     if (existingAccount) {
         try {
             const silent = await instance.acquireTokenSilent({ scopes, account: existingAccount });
+            setAuthMode('primary');
             return silent.accessToken;
         } catch {
             // segue para SSO/popup
@@ -142,13 +159,19 @@ export const ensurePrimaryAuthSession = async (loginHint?: string): Promise<stri
 
     try {
         const sso = await instance.ssoSilent({ scopes, loginHint });
+        setAuthMode('primary');
         return sso.accessToken;
     } catch {
         // fallback interativo
     }
 
+    if (!interactive) {
+        return null;
+    }
+
     try {
         const popup = await instance.acquireTokenPopup({ scopes, prompt: 'select_account', loginHint });
+        setAuthMode('primary');
         return popup.accessToken;
     } catch (err) {
         console.error('[AUTH] Falha ao estabelecer sessão principal:', (err as any)?.message || err);

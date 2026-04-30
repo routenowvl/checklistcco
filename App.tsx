@@ -190,7 +190,7 @@ const AppContent = () => {
 
       if (viewerOnly && isViewerAuthConfigured() && getAuthMode() !== 'viewer') {
         console.log('[APP] Perfil viewer detectado. Tentando migrar sessão para o App Registration de visualização...');
-        const viewerToken = await ensureViewerAuthSession(user.email);
+        const viewerToken = await ensureViewerAuthSession(user.email, { interactive: false });
 
         if (viewerToken) {
           token = viewerToken;
@@ -212,8 +212,9 @@ const AppContent = () => {
           token = primaryToken;
           (window as any).__access_token = primaryToken;
           setUser(prev => prev ? { ...prev, accessToken: primaryToken } : prev);
+        } else {
+          console.warn('[APP] Sessão primária não pôde ser reestabelecida sem interação. Mantendo sessão atual.');
         }
-        setAuthMode('primary');
       }
 
       setIsViewerOnly(viewerOnly);
@@ -361,32 +362,44 @@ const AppContent = () => {
           {!collapsed && <h1 className="font-bold dark:text-white text-sm">CCO Digital</h1>}
         </div>
         <nav className="flex-1 space-y-2">
-          <SidebarLink to="/departures" icon={Truck} label="Saídas" active={window.location.hash === '#/departures'} collapsed={collapsed} />
-          <SidebarLink to="/nao-coletas" icon={Milk} label="Não Coletas" active={window.location.hash === '#/nao-coletas'} collapsed={collapsed} />
-          {!isViewerOnly && (
+          {isLoading ? (
+            <div className="h-full flex items-center justify-center text-slate-400 dark:text-slate-500">
+              <Loader2 size={18} className="animate-spin" />
+            </div>
+          ) : (
             <>
-              <SidebarLink to="/" icon={CheckSquare} label="Checklist" active={window.location.hash === '#/'} collapsed={collapsed} />
-              <SidebarLink to="/resumo" icon={TowerControl} label="Resumo" active={window.location.hash === '#/resumo'} collapsed={collapsed} />
-              <SidebarLink to="/history" icon={History} label="Histórico" active={window.location.hash === '#/history'} collapsed={collapsed} />
-              <SidebarLink to="/motoristas" icon={Users} label="Motoristas" active={window.location.hash === '#/motoristas'} collapsed={collapsed} />
-              <SidebarLink to="/usuarios-visualizacao" icon={UserPlus} label="Usuários" active={window.location.hash === '#/usuarios-visualizacao'} collapsed={collapsed} />
+              <SidebarLink to="/departures" icon={Truck} label="Saídas" active={window.location.hash === '#/departures'} collapsed={collapsed} />
+              <SidebarLink to="/nao-coletas" icon={Milk} label="Não Coletas" active={window.location.hash === '#/nao-coletas'} collapsed={collapsed} />
+              {!isViewerOnly && (
+                <>
+                  <SidebarLink to="/" icon={CheckSquare} label="Checklist" active={window.location.hash === '#/'} collapsed={collapsed} />
+                  <SidebarLink to="/resumo" icon={TowerControl} label="Resumo" active={window.location.hash === '#/resumo'} collapsed={collapsed} />
+                  <SidebarLink to="/history" icon={History} label="Histórico" active={window.location.hash === '#/history'} collapsed={collapsed} />
+                  <SidebarLink to="/motoristas" icon={Users} label="Motoristas" active={window.location.hash === '#/motoristas'} collapsed={collapsed} />
+                  <SidebarLink to="/usuarios-visualizacao" icon={UserPlus} label="Usuários" active={window.location.hash === '#/usuarios-visualizacao'} collapsed={collapsed} />
+                </>
+              )}
             </>
           )}
         </nav>
         <div className="mt-auto space-y-2 border-t pt-4 dark:border-slate-800">
-           {/* Botão de Configurações - aparece apenas na tela Saídas */}
-           {currentRoute === '/departures' && !isViewerOnly && (
-             <button
-               onClick={() => setIsConfigModalOpen(true)}
-               className="p-2 w-full flex justify-center text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors"
-               title="Configurar Emails de Envio"
-             >
-               <Settings2 size={20} />
-             </button>
+           {!isLoading && (
+             <>
+               {/* Botão de Configurações - aparece apenas na tela Saídas */}
+               {currentRoute === '/departures' && !isViewerOnly && (
+                 <button
+                   onClick={() => setIsConfigModalOpen(true)}
+                   className="p-2 w-full flex justify-center text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors"
+                   title="Configurar Emails de Envio"
+                 >
+                   <Settings2 size={20} />
+                 </button>
+               )}
+               <button onClick={() => setCollapsed(!collapsed)} className="p-2 w-full flex justify-center text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg">
+                 {collapsed ? <ChevronRight size={20}/> : <ChevronLeft size={20}/>}
+               </button>
+             </>
            )}
-           <button onClick={() => setCollapsed(!collapsed)} className="p-2 w-full flex justify-center text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg">
-             {collapsed ? <ChevronRight size={20}/> : <ChevronLeft size={20}/>}
-           </button>
         </div>
       </aside>
 
