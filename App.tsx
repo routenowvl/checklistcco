@@ -28,6 +28,15 @@ import { setCurrentUser as setStorageUser } from './services/storageService';
 import { getBrazilDate, getBrazilHours, getBrazilISOString, isAfter10amBrazil, getBrazilMinutes } from './utils/dateUtils';
 import { InteractionRequiredAuthError } from '@azure/msal-browser';
 
+const VIEWER_CONSOLE_METHODS: Array<'log' | 'info' | 'warn' | 'error' | 'debug' | 'trace'> = [
+  'log',
+  'info',
+  'warn',
+  'error',
+  'debug',
+  'trace',
+];
+
 const SidebarLink = ({ to, icon: Icon, label, active, collapsed }: any) => (
   <a href={`#${to}`} className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${active ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-100'} ${collapsed ? 'justify-center' : ''}`}>
     <Icon size={20} />
@@ -82,12 +91,41 @@ const AppContent = () => {
   const [sessionExpired, setSessionExpired] = useState(false);
   const [isRenewing, setIsRenewing] = useState(false);
   const lastTokenErrorRef = useRef<number>(0);
+  const viewerConsoleSuppressedRef = useRef(false);
+  const originalConsoleRef = useRef<Partial<Record<'log' | 'info' | 'warn' | 'error' | 'debug' | 'trace', (...args: any[]) => void>>>({});
 
   // Ref para a função de cleanup do loop de refresh
   const stopRefreshLoopRef = useRef<(() => void) | null>(null);
 
   const navigate = useNavigate();
   const location = useLocation();
+
+  const suppressViewerConsole = () => {
+    if (viewerConsoleSuppressedRef.current) return;
+
+    VIEWER_CONSOLE_METHODS.forEach((method) => {
+      const currentMethod = console[method];
+      if (!originalConsoleRef.current[method]) {
+        originalConsoleRef.current[method] = currentMethod.bind(console);
+      }
+      console[method] = () => {};
+    });
+
+    viewerConsoleSuppressedRef.current = true;
+  };
+
+  const restoreViewerConsole = () => {
+    if (!viewerConsoleSuppressedRef.current) return;
+
+    VIEWER_CONSOLE_METHODS.forEach((method) => {
+      const originalMethod = originalConsoleRef.current[method];
+      if (originalMethod) {
+        console[method] = originalMethod;
+      }
+    });
+
+    viewerConsoleSuppressedRef.current = false;
+  };
 
   // Atualiza currentRoute quando a localização muda
   useEffect(() => {
@@ -187,6 +225,9 @@ const AppContent = () => {
     try {
       let routeAccess = await SharePointService.getRouteConfigsByAccess(token, user.email, true);
       let viewerOnly = routeAccess.configs.length > 0 && !routeAccess.canEdit;
+
+      if (viewerOnly) suppressViewerConsole();
+      else restoreViewerConsole();
 
       if (viewerOnly && isViewerAuthConfigured() && getAuthMode() !== 'viewer') {
         console.log('[APP] Perfil viewer detectado. Tentando migrar sessão para o App Registration de visualização...');
@@ -339,10 +380,20 @@ const AppContent = () => {
     else document.documentElement.classList.remove('dark');
   }, [isDarkMode]);
 
+  useEffect(() => {
+    if (isViewerOnly) suppressViewerConsole();
+    else restoreViewerConsole();
+
+    return () => {
+      restoreViewerConsole();
+    };
+  }, [isViewerOnly]);
+
   // Cleanup do loop ao desmontar o componente
   useEffect(() => {
     return () => {
       if (stopRefreshLoopRef.current) stopRefreshLoopRef.current();
+      restoreViewerConsole();
     };
   }, []);
 
