@@ -3,7 +3,7 @@ import { User } from '../types';
 import { LogIn, Loader2, AlertCircle, ShieldCheck, Clock, CheckCircle2 } from 'lucide-react';
 import { setCurrentUser } from '../services/storageService';
 import { InteractionRequiredAuthError } from "@azure/msal-browser";
-import { msalInstance } from '../services/authService';
+import { getAuthScopes, getMsalInstance } from '../services/authService';
 
 // Configuração via variáveis de ambiente
 const MAX_RETRIES = Number(process.env.LIMITAR_RETRY_LOGIN) || 5;
@@ -275,6 +275,8 @@ const Login: React.FC<{ onLogin: (user: User) => void }> = ({ onLogin }) => {
   useEffect(() => {
     const initAuth = async () => {
         try {
+            const msalInstance = getMsalInstance();
+            const scopes = getAuthScopes();
             await msalInstance.initialize();
 
             const isManualLogout = localStorage.getItem('msal_manual_logout') === 'true';
@@ -296,7 +298,7 @@ const Login: React.FC<{ onLogin: (user: User) => void }> = ({ onLogin }) => {
                 if (accounts.length > 0) {
                     try {
                         const silentRequest = {
-                            scopes: ["User.Read", "Sites.ReadWrite.All"],
+                            scopes,
                             account: accounts[0]
                         };
                         const silentResponse = await msalInstance.acquireTokenSilent(silentRequest);
@@ -354,8 +356,10 @@ const Login: React.FC<{ onLogin: (user: User) => void }> = ({ onLogin }) => {
     setIsLoggingIn(true);
     setError(null);
     try {
+        const msalInstance = getMsalInstance();
+        const scopes = getAuthScopes();
         const loginRequest = {
-            scopes: ["User.Read", "Sites.ReadWrite.All"],
+            scopes,
             prompt: "select_account"
         };
         const response = await msalInstance.loginPopup(loginRequest);

@@ -1,25 +1,32 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { HashRouter as Router, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
-import { CheckSquare, History, Truck, LogOut, ChevronLeft, ChevronRight, Loader2, TowerControl, RefreshCw, AlertTriangle, Settings2, Milk, Users } from 'lucide-react';
+import { HashRouter as Router, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
+import { CheckSquare, History, Truck, LogOut, ChevronLeft, ChevronRight, Loader2, TowerControl, RefreshCw, AlertTriangle, Settings2, Milk, Users, UserPlus } from 'lucide-react';
 import TaskManager from './components/TaskManager';
 import HistoryViewer from './components/HistoryViewer';
 import RouteDepartureView from './components/RouteDeparture';
 import NonCollectionsView from './components/NonCollectionsView';
 import SendReportView from './components/SendReportView';
 import MotoristasView from './components/MotoristasView';
+import ViewerUsersView from './components/ViewerUsersView';
 import Login from './components/Login';
 import LoadingScreen from './components/LoadingScreen';
 import PWAInstallPrompt from './components/PWAInstallPrompt';
 import { SharePointService } from './services/sharepointService';
-import { logout as msalLogout } from './services/authService';
-import { msalInstance } from './services/authService';
+import {
+  ensurePrimaryAuthSession,
+  logout as msalLogout,
+  ensureViewerAuthSession,
+  getAuthMode,
+  getAuthScopes,
+  getMsalInstance,
+  isViewerAuthConfigured,
+  setAuthMode
+} from './services/authService';
 import { startTokenRefreshLoop, stopTokenRefreshLoop, clearTokenState, getValidToken } from './services/tokenService';
 import { Task, User } from './types';
 import { setCurrentUser as setStorageUser } from './services/storageService';
 import { getBrazilDate, getBrazilHours, getBrazilISOString, isAfter10amBrazil, getBrazilMinutes } from './utils/dateUtils';
 import { InteractionRequiredAuthError } from '@azure/msal-browser';
-
-const SCOPES = ["User.Read", "Sites.ReadWrite.All"];
 
 const SidebarLink = ({ to, icon: Icon, label, active, collapsed }: any) => (
   <a href={`#${to}`} className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${active ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-100'} ${collapsed ? 'justify-center' : ''}`}>
@@ -65,6 +72,7 @@ const AppContent = () => {
   const [teamMembers, setTeamMembers] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isDarkMode, setIsDarkMode] = useState(true);
+  const [isViewerOnly, setIsViewerOnly] = useState(false);
   const [collapsed, setCollapsed] = useState(true);
   const [collapsedCategories, setCollapsedCategories] = useState<string[]>([]);
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
@@ -110,6 +118,8 @@ const AppContent = () => {
   const handleRenewSession = async () => {
     setIsRenewing(true);
     try {
+      const msalInstance = getMsalInstance();
+      const scopes = getAuthScopes();
       const accounts = msalInstance.getAllAccounts();
       const account = accounts[0];
 
@@ -117,19 +127,19 @@ const AppContent = () => {
       try {
         // Tenta primeiro sem UI (pode funcionar se o cookie de sessão ainda é válido)
         response = await msalInstance.acquireTokenSilent({
-          scopes: SCOPES,
+          scopes,
           account,
           forceRefresh: true,
         });
       } catch {
         // Fallback: popup de login (prompt: none = sem tela de seleção se já logado)
         response = await msalInstance.acquireTokenPopup({
-          scopes: SCOPES,
+          scopes,
           account,
           prompt: 'none',
         }).catch(() =>
           // Último recurso: popup com seleção de conta
-          msalInstance.acquireTokenPopup({ scopes: SCOPES })
+          msalInstance.acquireTokenPopup({ scopes })
         );
       }
 
@@ -165,7 +175,7 @@ const AppContent = () => {
 
   const loadDataFromSharePoint = async (user: User) => {
     // Sempre pega o token mais fresco disponível
-    const token = await getValidToken() || user.accessToken;
+    let token = await getValidToken() || user.accessToken;
     if (!token) {
       console.error('[APP] Token não encontrado');
       return;
@@ -175,6 +185,47 @@ const AppContent = () => {
     setIsLoading(true);
 
     try {
+      let routeAccess = await SharePointService.getRouteConfigsByAccess(token, user.email, true);
+      let viewerOnly = routeAccess.configs.length > 0 && !routeAccess.canEdit;
+
+      if (viewerOnly && isViewerAuthConfigured() && getAuthMode() !== 'viewer') {
+        console.log('[APP] Perfil viewer detectado. Tentando migrar sessão para o App Registration de visualização...');
+        const viewerToken = await ensureViewerAuthSession(user.email);
+
+        if (viewerToken) {
+          token = viewerToken;
+          (window as any).__access_token = viewerToken;
+          setUser(prev => prev ? { ...prev, accessToken: viewerToken } : prev);
+
+          // Revalida acesso com o novo token
+          routeAccess = await SharePointService.getRouteConfigsByAccess(viewerToken, user.email, true);
+          viewerOnly = routeAccess.configs.length > 0 && !routeAccess.canEdit;
+          console.log('[APP] ✅ Sessão viewer estabelecida com sucesso.');
+        } else {
+          console.warn('[APP] Não foi possível migrar para o App Registration viewer. Mantendo sessão atual.');
+        }
+      }
+
+      if (!viewerOnly && getAuthMode() !== 'primary') {
+        const primaryToken = await ensurePrimaryAuthSession(user.email);
+        if (primaryToken) {
+          token = primaryToken;
+          (window as any).__access_token = primaryToken;
+          setUser(prev => prev ? { ...prev, accessToken: primaryToken } : prev);
+        }
+        setAuthMode('primary');
+      }
+
+      setIsViewerOnly(viewerOnly);
+
+      if (viewerOnly) {
+        console.log('[APP] Perfil de visualização detectado. Checklist/Resumo/Histórico geral ocultos.');
+        setTasks([]);
+        setLocations([]);
+        setTeamMembers([]);
+        return;
+      }
+
       const spTasks = await SharePointService.getTasks(token);
       const spOps = await SharePointService.getOperations(token, user.email);
       const spMembers = await SharePointService.getTeamMembers(token);
@@ -310,16 +361,21 @@ const AppContent = () => {
           {!collapsed && <h1 className="font-bold dark:text-white text-sm">CCO Digital</h1>}
         </div>
         <nav className="flex-1 space-y-2">
-          <SidebarLink to="/" icon={CheckSquare} label="Checklist" active={window.location.hash === '#/'} collapsed={collapsed} />
           <SidebarLink to="/departures" icon={Truck} label="Saídas" active={window.location.hash === '#/departures'} collapsed={collapsed} />
           <SidebarLink to="/nao-coletas" icon={Milk} label="Não Coletas" active={window.location.hash === '#/nao-coletas'} collapsed={collapsed} />
-          <SidebarLink to="/resumo" icon={TowerControl} label="Resumo" active={window.location.hash === '#/resumo'} collapsed={collapsed} />
-          <SidebarLink to="/history" icon={History} label="Histórico" active={window.location.hash === '#/history'} collapsed={collapsed} />
-          <SidebarLink to="/motoristas" icon={Users} label="Motoristas" active={window.location.hash === '#/motoristas'} collapsed={collapsed} />
+          {!isViewerOnly && (
+            <>
+              <SidebarLink to="/" icon={CheckSquare} label="Checklist" active={window.location.hash === '#/'} collapsed={collapsed} />
+              <SidebarLink to="/resumo" icon={TowerControl} label="Resumo" active={window.location.hash === '#/resumo'} collapsed={collapsed} />
+              <SidebarLink to="/history" icon={History} label="Histórico" active={window.location.hash === '#/history'} collapsed={collapsed} />
+              <SidebarLink to="/motoristas" icon={Users} label="Motoristas" active={window.location.hash === '#/motoristas'} collapsed={collapsed} />
+              <SidebarLink to="/usuarios-visualizacao" icon={UserPlus} label="Usuários" active={window.location.hash === '#/usuarios-visualizacao'} collapsed={collapsed} />
+            </>
+          )}
         </nav>
         <div className="mt-auto space-y-2 border-t pt-4 dark:border-slate-800">
            {/* Botão de Configurações - aparece apenas na tela Saídas */}
-           {currentRoute === '/departures' && (
+           {currentRoute === '/departures' && !isViewerOnly && (
              <button
                onClick={() => setIsConfigModalOpen(true)}
                className="p-2 w-full flex justify-center text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors"
@@ -339,31 +395,47 @@ const AppContent = () => {
           <LoadingScreen />
         ) : (
           <Routes>
-            <Route path="/" element={
-              <TaskManager
-                tasks={tasks}
-                setTasks={setTasks}
-                locations={locations}
-                setLocations={setLocations}
-                onUserSwitch={() => loadDataFromSharePoint(currentUser)}
-                collapsedCategories={collapsedCategories}
-                setCollapsedCategories={setCollapsedCategories}
-                currentUser={currentUser}
-                onLogout={handleLogout}
-                teamMembers={teamMembers}
-              />
-            } />
-            <Route path="/departures" element={
-              <RouteDepartureView
-                currentUser={currentUser}
-                isConfigModalOpen={isConfigModalOpen}
-                setIsConfigModalOpen={setIsConfigModalOpen}
-              />
-            } />
-            <Route path="/nao-coletas" element={<NonCollectionsView currentUser={currentUser} />} />
-            <Route path="/resumo" element={<SendReportView currentUser={currentUser} />} />
-            <Route path="/history" element={<HistoryViewer currentUser={currentUser} />} />
-            <Route path="/motoristas" element={<MotoristasView currentUser={currentUser} />} />
+            {isViewerOnly ? (
+              <>
+                <Route path="/" element={<Navigate to="/departures" replace />} />
+                <Route
+                  path="/departures"
+                  element={<RouteDepartureView currentUser={currentUser} onLogout={handleLogout} />}
+                />
+                <Route path="/nao-coletas" element={<NonCollectionsView currentUser={currentUser} />} />
+                <Route path="*" element={<Navigate to="/departures" replace />} />
+              </>
+            ) : (
+              <>
+                <Route path="/" element={
+                  <TaskManager
+                    tasks={tasks}
+                    setTasks={setTasks}
+                    locations={locations}
+                    setLocations={setLocations}
+                    onUserSwitch={() => loadDataFromSharePoint(currentUser)}
+                    collapsedCategories={collapsedCategories}
+                    setCollapsedCategories={setCollapsedCategories}
+                    currentUser={currentUser}
+                    onLogout={handleLogout}
+                    teamMembers={teamMembers}
+                  />
+                } />
+                <Route path="/departures" element={
+                  <RouteDepartureView
+                    currentUser={currentUser}
+                    isConfigModalOpen={isConfigModalOpen}
+                    setIsConfigModalOpen={setIsConfigModalOpen}
+                    onLogout={handleLogout}
+                  />
+                } />
+                <Route path="/nao-coletas" element={<NonCollectionsView currentUser={currentUser} />} />
+                <Route path="/resumo" element={<SendReportView currentUser={currentUser} />} />
+                <Route path="/history" element={<HistoryViewer currentUser={currentUser} />} />
+                <Route path="/motoristas" element={<MotoristasView currentUser={currentUser} />} />
+                <Route path="/usuarios-visualizacao" element={<ViewerUsersView currentUser={currentUser} />} />
+              </>
+            )}
           </Routes>
         )}
       </main>

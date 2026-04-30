@@ -13,7 +13,7 @@ import {
   ChevronRight, Maximize2, Minimize2,
   Archive, Database, Save, LinkIcon,
   Layers, Trash2, Settings2, Check, Table, SortAsc,
-  Sun, Moon, AlertTriangle, Calendar, ArrowUpDown, MessageCircle
+  Sun, Moon, AlertTriangle, Calendar, ArrowUpDown, MessageCircle, LogOut
 } from 'lucide-react';
 
 const MOTIVOS = [
@@ -352,9 +352,11 @@ const RouteDepartureView: React.FC<{
   currentUser: User;
   isConfigModalOpen?: boolean;
   setIsConfigModalOpen?: (open: boolean) => void;
-}> = ({ currentUser, isConfigModalOpen = false, setIsConfigModalOpen = () => {} }) => {
+  onLogout?: () => void;
+}> = ({ currentUser, isConfigModalOpen = false, setIsConfigModalOpen = () => {}, onLogout }) => {
   const [routes, setRoutes] = useState<RouteDeparture[]>([]);
   const [userConfigs, setUserConfigs] = useState<RouteConfig[]>([]);
+  const [canEditData, setCanEditData] = useState(true);
   const [routeMappings, setRouteMappings] = useState<RouteOperationMapping[]>([]);
   const [motoristas, setMotoristas] = useState<Motorista[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -588,6 +590,15 @@ const RouteDepartureView: React.FC<{
   const [copiedGeralStatus, setCopiedGeralStatus] = useState<string | null>(null);
   const [hoveredGeralCell, setHoveredGeralCell] = useState<string | null>(null);
 
+  const editableOperationKeys = useMemo(() => (
+    new Set(userConfigs.map((cfg) => normalizeOperationKey(cfg.operacao)))
+  ), [userConfigs]);
+
+  const canEditOperation = (operacao: string): boolean => {
+    if (!canEditData) return false;
+    return editableOperationKeys.has(normalizeOperationKey(operacao));
+  };
+
   // ⚠️ Estados para envio automático REMOVIDOS — envio agora é feito apenas pela tela "Resumo"
   // const [pendingSendOps, setPendingSendOps] = useState<Set<string>>(new Set());
   // const [countdowns, setCountdowns] = useState<Record<string, number>>({});
@@ -612,6 +623,89 @@ const RouteDepartureView: React.FC<{
     const fallback = currentUser?.accessToken || (window as any).__access_token;
     if (fallback) return fallback;
     throw new Error('Sessão expirada. Por favor, renove sua sessão.');
+  };
+
+  const parseViewerSnapshotDepartures = (raw: string): RouteDeparture[] => {
+    const source = String(raw || '').trim();
+    if (!source) return [];
+
+    try {
+      const parsed = JSON.parse(source);
+      if (Array.isArray(parsed)) {
+        return parsed as RouteDeparture[];
+      }
+
+      if (parsed && typeof parsed === 'object') {
+        if (Array.isArray((parsed as any).departures)) {
+          return (parsed as any).departures as RouteDeparture[];
+        }
+        if (Array.isArray((parsed as any).rotas)) {
+          return (parsed as any).rotas as RouteDeparture[];
+        }
+      }
+    } catch {
+      // Conteúdo inválido: ignora
+    }
+
+    return [];
+  };
+
+  const buildViewerSnapshotContentWithDepartures = (
+    raw: string,
+    operacao: string,
+    departures: RouteDeparture[]
+  ): string => {
+    let current: any = {};
+    try {
+      const parsed = JSON.parse(String(raw || ''));
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        current = parsed;
+      } else if (Array.isArray(parsed)) {
+        current = { departures: parsed };
+      }
+    } catch {
+      current = {};
+    }
+
+    const stableDepartures = [...departures].sort((a, b) => {
+      const keyA = `${a.data || ''}|${a.rota || ''}|${a.id || ''}`;
+      const keyB = `${b.data || ''}|${b.rota || ''}|${b.id || ''}`;
+      return keyA.localeCompare(keyB, 'pt-BR');
+    });
+
+    const next = {
+      version: 1,
+      operation: operacao,
+      updatedAt: new Date().toISOString(),
+      nonCollections: Array.isArray(current.nonCollections) ? current.nonCollections : [],
+      departures: stableDepartures
+    };
+
+    return JSON.stringify(next);
+  };
+
+  const syncViewerContentForDepartures = async (
+    token: string,
+    configs: RouteConfig[],
+    departures: RouteDeparture[]
+  ): Promise<void> => {
+    if (!configs.length) return;
+
+    const groupedByOperation: Record<string, RouteDeparture[]> = {};
+    departures.forEach((route) => {
+      const op = String(route.operacao || '').trim();
+      if (!op) return;
+      if (!groupedByOperation[op]) groupedByOperation[op] = [];
+      groupedByOperation[op].push(route);
+    });
+
+    await Promise.all(configs.map(async (cfg) => {
+      const operacao = String(cfg.operacao || '').trim();
+      if (!operacao) return;
+      const rows = groupedByOperation[operacao] || [];
+      const nextContent = buildViewerSnapshotContentWithDepartures(cfg.Conteudo || '', operacao, rows);
+      await SharePointService.updateRouteConfigConteudoIfChanged(token, operacao, nextContent);
+    }));
   };
 
   const parseRetornoMotoristaMessages = (raw: string): MotoristaChatMessage[] => {
@@ -935,6 +1029,12 @@ const RouteDepartureView: React.FC<{
 
   // Sincroniza com modal de configuração vindo do App.tsx
   useEffect(() => {
+    if (isConfigModalOpen && !canEditData) {
+      setIsEmailConfigModalOpen(false);
+      setIsConfigModalOpen(false);
+      return;
+    }
+
     if (isConfigModalOpen && userConfigs.length > 0) {
       setIsEmailConfigModalOpen(true);
 
@@ -963,7 +1063,7 @@ const RouteDepartureView: React.FC<{
       setConfigEnvio('');
       setConfigCopia('');
     }
-  }, [isConfigModalOpen, userConfigs, isDeale]);
+  }, [isConfigModalOpen, userConfigs, isDeale, canEditData, setIsConfigModalOpen]);
 
   // Carrega dados da configuração quando seleciona operação
   // SÓ executa quando o usuário TROCA a operação selecionada, NÃO quando userConfigs muda por polling
@@ -995,6 +1095,11 @@ const RouteDepartureView: React.FC<{
 
   // Função para salvar configuração de emails
   const handleSaveEmailConfig = async () => {
+    if (!canEditData) {
+      alert('Esta conta possui acesso somente visualização.');
+      return;
+    }
+
     if (!selectedOperacaoConfig) {
       alert('Selecione uma operação para configurar.');
       return;
@@ -1689,22 +1794,78 @@ const RouteDepartureView: React.FC<{
       console.log('[LOAD_DATA] Buscando dados atualizados...', isBackgroundRefresh ? '(segundo plano)' : '(inicial)');
       console.log('[LOAD_DATA] Usuário logado:', currentUser.email);
 
-      const [configs, mappings, spData, motoristasData] = await Promise.all([
-        SharePointService.getRouteConfigs(token, currentUser.email, true), // force refresh
+      const routeAccess = await SharePointService.getRouteConfigsByAccess(token, currentUser.email, true);
+      const configs = routeAccess.configs || [];
+      setCanEditData(Boolean(routeAccess.canEdit));
+
+      console.log('[LOAD_DATA] Configurações carregadas:', configs?.length || 0);
+      console.log('[LOAD_DATA] Operações do usuário:', configs?.map(c => c.operacao));
+      console.log('[LOAD_DATA] Perfil de edição habilitado?', Boolean(routeAccess.canEdit));
+
+      // Detecta se é usuário DEALE (para o modal de configurar emails)
+      const deale = isDealeUser(configs || []);
+      setIsDeale(deale);
+      setUserConfigs(configs || []);
+
+      if (!routeAccess.canEdit) {
+        console.log('[LOAD_DATA] Modo visualização: carregando rotas a partir da coluna Conteudo.');
+        setRouteMappings([]);
+        setMotoristas([]);
+
+        const myOps = new Set((configs || []).map(c => c.operacao));
+        const routesFromSnapshots = (configs || []).flatMap((cfg) =>
+          parseViewerSnapshotDepartures(cfg.Conteudo || '').map((route) => ({
+            ...route,
+            operacao: String(route?.operacao || cfg.operacao || '').trim()
+          }))
+        );
+
+        const filteredByUser = routesFromSnapshots.filter((route) => {
+          if (myOps.size === 0) return false;
+          return myOps.has(route.operacao);
+        });
+
+        const recalculatedRoutes = filteredByUser.map(route => {
+          const config = configs?.find(c => c.operacao === route.operacao);
+          const { status, gap } = calculateStatusWithTolerance(route.inicio || '', route.saida || '', config?.tolerancia || "00:00:00", route.data || '');
+          return { ...route, statusOp: status, tempo: gap };
+        });
+
+        setRoutes(recalculatedRoutes);
+
+        const motoristaRecords = recalculatedRoutes.filter(r => r.motorista && r.motorista.trim() !== '');
+        const byOperation: Record<string, RouteDeparture[]> = {};
+        motoristaRecords.forEach(r => {
+          if (!byOperation[r.operacao]) byOperation[r.operacao] = [];
+          byOperation[r.operacao].push(r);
+        });
+
+        const resultChecklist: Record<string, { data: string, porcentagem: string }> = {};
+        Object.entries(byOperation).forEach(([op, records]) => {
+          records.sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime());
+          if (records.length > 0) {
+            const latest = records[0];
+            const totalOps = records.length;
+            const okOps = records.filter(r => r.statusOp === 'OK').length;
+            const percentage = totalOps > 0 ? ((okOps / totalOps) * 100).toFixed(2) : '0.00';
+            resultChecklist[op] = {
+              data: new Date(latest.data).toLocaleDateString('pt-BR'),
+              porcentagem: `${percentage}%`
+            };
+          }
+        });
+        setLastMotoristaChecklist(resultChecklist);
+        console.log('[LOAD_DATA] Dados carregados via snapshot para visualização.');
+        return;
+      }
+
+      const [mappings, spData, motoristasData] = await Promise.all([
         SharePointService.getRouteOperationMappings(token),
         SharePointService.getDepartures(token, true), // force refresh
         SharePointService.getMotoristas(token, !isBackgroundRefresh)
       ]);
 
-      console.log('[LOAD_DATA] Configurações carregadas:', configs?.length || 0);
-      console.log('[LOAD_DATA] Operações do usuário:', configs?.map(c => c.operacao));
       console.log('[LOAD_DATA] Total de rotas brutas do SharePoint:', spData?.length || 0);
-
-      // Detecta se é usuário DEALE (para o modal de configurar emails)
-      const deale = isDealeUser(configs || []);
-      setIsDeale(deale);
-
-      setUserConfigs(configs || []);
       setRouteMappings(mappings || []);
       setMotoristas(motoristasData || []);
 
@@ -1720,8 +1881,8 @@ const RouteDepartureView: React.FC<{
       console.log('[LOAD_DATA] Operações únicas nas rotas brutas:', uniqueOpsInRoutes.slice(0, 10));
 
       const filteredByUser = (spData || []).filter(route => {
-        // Se não houver operações configuradas, retorna todas (fallback)
-        if (myOps.size === 0) return true;
+        // Sem operações configuradas, não retorna dados por segurança
+        if (myOps.size === 0) return false;
         const match = myOps.has(route.operacao);
         if (!match && myOps.size <= 3) {
           // Log apenas para poucos configs (debug)
@@ -1848,6 +2009,10 @@ const RouteDepartureView: React.FC<{
         });
         setLastMotoristaChecklist(result);
       }
+
+      // Atualiza snapshot de visualização por operação (somente se houver mudança no Conteudo)
+      void syncViewerContentForDepartures(token, configs || [], recalculatedRoutes)
+        .catch((err) => console.error('[VIEWER_CACHE][SAIDAS] Falha ao sincronizar Conteudo:', err?.message || err));
     } catch (e: any) {
       console.error('[RouteDeparture] Erro ao carregar dados:', e.message);
       if (!isBackgroundRefresh && (e.message.includes('expired') || e.message.includes('401'))) {
@@ -1897,9 +2062,8 @@ const RouteDepartureView: React.FC<{
         // Só atualiza state se esta requisição não foi cancelada
         if (!controller.signal.aborted) {
           const myOps = new Set(userConfigs.map(c => c.operacao));
-          // If myOps is empty, show everything for the user to avoid blockage if config loading is slow
           const filtered = results && results.length > 0
-            ? results.filter(r => !myOps.size || myOps.has(r.operacao))
+            ? results.filter(r => myOps.has(r.operacao))
             : [];
 
           setArchivedResults(filtered);
@@ -1992,13 +2156,17 @@ const RouteDepartureView: React.FC<{
   }, [hiddenColumns]);
 
   const handleDeleteRoute = async (id: string) => {
+    if (!canEditData) {
+      alert('Esta conta possui acesso somente visualização.');
+      return;
+    }
+
     if (!confirm('Deseja excluir permanentemente esta rota do SharePoint?')) return;
     
     // VALIDAÇÃO CRÍTICA: Só permite excluir rotas que pertencem às operações do usuário logado
     const routeToDelete = routes.find(r => r.id === id);
     if (routeToDelete && routeToDelete.operacao) {
-        const myOps = new Set(userConfigs.map(c => c.operacao));
-        if (!myOps.has(routeToDelete.operacao)) {
+        if (!canEditOperation(routeToDelete.operacao)) {
             console.error('[DELETE_BLOCKED] Usuário tentou excluir rota de operação não pertencente:', routeToDelete.operacao);
             alert('⚠️ Erro: Você não tem permissão para excluir esta rota.');
             return;
@@ -2016,14 +2184,18 @@ const RouteDepartureView: React.FC<{
   };
 
   const handleDeleteSelected = async () => {
+    if (!canEditData) {
+      alert('Esta conta possui acesso somente visualização.');
+      return;
+    }
+
     if (selectedIds.size === 0) return;
     
     // VALIDAÇÃO CRÍTICA: Filtra apenas rotas que pertencem às operações do usuário logado
-    const myOps = new Set(userConfigs.map(c => c.operacao));
     const validIdsToDelete = Array.from(selectedIds).filter(id => {
         const route = routes.find(r => r.id === id);
         if (!route || !route.operacao) return false;
-        return myOps.has(route.operacao);
+        return canEditOperation(route.operacao);
     });
     
     const blockedCount = selectedIds.size - validIdsToDelete.length;
@@ -2255,9 +2427,13 @@ const RouteDepartureView: React.FC<{
   };
 
   const handleArchiveAll = async () => {
+    if (!canEditData) {
+      alert('Esta conta possui acesso somente visualização.');
+      return;
+    }
+
     // VALIDAÇÃO CRÍTICA: Filtra apenas rotas que pertencem às operações do usuário logado
-    const myOps = new Set(userConfigs.map(c => c.operacao));
-    const validFilteredRoutes = filteredRoutes.filter(r => !r.operacao || myOps.has(r.operacao));
+    const validFilteredRoutes = filteredRoutes.filter(r => !r.operacao || canEditOperation(r.operacao));
 
     if (validFilteredRoutes.length === 0) {
       alert("Não há rotas das suas operações para arquivar.");
@@ -2310,6 +2486,11 @@ const RouteDepartureView: React.FC<{
   };
 
   const handleAddRoute = async () => {
+    if (!canEditData) {
+      alert('Esta conta possui acesso somente visualização.');
+      return;
+    }
+
     // Validação básica
     if (!newRouteData.rota || !newRouteData.inicio || !newRouteData.motorista || !newRouteData.placa || !newRouteData.operacao) {
       alert('Preencha todos os campos obrigatórios!');
@@ -2327,8 +2508,7 @@ const RouteDepartureView: React.FC<{
     const cleanPlaca = newRouteData.placa.replace(/[\s-]/g, '').toUpperCase();
 
     // VALIDAÇÃO CRÍTICA: Só permite adicionar rotas nas operações do usuário logado
-    const myOps = new Set(userConfigs.map(c => c.operacao));
-    if (!myOps.has(newRouteData.operacao)) {
+    if (!canEditOperation(newRouteData.operacao)) {
         console.error('[ADD_ROUTE_BLOCKED] Usuário tentou adicionar rota em operação não pertencente:', newRouteData.operacao);
         alert('⚠️ Erro: Você não tem permissão para adicionar rotas desta operação.');
         return;
@@ -2395,9 +2575,15 @@ const RouteDepartureView: React.FC<{
   };
 
   const handleBulkCreateSave = async (operacao: string) => {
+    if (!canEditData) {
+      alert('Esta conta possui acesso somente visualização.');
+      setIsBulkMappingModalOpen(false);
+      setPendingBulkRoutes([]);
+      return;
+    }
+
     // VALIDAÇÃO CRÍTICA: Só permite criar rotas em massa nas operações do usuário logado
-    const myOps = new Set(userConfigs.map(c => c.operacao));
-    if (!myOps.has(operacao)) {
+    if (!canEditOperation(operacao)) {
         console.error('[BULK_CREATE_BLOCKED] Usuário tentou criar rotas em massa em operação não pertencente:', operacao);
         alert('⚠️ Erro: Você não tem permissão para adicionar rotas desta operação.');
         setIsBulkMappingModalOpen(false);
@@ -2439,6 +2625,11 @@ const RouteDepartureView: React.FC<{
   };
 
   const handleMultilinePaste = async (field: keyof RouteDeparture, startRowIndex: number, value: string) => {
+    if (!canEditData) {
+      alert('Esta conta possui acesso somente visualização.');
+      return;
+    }
+
     const lines = value.split(/[\n\r]/).map(l => l.trim()).filter(Boolean);
     if (lines.length <= 1) return;
     const token = await getAccessToken();
@@ -2456,8 +2647,7 @@ const RouteDepartureView: React.FC<{
 
     // VALIDAÇÃO CRÍTICA: Verifica TODAS as linhas afetadas antes de aplicar o paste
     // Se houver QUALQUER linha de outra operação, REJEITA o paste inteiro
-    const myOps = new Set(userConfigs.map(c => c.operacao));
-    const invalidRoutes = targetRoutes.filter(r => r.operacao && !myOps.has(r.operacao));
+    const invalidRoutes = targetRoutes.filter(r => r.operacao && !canEditOperation(r.operacao));
 
     if (invalidRoutes.length > 0) {
         // REJEITA O PASTE INTEIRO - não aplica em nenhuma linha
@@ -2541,6 +2731,8 @@ const RouteDepartureView: React.FC<{
     value: string,
     extraUpdates: Partial<RouteDeparture> = {}
   ) => {
+    if (!canEditData) return;
+
     // Normalização automática da placa: remove espaços e hífens
     if (field === 'placa') {
       value = value.replace(/[\s-]/g, '').toUpperCase();
@@ -2596,8 +2788,7 @@ const RouteDepartureView: React.FC<{
         // Para outros campos da ghost row - VALIDA se a operação pertence ao usuário antes de salvar
         if (field !== 'rota' && updatedGhost.rota) {
             // VALIDAÇÃO CRÍTICA: Só permite salvar se a operação estiver nas configurações do usuário logado
-            const myOps = new Set(userConfigs.map(c => c.operacao));
-            if (updatedGhost.operacao && !myOps.has(updatedGhost.operacao)) {
+            if (updatedGhost.operacao && !canEditOperation(updatedGhost.operacao)) {
                 console.error('[UPDATE_BLOCKED] Usuário tentou salvar rota com operação não pertencente:', updatedGhost.operacao);
                 alert('⚠️ Erro: Você não tem permissão para adicionar rotas desta operação.');
                 // Reseta a ghost row para evitar dados inconsistentes
@@ -2633,8 +2824,7 @@ const RouteDepartureView: React.FC<{
     if (!route) return;
 
     // VALIDAÇÃO CRÍTICA 1: Só permite editar rotas que pertencem às operações do usuário logado
-    const myOps = new Set(userConfigs.map(c => c.operacao));
-    if (route.operacao && !myOps.has(route.operacao)) {
+    if (route.operacao && !canEditOperation(route.operacao)) {
         console.error('[UPDATE_BLOCKED] Usuário tentou editar rota de operação não pertencente:', route.operacao);
         alert('⚠️ Erro: Você não tem permissão para editar esta rota.');
         return;
@@ -2732,6 +2922,8 @@ const RouteDepartureView: React.FC<{
 
   const canEditHistoryRoute = (route: RouteDeparture | undefined): boolean => {
     if (!route) return false;
+    if (!canEditData) return false;
+    if (route.operacao && !canEditOperation(route.operacao)) return false;
 
     const routeDate = parseHistoryDate(route.data);
     const todayDate = parseHistoryDate(getBrazilDate());
@@ -2780,6 +2972,11 @@ const RouteDepartureView: React.FC<{
 
   // Salva todas as edições pendentes de uma vez (chamado ao pressionar Enter)
   const savePendingHistoryEdits = async () => {
+    if (!canEditData) {
+      alert('Esta conta possui acesso somente visualização.');
+      return;
+    }
+
     const editIds = Object.keys(pendingHistoryEdits);
     if (editIds.length === 0) return;
 
@@ -3377,8 +3574,7 @@ const RouteDepartureView: React.FC<{
     // Filtra primeiro pelas operações do usuário logado
     const myOps = new Set(userConfigs.map(c => c.operacao));
     let result = routes.filter(r => {
-        // Se não houver operações configuradas, mostra todas (evita bloqueio se config não carregou)
-        if (myOps.size === 0) return true;
+        if (myOps.size === 0) return false;
         return myOps.has(r.operacao);
     });
 
@@ -3429,7 +3625,7 @@ const RouteDepartureView: React.FC<{
     // Usa TODAS as rotas do usuário, ignorando filtros de coluna
     const myOps = new Set(userConfigs.map(c => c.operacao));
     const allUserRoutes = routes.filter(r => {
-      if (myOps.size === 0) return true;
+      if (myOps.size === 0) return false;
       return myOps.has(r.operacao);
     });
 
@@ -3489,6 +3685,11 @@ const RouteDepartureView: React.FC<{
               <p className={`text-[9px] font-bold uppercase tracking-widest flex items-center gap-2 ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>
                 <ShieldCheck size={12} className="text-emerald-500"/> Operador: {currentUser.name}
               </p>
+              {!canEditData && (
+                <span className={`text-[9px] font-black uppercase tracking-widest px-2 py-1 rounded-full border ${isDarkMode ? 'text-amber-300 border-amber-500/60 bg-amber-500/10' : 'text-amber-700 border-amber-500 bg-amber-50'}`}>
+                  Somente visualização
+                </span>
+              )}
             </div>
           </div>
           {/* Indicadores GERAL, INTERNO e MINHAS ROTAS */}
@@ -3517,25 +3718,44 @@ const RouteDepartureView: React.FC<{
           </div>
         </div>
         <div className="flex gap-2 items-center">
+          {!canEditData && onLogout && (
+            <button
+              onClick={onLogout}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] tracking-wide transition-all shadow-sm ${
+                isDarkMode
+                  ? 'bg-red-900/40 text-red-200 hover:bg-red-900/60 border-red-700/70'
+                  : 'bg-red-50 text-red-700 hover:bg-red-100 border-red-300'
+              }`}
+              title="Sair da conta"
+            >
+              <LogOut size={16} /> Logoff
+            </button>
+          )}
           <button onClick={() => setIsDarkMode(!isDarkMode)} className={`p-2 rounded-lg font-bold border transition-all shadow-sm ${isDarkMode ? 'bg-slate-800 text-yellow-400 border-slate-700 hover:bg-slate-700' : 'bg-white text-slate-700 border-slate-400 hover:bg-slate-50 hover:border-slate-500'}`} title={isDarkMode ? 'Modo Claro' : 'Modo Escuro'}>
             {isDarkMode ? <Sun size={18} /> : <Moon size={18} />}
           </button>
           <button onClick={() => setIsSortByTimeEnabled(!isSortByTimeEnabled)} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] transition-all shadow-sm ${isSortByTimeEnabled ? 'bg-primary-600 text-white border-primary-600' : isDarkMode ? 'bg-slate-800 text-slate-300 border-slate-700' : 'bg-white text-slate-800 border-slate-400 hover:bg-slate-50 hover:border-slate-500'}`}><SortAsc size={16} /> Horário</button>
-          <button
-            onClick={() => {
-              if (hasActiveFiltersOrSort) {
-                setFilterBlockReason('single');
-                setIsFilterBlockModalOpen(true);
-              } else {
-                setIsAddRouteModalOpen(true);
-              }
-            }}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] tracking-wide transition-all shadow-sm ${isDarkMode ? 'bg-slate-800 text-slate-300 hover:bg-slate-700 border-slate-700' : 'bg-white text-slate-800 hover:bg-slate-50 hover:border-slate-500 border-slate-400'}`}
-          >
-            <CheckCircle2 size={16} /> Adicionar Rota
-          </button>
-          <button onClick={() => { setHistoryEditWarning(null); setIsHistoryModalOpen(true); }} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] tracking-wide transition-all shadow-sm ${isDarkMode ? 'bg-slate-800 text-slate-300 hover:bg-slate-700 border-slate-700' : 'bg-white text-slate-800 hover:bg-slate-50 hover:border-slate-500 border-slate-400'}`}><Database size={16} /> Histórico</button>
-          <button onClick={handleArchiveAll} disabled={isSyncing || filteredRoutes.length === 0} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] tracking-wide transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed ${isDarkMode ? 'bg-slate-800 text-slate-300 hover:bg-slate-700 border-slate-700' : 'bg-white text-slate-800 hover:bg-slate-50 hover:border-slate-500 border-slate-400'}`}><Archive size={16} /> Arquivar</button>
+          {canEditData && (
+            <button
+              onClick={() => {
+                if (hasActiveFiltersOrSort) {
+                  setFilterBlockReason('single');
+                  setIsFilterBlockModalOpen(true);
+                } else {
+                  setIsAddRouteModalOpen(true);
+                }
+              }}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] tracking-wide transition-all shadow-sm ${isDarkMode ? 'bg-slate-800 text-slate-300 hover:bg-slate-700 border-slate-700' : 'bg-white text-slate-800 hover:bg-slate-50 hover:border-slate-500 border-slate-400'}`}
+            >
+              <CheckCircle2 size={16} /> Adicionar Rota
+            </button>
+          )}
+          {canEditData && (
+            <button onClick={() => { setHistoryEditWarning(null); setIsHistoryModalOpen(true); }} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] tracking-wide transition-all shadow-sm ${isDarkMode ? 'bg-slate-800 text-slate-300 hover:bg-slate-700 border-slate-700' : 'bg-white text-slate-800 hover:bg-slate-50 hover:border-slate-500 border-slate-400'}`}><Database size={16} /> Histórico</button>
+          )}
+          {canEditData && (
+            <button onClick={handleArchiveAll} disabled={isSyncing || filteredRoutes.length === 0} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] tracking-wide transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed ${isDarkMode ? 'bg-slate-800 text-slate-300 hover:bg-slate-700 border-slate-700' : 'bg-white text-slate-800 hover:bg-slate-50 hover:border-slate-500 border-slate-400'}`}><Archive size={16} /> Arquivar</button>
+          )}
         </div>
       </div>
 
@@ -3595,13 +3815,13 @@ const RouteDepartureView: React.FC<{
                 </th>
               ))}
               <th style={{ width: 60 }} className={`relative p-0 border ${isDarkMode ? 'border-slate-700/50' : 'border-slate-600/60'} text-[10px] font-black uppercase text-center ${isDarkMode ? 'bg-slate-900/50' : 'bg-slate-700/60'}`}>
-                  {selectedIds.size > 0 ? (
+                  {canEditData && selectedIds.size > 0 ? (
                       <button onClick={handleDeleteSelected} className="p-1 text-red-500 hover:text-red-400 transition-colors" title="Deletar Selecionados"><Trash2 size={16} /></button>
                   ) : <Settings2 size={14} className="mx-auto opacity-40" />}
               </th>
             </tr>
           </thead>
-          <tbody>
+          <tbody className={!canEditData ? 'pointer-events-none select-none' : ''}>
             {/* Renderiza rotas filtradas primeiro */}
             {filteredRoutes.map((route, rowIndex) => {
               const rowStyle = getRowStyle(route);
@@ -4177,7 +4397,7 @@ const RouteDepartureView: React.FC<{
                     return null;
                   })}
                   <td className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} flex items-center justify-center gap-1`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
-                    {!isGhost && (
+                    {!isGhost && canEditData && (
                       <>
                         <button onClick={() => toggleSelection(route.id!)} className={`p-1.5 rounded-lg transition-colors ${isSelected ? 'text-primary-500 bg-primary-500/10' : isDarkMode ? 'text-slate-400 hover:bg-slate-700' : 'text-slate-500 hover:bg-slate-200'}`}>
                           {isSelected ? <CheckSquare size={16}/> : <Square size={16}/>}
@@ -4193,7 +4413,7 @@ const RouteDepartureView: React.FC<{
             })}
             
             {/* Ghost Row - SEMPRE no final da tabela */}
-            {(() => {
+            {canEditData && (() => {
               const route = ghostRow;
               const rowStyle = getRowStyle(route);
               const isSelected = selectedIds.has(route.id!);
@@ -4546,7 +4766,7 @@ const RouteDepartureView: React.FC<{
         </div>
       )}
 
-      {isBulkMappingModalOpen && (
+      {canEditData && isBulkMappingModalOpen && (
           <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-[300] flex items-center justify-center p-4">
               <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-8 w-full max-w-md border border-primary-500 shadow-2xl animate-in zoom-in">
                   <div className="flex items-center gap-3 text-primary-500 mb-6 font-black uppercase text-xs"><Layers size={24} /> Atribuir Planta para Lote</div>
@@ -4557,7 +4777,7 @@ const RouteDepartureView: React.FC<{
           </div>
       )}
 
-      {isMappingModalOpen && (
+      {canEditData && isMappingModalOpen && (
           <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-[300] flex items-center justify-center p-4">
               <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-8 w-full max-w-md border border-primary-500 animate-in zoom-in">
                   <div className="flex items-center gap-3 text-primary-500 mb-6 font-black uppercase text-xs"><LinkIcon size={24} /> Vínculo Necessário</div>
@@ -4661,7 +4881,7 @@ const RouteDepartureView: React.FC<{
       )}
 
       {/* Modal de Adicionar Rota */}
-      {isAddRouteModalOpen && (
+      {canEditData && isAddRouteModalOpen && (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[200] flex items-center justify-center p-4">
           <div className="bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-[2.5rem] shadow-2xl w-full max-w-lg">
             <div className="bg-[#1e293b] p-6 flex justify-between items-center text-white">
@@ -4809,7 +5029,7 @@ const RouteDepartureView: React.FC<{
                       </div>
                       <div className="flex items-center gap-2">
                           {/* Botão de salvar edições pendentes */}
-                          {Object.keys(pendingHistoryEdits).length > 0 && (
+                          {canEditData && Object.keys(pendingHistoryEdits).length > 0 && (
                               <button
                                   onClick={savePendingHistoryEdits}
                                   disabled={isSyncing}
@@ -5979,7 +6199,7 @@ const RouteDepartureView: React.FC<{
       )}
 
       {/* Modal de Configuração de Emails */}
-      {isEmailConfigModalOpen && (
+      {canEditData && isEmailConfigModalOpen && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[110] flex items-center justify-center p-4 animate-in zoom-in duration-300">
           <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] shadow-2xl w-full max-w-2xl overflow-hidden border border-blue-500/30 flex flex-col max-h-[90vh]">
             <div className="bg-blue-600 text-white p-6 flex justify-between items-center shrink-0">

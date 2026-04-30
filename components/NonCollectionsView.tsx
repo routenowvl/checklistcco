@@ -172,6 +172,7 @@ const NonCollectionsView: React.FC<{
   const [nonCollections, setNonCollections] = useState<NonCollection[]>([]);
   const [coletasPrevistas, setColetasPrevistas] = useState<ColetaPrevista[]>([]);
   const [userConfigs, setUserConfigs] = useState<RouteConfig[]>([]);
+  const [canEditData, setCanEditData] = useState(true);
   const [isLoading, setIsLoading] = useState(true);
   const [isDarkMode, setIsDarkMode] = useState(() => {
     const saved = localStorage.getItem('non_collections_dark_mode');
@@ -281,7 +282,96 @@ const NonCollectionsView: React.FC<{
   const [isSavingHistoryEdits, setIsSavingHistoryEdits] = useState(false);
   const [archiveValidationDivergences, setArchiveValidationDivergences] = useState<NonCollectionArchiveDivergence[] | null>(null);
 
+  const editableOperationKeys = useMemo(() => (
+    new Set(userConfigs.map((cfg) =>
+      String(cfg.operacao || '').trim().toUpperCase()
+    ))
+  ), [userConfigs]);
+
+  const canEditOperation = (operacao: string): boolean => {
+    if (!canEditData) return false;
+    return editableOperationKeys.has(String(operacao || '').trim().toUpperCase());
+  };
+
+  const parseViewerSnapshotNonCollections = (raw: string): NonCollection[] => {
+    const source = String(raw || '').trim();
+    if (!source) return [];
+
+    try {
+      const parsed = JSON.parse(source);
+      if (Array.isArray(parsed)) return parsed as NonCollection[];
+      if (parsed && typeof parsed === 'object') {
+        if (Array.isArray((parsed as any).nonCollections)) return (parsed as any).nonCollections as NonCollection[];
+        if (Array.isArray((parsed as any).naoColetas)) return (parsed as any).naoColetas as NonCollection[];
+      }
+    } catch {
+      // ignora json inválido
+    }
+
+    return [];
+  };
+
+  const buildViewerSnapshotContentWithNonCollections = (
+    raw: string,
+    operacao: string,
+    nonCollectionsRows: NonCollection[]
+  ): string => {
+    let current: any = {};
+    try {
+      const parsed = JSON.parse(String(raw || ''));
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        current = parsed;
+      } else if (Array.isArray(parsed)) {
+        current = { nonCollections: parsed };
+      }
+    } catch {
+      current = {};
+    }
+
+    const stableNonCollections = [...nonCollectionsRows].sort((a, b) => {
+      const keyA = `${a.data || ''}|${a.rota || ''}|${a.codigo || ''}|${a.id || ''}`;
+      const keyB = `${b.data || ''}|${b.rota || ''}|${b.codigo || ''}|${b.id || ''}`;
+      return keyA.localeCompare(keyB, 'pt-BR');
+    });
+
+    const next = {
+      version: 1,
+      operation: operacao,
+      updatedAt: new Date().toISOString(),
+      departures: Array.isArray(current.departures) ? current.departures : [],
+      nonCollections: stableNonCollections
+    };
+
+    return JSON.stringify(next);
+  };
+
+  const syncViewerContentForNonCollections = async (
+    token: string,
+    configs: RouteConfig[],
+    rows: NonCollection[]
+  ): Promise<void> => {
+    if (!configs.length) return;
+
+    const groupedByOperation: Record<string, NonCollection[]> = {};
+    rows.forEach((item) => {
+      const op = String(item.operacao || '').trim();
+      if (!op) return;
+      if (!groupedByOperation[op]) groupedByOperation[op] = [];
+      groupedByOperation[op].push(item);
+    });
+
+    await Promise.all(configs.map(async (cfg) => {
+      const operacao = String(cfg.operacao || '').trim();
+      if (!operacao) return;
+      const opRows = groupedByOperation[operacao] || [];
+      const nextContent = buildViewerSnapshotContentWithNonCollections(cfg.ConteudoNcoletas || '', operacao, opRows);
+      await SharePointService.updateRouteConfigConteudoNcoletasIfChanged(token, operacao, nextContent);
+    }));
+  };
+
   const updateGhostCell = (field: keyof NonCollection, value: string) => {
+    if (!canEditData) return;
+
     const updatedGhost = { ...ghostRow, [field]: value };
 
     if (field === 'motivo') {
@@ -333,6 +423,7 @@ const NonCollectionsView: React.FC<{
   };
 
   const openCausaRaizModal = (rowId: string, currentValue: string) => {
+    if (!canEditData) return;
     setCausaRaizModalData({ rowId, causaRaiz: currentValue || '' });
     setIsCausaRaizModalOpen(true);
   };
@@ -343,6 +434,11 @@ const NonCollectionsView: React.FC<{
   };
 
   const applyCausaRaizModal = async () => {
+    if (!canEditData) {
+      closeCausaRaizModal();
+      return;
+    }
+
     if (!causaRaizModalData) return;
 
     const value = (causaRaizModalData.causaRaiz || '').trim();
@@ -369,6 +465,11 @@ const NonCollectionsView: React.FC<{
   };
 
   const handleAddFromGhost = async () => {
+    if (!canEditData) {
+      alert('Esta conta possui acesso somente visualização.');
+      return;
+    }
+
     if (!ghostRow.rota || !ghostRow.data || !ghostRow.produtor || !ghostRow.operacao) {
       alert('Preencha todos os campos obrigatórios na linha de criação!');
       return;
@@ -473,6 +574,12 @@ const NonCollectionsView: React.FC<{
     operacao: string,
     pasteOverride?: { field: keyof NonCollection; lines: string[] }
   ) => {
+    if (!canEditData) {
+      setIsOperationModalOpen(false);
+      setPendingBulkPaste(null);
+      return;
+    }
+
     if (isCreatingRecords) {
       console.warn('[BULK_PASTE] Ignorando clique duplicado - criação em andamento');
       return;
@@ -926,19 +1033,50 @@ const NonCollectionsView: React.FC<{
 
       console.log('[NonCollections] Carregando dados...', currentUser.email);
 
-      // Carrega configurações do usuário
-      const configs = await SharePointService.getRouteConfigs(token, currentUser.email, forceRefresh);
+      // Carrega configurações do usuário (edição por EMAIL; visualização por Cópia)
+      const routeAccess = await SharePointService.getRouteConfigsByAccess(token, currentUser.email, forceRefresh);
+      const configs = routeAccess.configs || [];
+      setCanEditData(Boolean(routeAccess.canEdit));
       setUserConfigs(configs || []);
       console.log('[NonCollections] operações do usuário:', configs?.map(c => c.operacao));
+      console.log('[NonCollections] Perfil de edição habilitado?', Boolean(routeAccess.canEdit));
+
+      const myOps = new Set((configs || []).map(c => c.operacao));
+
+      if (!routeAccess.canEdit) {
+        console.log('[NonCollections] Modo visualização: carregando dados via coluna ConteudoNcoletas.');
+
+        const rowsFromSnapshots = (configs || []).flatMap((cfg) =>
+          parseViewerSnapshotNonCollections(cfg.ConteudoNcoletas || '').map((row) => ({
+            ...row,
+            operacao: String(row?.operacao || cfg.operacao || '').trim()
+          }))
+        );
+
+        const filteredBySnapshot = rowsFromSnapshots.filter((row) => {
+          if (myOps.size === 0) return false;
+          return myOps.has(row.operacao);
+        });
+
+        setNonCollections(filteredBySnapshot);
+
+        if (filteredBySnapshot.length > 0) {
+          await fetchColetasPrevistas(filteredBySnapshot[0].data, (configs || []).map(c => c.operacao));
+        } else {
+          setColetasPrevistas([]);
+        }
+
+        console.log('[NonCollections] ✅ Dados carregados via snapshot para visualização');
+        return;
+      }
 
       // Carrega Não coletas do SharePoint
       const spNonCollections = await SharePointService.getNonCollections(token, currentUser.email);
       console.log('[NonCollections] Total bruto do SharePoint:', spNonCollections.length);
 
       // Filtra APENAS Não coletas das operações do usuário logado
-      const myOps = new Set((configs || []).map(c => c.operacao));
       const filtered = (spNonCollections || []).filter(nc => {
-        if (myOps.size === 0) return true; // Fallback se config Não carregou
+        if (myOps.size === 0) return false;
         return myOps.has(nc.operacao);
       });
 
@@ -956,6 +1094,10 @@ const NonCollectionsView: React.FC<{
         setColetasPrevistas([]);
       }
 
+      // Atualiza snapshot de visualização por operação (somente se houver mudança no ConteudoNcoletas)
+      void syncViewerContentForNonCollections(token, configs || [], filtered)
+        .catch((err) => console.error('[VIEWER_CACHE][NC] Falha ao sincronizar ConteudoNcoletas:', err?.message || err));
+
       console.log('[NonCollections] ? Dados carregados com sucesso');
     } catch (e: any) {
       console.error('[NonCollections] Erro ao carregar dados:', e.message);
@@ -965,6 +1107,7 @@ const NonCollectionsView: React.FC<{
   };
 
   const persistNonCollectionRow = async (rowId: string, fieldLabel: string, rowOverride?: NonCollection) => {
+    if (!canEditData) return;
     if (!rowId || rowId === 'ghost') return;
     if (nonCollectionPersistLockRef.current.has(rowId)) return;
 
@@ -1153,6 +1296,11 @@ const NonCollectionsView: React.FC<{
   }, [userConfigs, coletasPrevistas, nonCollections]);
 
   const handleAddNonCollection = async () => {
+    if (!canEditData) {
+      alert('Esta conta possui acesso somente visualização.');
+      return;
+    }
+
     if (!newNonCollectionData.rota || !newNonCollectionData.data || !newNonCollectionData.produtor || !newNonCollectionData.operacao) {
       alert('Preencha todos os campos obrigatórios!');
       return;
@@ -1217,9 +1365,13 @@ const NonCollectionsView: React.FC<{
   };
 
   const handleArchiveAll = async () => {
+    if (!canEditData) {
+      alert('Esta conta possui acesso somente visualização.');
+      return;
+    }
+
     // VALIDAÇÃO CRÍTICA: Filtra apenas não coletas que pertencem às operações do usuário logado
-    const myOps = new Set(userConfigs.map(c => c.operacao));
-    const validNonCollections = nonCollections.filter(nc => !nc.operacao || myOps.has(nc.operacao));
+    const validNonCollections = nonCollections.filter(nc => !nc.operacao || canEditOperation(nc.operacao));
 
     if (validNonCollections.length === 0) {
       alert("Não há não coletas das suas operações para arquivar.");
@@ -1305,14 +1457,14 @@ const NonCollectionsView: React.FC<{
       if (!controller.signal.aborted) {
         const myOps = new Set(userConfigs.map(c => c.operacao));
         const filtered = results && results.length > 0
-          ? results.filter(r => !myOps.size || myOps.has(r.operacao))
+          ? results.filter(r => myOps.has(r.operacao))
           : [];
 
-      setArchivedResults(filtered);
-      setPendingHistoryEdits({});
-      setEditingHistoryId(null);
-      setEditingHistoryField(null);
-      setHistoryEditWarning(null);
+        setArchivedResults(filtered);
+        setPendingHistoryEdits({});
+        setEditingHistoryId(null);
+        setEditingHistoryField(null);
+        setHistoryEditWarning(null);
       }
     } catch (err: any) {
       if (err.name === 'AbortError') {
@@ -1406,6 +1558,8 @@ const NonCollectionsView: React.FC<{
 
   const canEditHistoryRow = (row: NonCollection | undefined): boolean => {
     if (!row) return false;
+    if (!canEditData) return false;
+    if (row.operacao && !canEditOperation(row.operacao)) return false;
 
     const rowISODate = normalizeDateToISO(row.data);
     const rowDate = parseDateOnly(rowISODate);
@@ -1469,6 +1623,11 @@ const NonCollectionsView: React.FC<{
   };
 
   const savePendingHistoryEdits = async () => {
+    if (!canEditData) {
+      alert('Esta conta possui acesso somente visualização.');
+      return;
+    }
+
     const editIds = Object.keys(pendingHistoryEdits);
     if (editIds.length === 0) return;
 
@@ -1621,6 +1780,11 @@ const NonCollectionsView: React.FC<{
   };
 
   const handleBulkPaste = async (field: keyof NonCollection, value: string, operationHint?: string) => {
+    if (!canEditData) {
+      alert('Esta conta possui acesso somente visualização.');
+      return;
+    }
+
     const lines = value.split(/[\n\r]/).map(l => l.trim()).filter(Boolean);
     if (lines.length === 0) return;
 
@@ -1794,6 +1958,11 @@ const NonCollectionsView: React.FC<{
             <p className="text-xs font-bold text-slate-500 dark:text-slate-400 mt-1 uppercase tracking-widest">
               Acompanhamento de ocorrências
             </p>
+            {!canEditData && (
+              <span className={`inline-flex mt-2 text-[9px] font-black uppercase tracking-widest px-2 py-1 rounded-full border ${isDarkMode ? 'text-amber-300 border-amber-500/60 bg-amber-500/10' : 'text-amber-700 border-amber-500 bg-amber-50'}`}>
+                Somente visualização
+              </span>
+            )}
           </div>
 
           {/* Cards de Indicadores */}
@@ -1883,42 +2052,48 @@ const NonCollectionsView: React.FC<{
         </div>
 
         <div className="flex items-center gap-3">
-          <button
-            onClick={() => setIsAddModalOpen(true)}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-black uppercase text-[10px] tracking-widest transition-all shadow-lg shadow-blue-500/20"
-          >
-            <Plus size={16} />
-            Adicionar Não Coleta
-          </button>
+          {canEditData && (
+            <button
+              onClick={() => setIsAddModalOpen(true)}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-black uppercase text-[10px] tracking-widest transition-all shadow-lg shadow-blue-500/20"
+            >
+              <Plus size={16} />
+              Adicionar Não Coleta
+            </button>
+          )}
 
-          <button
-            onClick={handleArchiveAll}
-            disabled={isArchiving || nonCollections.length === 0}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-black uppercase text-[10px] tracking-widest transition-all shadow-lg disabled:opacity-50 disabled:cursor-not-allowed ${
-              isDarkMode
-                ? 'bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700'
-                : 'bg-white text-slate-800 hover:bg-slate-50 hover:border-slate-500 border border-slate-400'
-            }`}
-            title="Arquivar todas as não coletas no histórico"
-          >
-            {isArchiving ? (
-              <><Loader2 size={16} className="animate-spin" /> Arquivando...</>
-            ) : (
-              <><Archive size={16} /> Arquivar</>
-            )}
-          </button>
+          {canEditData && (
+            <button
+              onClick={handleArchiveAll}
+              disabled={isArchiving || nonCollections.length === 0}
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-black uppercase text-[10px] tracking-widest transition-all shadow-lg disabled:opacity-50 disabled:cursor-not-allowed ${
+                isDarkMode
+                  ? 'bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700'
+                  : 'bg-white text-slate-800 hover:bg-slate-50 hover:border-slate-500 border border-slate-400'
+              }`}
+              title="Arquivar todas as não coletas no histórico"
+            >
+              {isArchiving ? (
+                <><Loader2 size={16} className="animate-spin" /> Arquivando...</>
+              ) : (
+                <><Archive size={16} /> Arquivar</>
+              )}
+            </button>
+          )}
 
-          <button
-            onClick={() => { setHistoryEditWarning(null); setIsHistoryModalOpen(true); }}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-black uppercase text-[10px] tracking-widest transition-all shadow-lg ${
-              isDarkMode
-                ? 'bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700'
-                : 'bg-white text-slate-800 hover:bg-slate-50 hover:border-slate-500 border border-slate-400'
-            }`}
-            title="Buscar não coletas no histórico"
-          >
-            <Database size={16} /> Histórico
-          </button>
+          {canEditData && (
+            <button
+              onClick={() => { setHistoryEditWarning(null); setIsHistoryModalOpen(true); }}
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-black uppercase text-[10px] tracking-widest transition-all shadow-lg ${
+                isDarkMode
+                  ? 'bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700'
+                  : 'bg-white text-slate-800 hover:bg-slate-50 hover:border-slate-500 border border-slate-400'
+              }`}
+              title="Buscar não coletas no histórico"
+            >
+              <Database size={16} /> Histórico
+            </button>
+          )}
 
           <button
             onClick={loadData}
@@ -2058,7 +2233,7 @@ const NonCollectionsView: React.FC<{
               </tr>
             </thead>
 
-            <tbody>
+            <tbody className={!canEditData ? 'pointer-events-none select-none' : ''}>
               {filteredData.map((row, index) => (
                 <tr
                   key={row.id}
@@ -2683,6 +2858,7 @@ const NonCollectionsView: React.FC<{
               ))}
 
               {/* Ghost Row - Adição rápida */}
+              {canEditData && (
               <tr
                 key="ghost"
                 className="border-b-2 border-blue-200 dark:border-blue-800 transition-colors bg-slate-50 dark:bg-slate-800 italic text-slate-400 border-l-4 border-dashed border-slate-300 dark:border-slate-600"
@@ -3089,6 +3265,7 @@ const NonCollectionsView: React.FC<{
                   </button>
                 </td>
               </tr>
+              )}
 
               {filteredData.length === 0 && nonCollections.length === 0 && (
                 <tr>
@@ -3140,7 +3317,7 @@ const NonCollectionsView: React.FC<{
       )}
 
       {/* Modal de Adicionar Não Coleta */}
-      {isAddModalOpen && (
+      {canEditData && isAddModalOpen && (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[200] flex items-center justify-center p-4">
           <div className="bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-[2.5rem] shadow-2xl w-full max-w-lg">
             <div className="bg-[#1e293b] p-6 flex justify-between items-center text-white">
@@ -3259,7 +3436,7 @@ const NonCollectionsView: React.FC<{
 
 
       {/* Modal de seleção de Operação (Bulk Paste) */}
-      {isOperationModalOpen && (
+      {canEditData && isOperationModalOpen && (
         <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-[300] flex items-center justify-center p-4 animate-in fade-in zoom-in-95 duration-200">
           <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-8 w-full max-w-md border border-blue-500/50 shadow-2xl animate-in zoom-in duration-300">
             <div className="flex items-center gap-3 text-blue-600 dark:text-blue-400 mb-6 font-black uppercase text-xs">
@@ -3661,14 +3838,14 @@ const NonCollectionsView: React.FC<{
                     {archivedResults.length} registro(s)
                   </span>
                 )}
-                {Object.keys(pendingHistoryEdits).length > 0 && (
+                {canEditData && Object.keys(pendingHistoryEdits).length > 0 && (
                   <span className="text-[10px] font-black uppercase tracking-widest text-amber-500 bg-amber-100 dark:bg-amber-900/30 px-3 py-1 rounded-full border border-amber-300 dark:border-amber-700">
                     {Object.keys(pendingHistoryEdits).length} alteração(ões) pendente(s)
                   </span>
                 )}
               </div>
               <div className="flex items-center gap-2">
-                {Object.keys(pendingHistoryEdits).length > 0 && (
+                {canEditData && Object.keys(pendingHistoryEdits).length > 0 && (
                   <button
                     onClick={savePendingHistoryEdits}
                     disabled={isSavingHistoryEdits}

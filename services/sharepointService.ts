@@ -2,7 +2,7 @@
 // @google/genai guidelines: Use direct process.env.API_KEY, no UI for keys, use correct model names.
 // Correct models: 'gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-2.5-flash-image', etc.
 
-import { SPTask, SPOperation, SPStatus, Task, OperationStatus, HistoryRecord, RouteDeparture, RouteOperationMapping, RouteConfig, NonCollection, ColetaPrevista, Motorista } from '../types';
+import { SPTask, SPOperation, SPStatus, Task, OperationStatus, HistoryRecord, RouteDeparture, RouteOperationMapping, RouteConfig, NonCollection, ColetaPrevista, Motorista, ViewerAccessEntry } from '../types';
 import { getBrazilDate, getBrazilISOString, getWeekString } from '../utils/dateUtils';
 
 export interface DailyWarning {
@@ -33,6 +33,12 @@ export interface SPNonCollection {
 }
 
 const SITE_PATH = import.meta.env.VITE_SHAREPOINT_SITE_PATH || "vialacteoscombr.sharepoint.com:/sites/CCO";
+const VIEWER_ACCESS_LIST_CANDIDATES = [
+  String(import.meta.env.VITE_VIEWER_ACCESS_LIST_NAME || '').trim(),
+  'Usuário_filial',
+  'Usuario_filial',
+  'USUARIO_FILIAL'
+].filter(Boolean);
 let cachedSiteId: string | null = null;
 const columnMappingCache: Record<string, { mapping: Record<string, string>, readOnly: Set<string>, internalNames: Set<string> }> = {};
 
@@ -244,6 +250,21 @@ async function findListByIdOrName(siteId: string, listName: string, token: strin
   throw new Error(`Lista '${listName}' não encontrada.`);
 }
 
+async function resolveViewerAccessList(siteId: string, token: string): Promise<any> {
+  for (const candidate of VIEWER_ACCESS_LIST_CANDIDATES) {
+    try {
+      const list = await findListByIdOrName(siteId, candidate, token);
+      return list;
+    } catch {
+      // Tenta o próximo candidato
+    }
+  }
+
+  throw new Error(
+    `Lista de visualização não encontrada. Tentativas: ${VIEWER_ACCESS_LIST_CANDIDATES.join(', ')}`
+  );
+}
+
 function normalizeString(str: string): string {
   if (!str) return "";
   return str.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "").trim();
@@ -284,6 +305,108 @@ function resolveFieldName(mapping: Record<string, string>, target: string): stri
 }
 
 export const SharePointService = {
+  parseEmailList(raw: string): string[] {
+    return String(raw || '')
+      .split(/[;,\s\n\r]+/)
+      .map((email) => email.trim().toLowerCase())
+      .filter(Boolean);
+  },
+
+  getViewerOperationFieldCandidates(
+    mapping: Record<string, string>,
+    readOnly?: Set<string>
+  ): string[] {
+    const unique = new Set<string>();
+    const push = (value?: string) => {
+      const field = String(value || '').trim();
+      if (!field) return;
+      unique.add(field);
+    };
+
+    push(resolveFieldName(mapping, 'OPERACAO'));
+    push(resolveFieldName(mapping, 'OPERAÇÃO'));
+    push(mapping['operacao']);
+    push(resolveFieldName(mapping, 'FILIAL'));
+    push(resolveFieldName(mapping, 'Filial'));
+    push(mapping['filial']);
+
+    Object.entries(mapping).forEach(([normalizedKey, internalName]) => {
+      if (!normalizedKey) return;
+      if (normalizedKey.startsWith('opera') || normalizedKey.startsWith('filial')) {
+        push(internalName);
+      }
+    });
+
+    const candidates = Array.from(unique);
+    if (!readOnly) return candidates;
+
+    const writable = candidates.filter((field) => !readOnly.has(field));
+    return writable.length > 0 ? writable : candidates;
+  },
+
+  async getAllRouteConfigs(token: string, forceRefresh: boolean = false): Promise<RouteConfig[]> {
+    try {
+      if (forceRefresh) {
+        clearCache('routeConfigs_all');
+      }
+
+      const cacheKey = 'routeConfigs_all';
+      const cached = getCachedData<RouteConfig[]>(cacheKey);
+      if (cached && !forceRefresh) {
+        return cached;
+      }
+
+      const siteId = await getResolvedSiteId(token);
+      const list = await findListByIdOrName(siteId, 'CONFIG_OPERACAO_SAIDA_DE_ROTAS', token);
+      const { mapping } = await getListColumnMapping(siteId, list.id, token);
+
+      const timestamp = Date.now();
+      const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&t=${timestamp}`, token);
+
+      console.log('[DEBUG_SHAREPOINT] CONFIG_OPERACAO_SAIDA_DE_ROTAS raw data:', data);
+
+      const result = (data.value || []).map((item: any): RouteConfig => {
+        const f = item.fields;
+        const config = {
+          operacao: String(f[resolveFieldName(mapping, 'OPERACAO')] || ""),
+          email: String(f[resolveFieldName(mapping, 'EMAIL')] || "").toString().toLowerCase().trim(),
+          tolerancia: String(f[resolveFieldName(mapping, 'TOLERANCIA')] || "00:00:00"),
+          nomeExibicao: String(f[resolveFieldName(mapping, 'NomeExibicao')] || String(f[resolveFieldName(mapping, 'OPERACAO')] || "")),
+          Conteudo: String(f[resolveFieldName(mapping, 'Conteudo')] || ""),
+          ConteudoNcoletas: String(f[resolveFieldName(mapping, 'ConteudoNcoletas')] || ""),
+          ultimoEnvioSaida: String(f[resolveFieldName(mapping, 'UltimoEnvioSaida')] || ""),
+          Status: String(f[resolveFieldName(mapping, 'Status')] || ""),
+          Envio: String(f[resolveFieldName(mapping, 'Envio')] || ""),
+          Copia: String(f[resolveFieldName(mapping, 'Copia')] || ""),
+          UltimoEnvioResumoSaida: String(f[resolveFieldName(mapping, 'UltimoEnvioResumoSaida')] || ""),
+          UltimoEnvioNcoletas: String(f[resolveFieldName(mapping, 'UltimoEnvioNcoletas')] || ""),
+          StatusResumoSaida: String(f[resolveFieldName(mapping, 'StatusResumoSaida')] || ""),
+          CodigoKmm: String(f[resolveFieldName(mapping, 'CodigoKmm')] || "")
+        };
+        console.log('[DEBUG_SHAREPOINT] Config item:', {
+          operacao: config.operacao,
+          ultimoEnvioSaida_raw: f[resolveFieldName(mapping, 'UltimoEnvioSaida')],
+          ultimoEnvioSaida: config.ultimoEnvioSaida,
+          Status: config.Status,
+          Envio: config.Envio,
+          Copia: config.Copia,
+          ConteudoLength: config.Conteudo?.length || 0,
+          ConteudoNcoletasLength: config.ConteudoNcoletas?.length || 0,
+          CodigoKmm: config.CodigoKmm,
+          UltimoEnvioResumoSaida: config.UltimoEnvioResumoSaida,
+          StatusResumoSaida: config.StatusResumoSaida
+        });
+        return config;
+      });
+
+      setCachedData(cacheKey, result);
+      return result;
+    } catch (e: any) {
+      console.error('[SHAREPOINT] Erro ao buscar CONFIG_OPERACAO_SAIDA_DE_ROTAS:', e.message);
+      return [];
+    }
+  },
+
   async getTasks(token: string): Promise<SPTask[]> {
     try {
         const siteId = await getResolvedSiteId(token);
@@ -441,50 +564,12 @@ export const SharePointService = {
 
   async getRouteConfigs(token: string, userEmail: string, forceRefresh: boolean = false): Promise<RouteConfig[]> {
     try {
-        // Se forceRefresh for true, limpa o cache antes de buscar
         if (forceRefresh) {
             clearCache('routeConfigs');
         }
-        
-        const siteId = await getResolvedSiteId(token);
-        const list = await findListByIdOrName(siteId, 'CONFIG_OPERACAO_SAIDA_DE_ROTAS', token);
-        const { mapping } = await getListColumnMapping(siteId, list.id, token);
-        
-        // Adiciona timestamp para evitar cache do browser
-        const timestamp = Date.now();
-        const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&t=${timestamp}`, token);
 
-        console.log('[DEBUG_SHAREPOINT] CONFIG_OPERACAO_SAIDA_DE_ROTAS raw data:', data);
-
-        const result = (data.value || []).map((item: any): RouteConfig => {
-          const f = item.fields;
-          const config = {
-            operacao: String(f[resolveFieldName(mapping, 'OPERACAO')] || ""),
-            email: String(f[resolveFieldName(mapping, 'EMAIL')] || "").toString().toLowerCase().trim(),
-            tolerancia: String(f[resolveFieldName(mapping, 'TOLERANCIA')] || "00:00:00"),
-            nomeExibicao: String(f[resolveFieldName(mapping, 'NomeExibicao')] || String(f[resolveFieldName(mapping, 'OPERACAO')] || "")),
-            ultimoEnvioSaida: String(f[resolveFieldName(mapping, 'UltimoEnvioSaida')] || ""),
-            Status: String(f[resolveFieldName(mapping, 'Status')] || ""), // Status retornado pelo webhook
-            Envio: String(f[resolveFieldName(mapping, 'Envio')] || ""), // Emails para envio principal
-            Copia: String(f[resolveFieldName(mapping, 'Copia')] || ""), // Emails para cópia
-            UltimoEnvioResumoSaida: String(f[resolveFieldName(mapping, 'UltimoEnvioResumoSaida')] || ""), // Último envio de resumo
-            UltimoEnvioNcoletas: String(f[resolveFieldName(mapping, 'UltimoEnvioNcoletas')] || ""), // Último envio de não coletas
-            StatusResumoSaida: String(f[resolveFieldName(mapping, 'StatusResumoSaida')] || ""), // Status do resumo
-            CodigoKmm: String(f[resolveFieldName(mapping, 'CodigoKmm')] || "") // Código KMM da operação
-          };
-          console.log('[DEBUG_SHAREPOINT] Config item:', {
-            operacao: config.operacao,
-            ultimoEnvioSaida_raw: f[resolveFieldName(mapping, 'UltimoEnvioSaida')],
-            ultimoEnvioSaida: config.ultimoEnvioSaida,
-            Status: config.Status,
-            Envio: config.Envio,
-            Copia: config.Copia,
-            CodigoKmm: config.CodigoKmm,
-            UltimoEnvioResumoSaida: config.UltimoEnvioResumoSaida,
-            StatusResumoSaida: config.StatusResumoSaida
-          });
-          return config;
-        }).filter(c => c.email === userEmail.toLowerCase().trim());
+        const configs = await this.getAllRouteConfigs(token, forceRefresh);
+        const result = configs.filter(c => c.email === userEmail.toLowerCase().trim());
 
         console.log('[DEBUG_SHAREPOINT] Configs filtradas por email:', result);
         return result;
@@ -493,6 +578,162 @@ export const SharePointService = {
       // Retorna array vazio se a lista não existir
       return [];
     }
+  },
+
+  async getViewerAccessEntries(token: string, forceRefresh: boolean = false): Promise<ViewerAccessEntry[]> {
+    try {
+      if (forceRefresh) {
+        clearCache('viewer_access_entries');
+      }
+
+      const cacheKey = 'viewer_access_entries';
+      const cached = getCachedData<ViewerAccessEntry[]>(cacheKey);
+      if (cached && !forceRefresh) {
+        return cached;
+      }
+
+      const siteId = await getResolvedSiteId(token);
+      const list = await resolveViewerAccessList(siteId, token);
+      const { mapping, readOnly } = await getListColumnMapping(siteId, list.id, token);
+      const operationFieldCandidates = this.getViewerOperationFieldCandidates(mapping, readOnly);
+
+      let allItems: any[] = [];
+      let nextUrl: string | null = `/sites/${siteId}/lists/${list.id}/items?expand=fields&$top=200`;
+      while (nextUrl) {
+        const data = await graphFetch(nextUrl, token);
+        allItems = allItems.concat(data.value || []);
+        nextUrl = data['@odata.nextLink'] || null;
+      }
+
+      const rows = allItems
+        .map((item: any): ViewerAccessEntry => ({
+          id: String(item.id || ''),
+          email: String(item.fields?.Title || '').trim().toLowerCase(),
+          operacao: String(
+            operationFieldCandidates
+              .map((field) => item.fields?.[field])
+              .find((value) => String(value || '').trim().length > 0) || ''
+          ).trim()
+        }))
+        .filter((row) => row.id && row.email && row.operacao);
+
+      setCachedData(cacheKey, rows);
+      return rows;
+    } catch (e: any) {
+      console.error('[SHAREPOINT] Erro ao buscar acessos de visualização:', e.message);
+      return [];
+    }
+  },
+
+  async replaceViewerAccessForEmail(
+    token: string,
+    viewerEmail: string,
+    selectedOperations: string[],
+    scopeOperations: string[] = []
+  ): Promise<void> {
+    const normalizedEmail = String(viewerEmail || '').trim().toLowerCase();
+    if (!normalizedEmail) return;
+
+    const siteId = await getResolvedSiteId(token);
+    const list = await resolveViewerAccessList(siteId, token);
+    const { mapping, readOnly } = await getListColumnMapping(siteId, list.id, token);
+    const operationFieldCandidates = this.getViewerOperationFieldCandidates(mapping, readOnly);
+
+    const normalizeOp = (value: string): string =>
+      String(value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .trim()
+        .toUpperCase();
+
+    const opByNormalized = new Map<string, string>();
+    selectedOperations
+      .map((op) => String(op || '').trim())
+      .filter(Boolean)
+      .forEach((op) => {
+        const key = normalizeOp(op);
+        if (!opByNormalized.has(key)) opByNormalized.set(key, op);
+      });
+
+    const scopeSet = new Set(
+      scopeOperations
+        .map((op) => normalizeOp(op))
+        .filter(Boolean)
+    );
+
+    const allEntries = await this.getViewerAccessEntries(token, true);
+    const scopedExisting = allEntries.filter((entry) => {
+      if (entry.email !== normalizedEmail) return false;
+      if (scopeSet.size === 0) return true;
+      return scopeSet.has(normalizeOp(entry.operacao));
+    });
+
+    const byOperation = new Map<string, ViewerAccessEntry[]>();
+    scopedExisting.forEach((entry) => {
+      const key = normalizeOp(entry.operacao);
+      if (!byOperation.has(key)) byOperation.set(key, []);
+      byOperation.get(key)!.push(entry);
+    });
+
+    const deleteIds: string[] = [];
+    byOperation.forEach((entries, opKey) => {
+      if (!opByNormalized.has(opKey)) {
+        entries.forEach((entry) => deleteIds.push(entry.id));
+        return;
+      }
+
+      // Mantém apenas um registro por (email, operação)
+      entries.slice(1).forEach((entry) => deleteIds.push(entry.id));
+    });
+
+    for (const itemId of deleteIds) {
+      await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${itemId}`, token, {
+        method: 'DELETE'
+      });
+    }
+
+    for (const [opKey, opValue] of opByNormalized.entries()) {
+      const existing = byOperation.get(opKey);
+      if (existing && existing.length > 0) continue;
+
+      let created = false;
+      let lastError: any = null;
+
+      for (const operacaoField of operationFieldCandidates) {
+        try {
+          await graphFetch(`/sites/${siteId}/lists/${list.id}/items`, token, {
+            method: 'POST',
+            body: JSON.stringify({
+              fields: {
+                Title: normalizedEmail,
+                [operacaoField]: opValue
+              }
+            })
+          });
+          created = true;
+          break;
+        } catch (err: any) {
+          lastError = err;
+          const msg = String(err?.message || '').toLowerCase();
+          if (
+            msg.includes('not recognized') ||
+            msg.includes('does not exist') ||
+            msg.includes('invalid request')
+          ) {
+            continue;
+          }
+          throw err;
+        }
+      }
+
+      if (!created) {
+        throw new Error(
+          `Não foi possível mapear a coluna de operação na lista de visualização. Último erro: ${String(lastError?.message || lastError || 'desconhecido')}`
+        );
+      }
+    }
+
+    clearCache('viewer_access_entries');
   },
 
   async getRouteOperationMappings(token: string): Promise<RouteOperationMapping[]> {
@@ -565,6 +806,36 @@ export const SharePointService = {
       return result;
     } catch (e) {
       return [];
+    }
+  },
+
+  async getRouteConfigsByAccess(token: string, userEmail: string, forceRefresh: boolean = false): Promise<{ configs: RouteConfig[]; canEdit: boolean }> {
+    try {
+      const normalizedEmail = String(userEmail || '').trim().toLowerCase();
+      const allConfigs = await this.getAllRouteConfigs(token, forceRefresh);
+
+      const editableConfigs = allConfigs.filter((config) => config.email === normalizedEmail);
+      if (editableConfigs.length > 0) {
+        return { configs: editableConfigs, canEdit: true };
+      }
+
+      // Modo visualização: acesso concedido pela lista de cadastro (Title=email, OPERACAO)
+      const viewerEntries = await this.getViewerAccessEntries(token, forceRefresh);
+      const allowedOps = new Set(
+        viewerEntries
+          .filter((entry) => entry.email === normalizedEmail)
+          .map((entry) => String(entry.operacao || '').trim().toUpperCase())
+          .filter(Boolean)
+      );
+
+      const readableConfigs = allConfigs.filter((config) =>
+        allowedOps.has(String(config.operacao || '').trim().toUpperCase())
+      );
+
+      return { configs: readableConfigs, canEdit: false };
+    } catch (e: any) {
+      console.error('[SHAREPOINT] Erro ao buscar configs por acesso:', e.message);
+      return { configs: [], canEdit: false };
     }
   },
 
@@ -840,6 +1111,102 @@ export const SharePointService = {
     } catch (error: any) {
       console.error('[SHAREPOINT] ❌ Erro ao atualizar emails:', error.message);
       throw error;
+    }
+  },
+
+  /**
+   * Atualiza a coluna Conteudo da configuração da operação apenas quando houver mudança.
+   * Retorna true quando houve PATCH, false quando manteve sem alteração.
+   */
+  async updateRouteConfigConteudoIfChanged(token: string, operacao: string, conteudo: string): Promise<boolean> {
+    try {
+      const siteId = await getResolvedSiteId(token);
+      const list = await findListByIdOrName(siteId, 'CONFIG_OPERACAO_SAIDA_DE_ROTAS', token);
+      const { mapping } = await getListColumnMapping(siteId, list.id, token);
+
+      const operacaoField = resolveFieldName(mapping, 'OPERACAO');
+      const conteudoField = resolveFieldName(mapping, 'Conteudo');
+      const filter = `fields/${operacaoField} eq '${operacao}'`;
+      const existing = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}&$top=1`, token);
+
+      if (!existing.value || existing.value.length === 0) {
+        console.warn(`[SHAREPOINT_CONTEUDO] Operação "${operacao}" não encontrada para atualização do cache`);
+        return false;
+      }
+
+      const item = existing.value[0];
+      const itemId = item.id;
+      const atual = String(item.fields?.[conteudoField] || '');
+      const proximo = String(conteudo || '');
+
+      if (atual === proximo) {
+        console.log(`[SHAREPOINT_CONTEUDO] Sem mudança para ${operacao} — PATCH evitado`);
+        return false;
+      }
+
+      await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${itemId}/fields`, token, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          [conteudoField]: proximo
+        })
+      });
+
+      clearCache('routeConfigs_all');
+      clearCache('routeConfigs');
+
+      console.log(`[SHAREPOINT_CONTEUDO] ✅ Conteudo atualizado para ${operacao} (${proximo.length} chars)`);
+      return true;
+    } catch (error: any) {
+      console.error('[SHAREPOINT_CONTEUDO] ❌ Erro ao atualizar Conteudo:', error.message);
+      return false;
+    }
+  },
+
+  /**
+   * Atualiza a coluna ConteudoNcoletas da configuração da operação apenas quando houver mudança.
+   * Retorna true quando houve PATCH, false quando manteve sem alteração.
+   */
+  async updateRouteConfigConteudoNcoletasIfChanged(token: string, operacao: string, conteudoNcoletas: string): Promise<boolean> {
+    try {
+      const siteId = await getResolvedSiteId(token);
+      const list = await findListByIdOrName(siteId, 'CONFIG_OPERACAO_SAIDA_DE_ROTAS', token);
+      const { mapping } = await getListColumnMapping(siteId, list.id, token);
+
+      const operacaoField = resolveFieldName(mapping, 'OPERACAO');
+      const conteudoField = resolveFieldName(mapping, 'ConteudoNcoletas');
+      const filter = `fields/${operacaoField} eq '${operacao}'`;
+      const existing = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}&$top=1`, token);
+
+      if (!existing.value || existing.value.length === 0) {
+        console.warn(`[SHAREPOINT_CONTEUDO_NC] Operação "${operacao}" não encontrada para atualização do cache`);
+        return false;
+      }
+
+      const item = existing.value[0];
+      const itemId = item.id;
+      const atual = String(item.fields?.[conteudoField] || '');
+      const proximo = String(conteudoNcoletas || '');
+
+      if (atual === proximo) {
+        console.log(`[SHAREPOINT_CONTEUDO_NC] Sem mudança para ${operacao} — PATCH evitado`);
+        return false;
+      }
+
+      await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${itemId}/fields`, token, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          [conteudoField]: proximo
+        })
+      });
+
+      clearCache('routeConfigs_all');
+      clearCache('routeConfigs');
+
+      console.log(`[SHAREPOINT_CONTEUDO_NC] ✅ ConteudoNcoletas atualizado para ${operacao} (${proximo.length} chars)`);
+      return true;
+    } catch (error: any) {
+      console.error('[SHAREPOINT_CONTEUDO_NC] ❌ Erro ao atualizar ConteudoNcoletas:', error.message);
+      return false;
     }
   },
 

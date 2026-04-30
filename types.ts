@@ -79,6 +79,8 @@ export interface RouteConfig {
   email: string;
   tolerancia: string;
   nomeExibicao: string;
+  Conteudo?: string; // Snapshot JSON por operação (modo visualização)
+  ConteudoNcoletas?: string; // Snapshot JSON de não coletas por operação (modo visualização)
   ultimoEnvioSaida?: string;
   Status?: string; // Status retornado pelo webhook: "OK" ou "Atualizar"
   Envio?: string; // Emails para envio principal (separados por ";")
@@ -87,6 +89,12 @@ export interface RouteConfig {
   StatusResumoSaida?: string; // Status do resumo: "OK", "Atualizar" ou vazio
   UltimoEnvioNcoletas?: string; // Último envio de não coletas
   CodigoKmm?: string; // Código KMM da operação para busca de coletas previstas
+}
+
+export interface ViewerAccessEntry {
+  id: string;
+  email: string;
+  operacao: string;
 }
 
 export interface SPTask {

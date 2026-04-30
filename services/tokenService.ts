@@ -1,7 +1,5 @@
-import { msalInstance } from './authService';
+import { getAuthScopes, getMsalInstance } from './authService';
 import { InteractionRequiredAuthError } from '@azure/msal-browser';
-
-const SCOPES = ["User.Read", "Sites.ReadWrite.All"];
 
 // Renova o token 5 minutos antes de expirar
 const REFRESH_THRESHOLD_MS = 5 * 60 * 1000;
@@ -27,6 +25,8 @@ export const getValidToken = async (): Promise<string | null> => {
   }
 
   try {
+    const msalInstance = getMsalInstance();
+    const scopes = getAuthScopes();
     const accounts = msalInstance.getAllAccounts();
     if (accounts.length === 0) {
       console.warn('[TOKEN] Nenhuma conta ativa no MSAL');
@@ -38,7 +38,7 @@ export const getValidToken = async (): Promise<string | null> => {
     // acquireTokenSilent: o MSAL usa o cache interno e renova automaticamente
     // quando o token está próximo de expirar (usa o refresh_token do Azure AD)
     activeRefreshPromise = msalInstance
-      .acquireTokenSilent({ scopes: SCOPES, account })
+      .acquireTokenSilent({ scopes, account })
       .then(response => {
         const token = response.accessToken;
         // Mantém window.__access_token sempre atualizado para compatibilidade
@@ -59,7 +59,7 @@ export const getValidToken = async (): Promise<string | null> => {
           // Tenta forçar refresh antes de pedir interação
           try {
             const forced = await msalInstance.acquireTokenSilent({
-              scopes: SCOPES,
+              scopes,
               account,
               forceRefresh: true,
             });
@@ -110,6 +110,8 @@ export const startTokenRefreshLoop = (
 
   const checkAndRefresh = async () => {
     try {
+      const msalInstance = getMsalInstance();
+      const scopes = getAuthScopes();
       const accounts = msalInstance.getAllAccounts();
       if (accounts.length === 0) return;
 
@@ -117,7 +119,7 @@ export const startTokenRefreshLoop = (
 
       // Sempre tenta acquireTokenSilent — o MSAL decide se usa cache ou renova
       const response = await msalInstance.acquireTokenSilent({
-        scopes: SCOPES,
+        scopes,
         account,
       });
 
@@ -131,7 +133,7 @@ export const startTokenRefreshLoop = (
         if (timeUntilExpiry < REFRESH_THRESHOLD_MS) {
           console.log('[TOKEN_LOOP] Token próximo de expirar — forçando renovação');
           const forced = await msalInstance.acquireTokenSilent({
-            scopes: SCOPES,
+            scopes,
             account,
             forceRefresh: true,
           });
@@ -184,11 +186,13 @@ export const stopTokenRefreshLoop = () => {
  */
 export const forceTokenRefresh = async (): Promise<string | null> => {
   try {
+    const msalInstance = getMsalInstance();
+    const scopes = getAuthScopes();
     const accounts = msalInstance.getAllAccounts();
     if (accounts.length === 0) return null;
 
     const response = await msalInstance.acquireTokenSilent({
-      scopes: SCOPES,
+      scopes,
       account: accounts[0],
       forceRefresh: true,
     });
