@@ -485,36 +485,6 @@ const NonCollectionsView: React.FC<{
       const dataParaSemana = ghostRow.data!.split('/').reverse().join('-');
       const semana = getWeekString(dataParaSemana);
 
-      // Calcula dataAcao automática: data + 2 dias se motivo gerar "Será coletado na rota..."
-      const calcularDataAcao = () => {
-        const motivo = (ghostRow.motivo || '').trim();
-        const dataNaoColeta = ghostRow.data!;
-
-        if (motivo && dataNaoColeta) {
-          // Motivos que geram "Leite Descartado" ou "Aguardando autorização" ficam com hífen
-          const motivoLower = motivo.toLowerCase();
-          if (motivoLower === 'parou de fornecer' || motivoLower === 'produtor suspenso' || motivoLower === 'alizarol positivo') {
-            return '-';
-          }
-
-          // Se tem rota e data, calcula data + 2 dias
-          if (ghostRow.rota) {
-            const match = dataNaoColeta.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-            if (match) {
-              const [, day, month, year] = match;
-              const dateObj = new Date(Number(year), Number(month) - 1, Number(day));
-              dateObj.setDate(dateObj.getDate() + 2);
-              const d = String(dateObj.getDate()).padStart(2, '0');
-              const m = String(dateObj.getMonth() + 1).padStart(2, '0');
-              const y = dateObj.getFullYear();
-              return `${d}/${m}/${y}`;
-            }
-          }
-        }
-
-        return ''; // Sem motivo definido, fica vazio
-      };
-
       const newRecord: NonCollection = {
         id: Date.now().toString(),
         semana,
@@ -525,7 +495,7 @@ const NonCollectionsView: React.FC<{
         motivo: ghostRow.motivo || '',
         observacao: ghostRow.observacao || '',
         acao: ghostRow.acao || '',
-        dataAcao: calcularDataAcao(),
+        dataAcao: ghostRow.dataAcao || '',
         ultimaColeta: '',
         Culpabilidade: ghostRow.Culpabilidade || 'Não se aplica',
         operacao: ghostRow.operacao!,
@@ -2419,32 +2389,10 @@ const NonCollectionsView: React.FC<{
                               const selectedMotivo = e.target.value;
                               const CulpabilidadeAuto = MOTIVOS_CulpabilidadeS[selectedMotivo];
 
-                              // Calcula Data Ação automática
-                              const calcularDataAcaoAutomatica = (motivo: string, data: string, rota: string): string => {
-                                const motivoLower = motivo.toLowerCase();
-                                if (motivoLower === 'parou de fornecer' || motivoLower === 'produtor suspenso' || motivoLower === 'alizarol positivo') return '-';
-                                if (motivo && data && rota) {
-                                  const match = data.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-                                  if (match) {
-                                    const [, day, month, year] = match;
-                                    const dateObj = new Date(Number(year), Number(month) - 1, Number(day));
-                                    dateObj.setDate(dateObj.getDate() + 2);
-                                    const d = String(dateObj.getDate()).padStart(2, '0');
-                                    const m = String(dateObj.getMonth() + 1).padStart(2, '0');
-                                    const y = dateObj.getFullYear();
-                                    return `${d}/${m}/${y}`;
-                                  }
-                                }
-                                return '';
-                              };
-
-                              const dataAcaoAuto = calcularDataAcaoAutomatica(selectedMotivo, row.data || '', row.rota || '');
-
                               const updated = {
                                 ...row,
                                 motivo: selectedMotivo,
                                 Culpabilidade: CulpabilidadeAuto || row.Culpabilidade || '',
-                                dataAcao: dataAcaoAuto,
                                 causaRaiz: isMotivoComCausaRaizObrigatoria(selectedMotivo) ? (row.causaRaiz || '') : ''
                               };
                               setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
@@ -2573,41 +2521,8 @@ const NonCollectionsView: React.FC<{
                       );
                     }
 
-                    // DATA AÇÃO - Input editável com máscara (preenchida automaticamente apenas para "Será coletado na rota...")
+                    // DATA AÇÃO - Input editável com máscara (manual)
                     if (key === 'dataAcao') {
-                      // Calcula data Ação automática: data + 2 dias APENAS para motivos que geram "Será coletado na rota..."
-                      const getDataAcaoAutomatica = () => {
-                        const motivo = (row.motivo || '').trim();
-                        const dataNaoColeta = (row.data || '').trim();
-
-                        // Se o usuário já preencheu dataAcao manualmente, respeita
-                        if (row.dataAcao) return row.dataAcao;
-
-                        // Para "parou de fornecer", "produtor suspenso" e "alizarol positivo", coloca hífen
-                        const motivoLower = motivo.toLowerCase();
-                        if (motivoLower === 'parou de fornecer' || motivoLower === 'produtor suspenso' || motivoLower === 'alizarol positivo') {
-                          return '-';
-                        }
-
-                        // Se tem motivo e data, calcula data + 2 dias
-                        if (motivo && dataNaoColeta && row.rota) {
-                          const match = dataNaoColeta.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-                          if (match) {
-                            const [, day, month, year] = match;
-                            const dateObj = new Date(Number(year), Number(month) - 1, Number(day));
-                            dateObj.setDate(dateObj.getDate() + 2);
-                            const d = String(dateObj.getDate()).padStart(2, '0');
-                            const m = String(dateObj.getMonth() + 1).padStart(2, '0');
-                            const y = dateObj.getFullYear();
-                            return `${d}/${m}/${y}`;
-                          }
-                        }
-
-                        return '';
-                      };
-
-                      const dataAcaoValue = getDataAcaoAutomatica();
-
                       return (
                         <td
                           key={key}
@@ -2618,7 +2533,7 @@ const NonCollectionsView: React.FC<{
                         >
                           <input
                             type="text"
-                            value={dataAcaoValue}
+                            value={row.dataAcao || ''}
                             onChange={(e) => {
                               let val = e.target.value.replace(/\D/g, '');
                               if (val.length > 8) val = val.slice(0, 8);
@@ -2954,27 +2869,8 @@ const NonCollectionsView: React.FC<{
                             const selectedMotivo = e.target.value;
                             const CulpabilidadeAuto = MOTIVOS_CulpabilidadeS[selectedMotivo];
 
-                            // Calcula Data Ação automática
-                            const motivoLower = selectedMotivo.toLowerCase();
-                            let dataAcaoAuto = '';
-                            if (motivoLower === 'parou de fornecer' || motivoLower === 'produtor suspenso' || motivoLower === 'alizarol positivo') {
-                              dataAcaoAuto = '-';
-                            } else if (selectedMotivo && ghostRow.data && ghostRow.rota) {
-                              const match = ghostRow.data.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-                              if (match) {
-                                const [, day, month, year] = match;
-                                const dateObj = new Date(Number(year), Number(month) - 1, Number(day));
-                                dateObj.setDate(dateObj.getDate() + 2);
-                                const d = String(dateObj.getDate()).padStart(2, '0');
-                                const m = String(dateObj.getMonth() + 1).padStart(2, '0');
-                                const y = dateObj.getFullYear();
-                                dataAcaoAuto = `${d}/${m}/${y}`;
-                              }
-                            }
-
                             updateGhostCell('motivo', selectedMotivo);
                             if (CulpabilidadeAuto) updateGhostCell('Culpabilidade', CulpabilidadeAuto);
-                            if (dataAcaoAuto) updateGhostCell('dataAcao', dataAcaoAuto);
                             if (!isMotivoComCausaRaizObrigatoria(selectedMotivo)) updateGhostCell('causaRaiz', '');
                           }}
                           className={`${inputClass} text-left cursor-pointer`}
@@ -3086,45 +2982,12 @@ const NonCollectionsView: React.FC<{
                   }
 
                   if (key === 'dataAcao' || key === 'ultimaColeta') {
-                    // Para dataAcao, calcula automaticamente data + 2 dias APENAS para "Será coletado na rota..."
                     if (key === 'dataAcao') {
-                      const getDataAcaoAutomatica = () => {
-                        // Se o usuário já preencheu manualmente, respeita
-                        if (ghostRow.dataAcao) return ghostRow.dataAcao;
-
-                        const motivo = (ghostRow.motivo || '').trim();
-                        const dataNaoColeta = (ghostRow.data || '').trim();
-
-                        // Motivos que geram "Leite Descartado" ou "Aguardando autorização" ficam com hífen
-                        const motivoLower = motivo.toLowerCase();
-                        if (motivoLower === 'parou de fornecer' || motivoLower === 'produtor suspenso' || motivoLower === 'alizarol positivo') {
-                          return '-';
-                        }
-
-                        // Se tem motivo, data e rota, calcula data + 2 dias
-                        if (motivo && dataNaoColeta && ghostRow.rota) {
-                          const match = dataNaoColeta.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-                          if (match) {
-                            const [, day, month, year] = match;
-                            const dateObj = new Date(Number(year), Number(month) - 1, Number(day));
-                            dateObj.setDate(dateObj.getDate() + 2);
-                            const d = String(dateObj.getDate()).padStart(2, '0');
-                            const m = String(dateObj.getMonth() + 1).padStart(2, '0');
-                            const y = dateObj.getFullYear();
-                            return `${d}/${m}/${y}`;
-                          }
-                        }
-
-                        return '';
-                      };
-
-                      const dataAcaoValue = getDataAcaoAutomatica();
-
                       return (
                         <td key={`ghost-${key}`} className="p-0 border border-slate-200/30 dark:border-slate-800/30" style={{ verticalAlign: 'middle' }}>
                           <input
                             type="text"
-                            value={dataAcaoValue}
+                            value={ghostRow.dataAcao || ''}
                             onChange={(e) => {
                               let val = e.target.value.replace(/\D/g, '');
                               if (val.length > 8) val = val.slice(0, 8);
