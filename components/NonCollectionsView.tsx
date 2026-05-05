@@ -2419,16 +2419,6 @@ const NonCollectionsView: React.FC<{
                               const selectedMotivo = e.target.value;
                               const CulpabilidadeAuto = MOTIVOS_CulpabilidadeS[selectedMotivo];
 
-                              // Calcula Ação automática baseado no motivo
-                              const calcularAcaoAutomatica = (motivo: string, rota: string): string => {
-                                const motivoLower = motivo.toLowerCase();
-                                if (motivoLower === 'parou de fornecer') return 'Retirado da roteirização';
-                                if (motivoLower === 'produtor suspenso') return 'Aguardando autorização';
-                                if (motivoLower === 'alizarol positivo') return 'Leite Descartado';
-                                if (rota) return `Será coletado na rota ${rota}`;
-                                return '';
-                              };
-
                               // Calcula Data Ação automática
                               const calcularDataAcaoAutomatica = (motivo: string, data: string, rota: string): string => {
                                 const motivoLower = motivo.toLowerCase();
@@ -2448,14 +2438,12 @@ const NonCollectionsView: React.FC<{
                                 return '';
                               };
 
-                              const acaoAuto = calcularAcaoAutomatica(selectedMotivo, row.rota || '');
                               const dataAcaoAuto = calcularDataAcaoAutomatica(selectedMotivo, row.data || '', row.rota || '');
 
                               const updated = {
                                 ...row,
                                 motivo: selectedMotivo,
                                 Culpabilidade: CulpabilidadeAuto || row.Culpabilidade || '',
-                                acao: acaoAuto,
                                 dataAcao: dataAcaoAuto,
                                 causaRaiz: isMotivoComCausaRaizObrigatoria(selectedMotivo) ? (row.causaRaiz || '') : ''
                               };
@@ -2548,36 +2536,9 @@ const NonCollectionsView: React.FC<{
                       );
                     }
 
-                    // AÇÃO - Campo automático baseado no MOTIVO (editável)
+                    // AÇÃO - Campo manual (editável)
                     if (key === 'acao') {
-                      // Calcula o valor automático da Ação baseado no motivo
-                      const getAcaoAutomatica = () => {
-                        const motivo = (row.motivo || '').trim();
-                        const rota = (row.rota || '').trim();
-
-                        // Se Não tem motivo definido, retorna vazio
-                        if (!motivo) return '';
-
-                        // Regras específicas
-                        if (motivo.toLowerCase() === 'parou de fornecer') {
-                          return 'Retirado da roteirização';
-                        }
-                        if (motivo.toLowerCase() === 'produtor suspenso') {
-                          return 'Aguardando autorização';
-                        }
-                        if (motivo.toLowerCase() === 'alizarol positivo') {
-                          return 'Leite Descartado';
-                        }
-
-                        // Se tem rota, gera "Será coletado na rota X"
-                        if (rota) {
-                          return `Será coletado na rota ${rota}`;
-                        }
-
-                        return '';
-                      };
-
-                      const acaoValue = row.acao || getAcaoAutomatica();
+                      const acaoValue = row.acao || '';
 
                       return (
                         <td
@@ -2993,15 +2954,8 @@ const NonCollectionsView: React.FC<{
                             const selectedMotivo = e.target.value;
                             const CulpabilidadeAuto = MOTIVOS_CulpabilidadeS[selectedMotivo];
 
-                            // Calcula Ação automática
-                            const motivoLower = selectedMotivo.toLowerCase();
-                            let acaoAuto = '';
-                            if (motivoLower === 'parou de fornecer') acaoAuto = 'Retirado da roteirização';
-                            else if (motivoLower === 'produtor suspenso') acaoAuto = 'Aguardando autorização';
-                            else if (motivoLower === 'alizarol positivo') acaoAuto = 'Leite Descartado';
-                            else if (ghostRow.rota) acaoAuto = `Será coletado na rota ${ghostRow.rota}`;
-
                             // Calcula Data Ação automática
+                            const motivoLower = selectedMotivo.toLowerCase();
                             let dataAcaoAuto = '';
                             if (motivoLower === 'parou de fornecer' || motivoLower === 'produtor suspenso' || motivoLower === 'alizarol positivo') {
                               dataAcaoAuto = '-';
@@ -3020,7 +2974,6 @@ const NonCollectionsView: React.FC<{
 
                             updateGhostCell('motivo', selectedMotivo);
                             if (CulpabilidadeAuto) updateGhostCell('Culpabilidade', CulpabilidadeAuto);
-                            if (acaoAuto) updateGhostCell('acao', acaoAuto);
                             if (dataAcaoAuto) updateGhostCell('dataAcao', dataAcaoAuto);
                             if (!isMotivoComCausaRaizObrigatoria(selectedMotivo)) updateGhostCell('causaRaiz', '');
                           }}
@@ -3101,34 +3054,7 @@ const NonCollectionsView: React.FC<{
                   }
 
                   if (key === 'acao') {
-                    // Calcula o valor automático da Ação baseado no motivo (ghost row)
-                    const getAcaoAutomatica = () => {
-                      const motivo = (ghostRow.motivo || '').trim();
-                      const rota = (ghostRow.rota || '').trim();
-
-                      // Se Não tem motivo definido, retorna vazio
-                      if (!motivo) return '';
-
-                      // Regras específicas
-                      if (motivo.toLowerCase() === 'parou de fornecer') {
-                        return 'Retirado da roteirização';
-                      }
-                      if (motivo.toLowerCase() === 'produtor suspenso') {
-                        return 'Aguardando autorização';
-                      }
-                      if (motivo.toLowerCase() === 'alizarol positivo') {
-                        return 'Leite Descartado';
-                      }
-
-                      // Se tem rota, gera "Será coletado na rota X"
-                      if (rota) {
-                        return `Será coletado na rota ${rota}`;
-                      }
-
-                      return '';
-                    };
-
-                    const acaoValue = ghostRow.acao || getAcaoAutomatica();
+                    const acaoValue = ghostRow.acao || '';
 
                     return (
                       <td key={`ghost-${key}`} className="p-0 border border-slate-200/30 dark:border-slate-800/30" style={{ verticalAlign: 'middle' }}>

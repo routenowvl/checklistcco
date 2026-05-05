@@ -1271,10 +1271,11 @@ const RouteDepartureView: React.FC<{
     setRoutes(prev => prev.map(route => {
       const config = userConfigs.find(c => c.operacao === route.operacao);
       const { status, gap } = calculateStatusWithTolerance(route.inicio || '', route.saida || '', config?.tolerancia || "00:00:00", route.data || '');
+      const resolved = resolveStatusForOperation(route.operacao || '', route.statusOp || '', status, gap);
       
       // Só atualiza se mudou
-      if (route.statusOp !== status || route.tempo !== gap) {
-        return { ...route, statusOp: status, tempo: gap };
+      if (route.statusOp !== resolved.status || route.tempo !== resolved.gap) {
+        return { ...route, statusOp: resolved.status, tempo: resolved.gap };
       }
       return route;
     }));
@@ -1463,6 +1464,32 @@ const RouteDepartureView: React.FC<{
     }
 
     return { status: 'Previsto', gap: '' };
+  };
+
+  const isDelayedOrAdvancedStatus = (status: string): boolean => {
+    const normalized = (status || '').trim();
+    return normalized === 'Atrasada' || normalized === 'Adiantada' || normalized === 'Atrasado' || normalized === 'Adiantado';
+  };
+
+  const isMontesClarosOperation = (operacao: string): boolean =>
+    normalizeOperationKey(operacao || '') === 'MONTES CLAROS';
+
+  const resolveStatusForOperation = (
+    operacao: string,
+    currentStatus: string,
+    calculatedStatus: string,
+    calculatedGap: string
+  ): { status: string; gap: string } => {
+    const keepManualOkForMontesClaros =
+      isMontesClarosOperation(operacao) &&
+      String(currentStatus || '').trim().toUpperCase() === 'OK' &&
+      isDelayedOrAdvancedStatus(calculatedStatus);
+
+    if (keepManualOkForMontesClaros) {
+      return { status: 'OK', gap: '' };
+    }
+
+    return { status: calculatedStatus, gap: calculatedGap };
   };
 
   const formatTimeInput = (value: string): string => {
@@ -1828,7 +1855,8 @@ const RouteDepartureView: React.FC<{
         const recalculatedRoutes = filteredByUser.map(route => {
           const config = configs?.find(c => c.operacao === route.operacao);
           const { status, gap } = calculateStatusWithTolerance(route.inicio || '', route.saida || '', config?.tolerancia || "00:00:00", route.data || '');
-          return { ...route, statusOp: status, tempo: gap };
+          const resolved = resolveStatusForOperation(route.operacao || '', route.statusOp || '', status, gap);
+          return { ...route, statusOp: resolved.status, tempo: resolved.gap };
         });
 
         setRoutes(recalculatedRoutes);
@@ -1898,7 +1926,8 @@ const RouteDepartureView: React.FC<{
       const recalculatedRoutes = filteredByUser.map(route => {
         const config = configs?.find(c => c.operacao === route.operacao);
         const { status, gap } = calculateStatusWithTolerance(route.inicio || '', route.saida || '', config?.tolerancia || "00:00:00", route.data || '');
-        return { ...route, statusOp: status, tempo: gap };
+        const resolved = resolveStatusForOperation(route.operacao || '', route.statusOp || '', status, gap);
+        return { ...route, statusOp: resolved.status, tempo: resolved.gap };
       });
       if (isBackgroundRefresh) {
         // MERGE inteligente: preserva a ordem atual da tabela e evita re-renderização desnecessária
@@ -2223,11 +2252,6 @@ const RouteDepartureView: React.FC<{
     setSelectedIds(new Set());
     setIsSyncing(false);
     alert(`${success} rotas excluídas.`);
-  };
-
-  const isDelayedOrAdvancedStatus = (status: string): boolean => {
-    const normalized = (status || '').trim();
-    return normalized === 'Atrasada' || normalized === 'Adiantada' || normalized === 'Atrasado' || normalized === 'Adiantado';
   };
 
   const getArchiveMissingFields = (route: RouteDeparture): string[] => {
@@ -2690,8 +2714,9 @@ const RouteDepartureView: React.FC<{
         }
         const config = userConfigs.find(c => c.operacao === updatedRoute.operacao);
         const { status, gap } = calculateStatusWithTolerance(updatedRoute.inicio, updatedRoute.saida, config?.tolerancia || "00:00:00", updatedRoute.data);
-        updatedRoute.statusOp = status;
-        updatedRoute.tempo = gap;
+        const resolved = resolveStatusForOperation(updatedRoute.operacao || '', updatedRoute.statusOp || '', status, gap);
+        updatedRoute.statusOp = resolved.status;
+        updatedRoute.tempo = resolved.gap;
 
         try {
             await SharePointService.updateDeparture(token, updatedRoute);
@@ -2800,7 +2825,8 @@ const RouteDepartureView: React.FC<{
             try {
                 const config = userConfigs.find(c => c.operacao === updatedGhost.operacao);
                 const { status, gap } = calculateStatusWithTolerance(updatedGhost.inicio || '', updatedGhost.saida || '', config?.tolerancia || "00:00:00", updatedGhost.data || "");
-                const payload = { ...updatedGhost, statusOp: status, tempo: gap, createdAt: new Date().toISOString() } as RouteDeparture;
+                const resolved = resolveStatusForOperation(updatedGhost.operacao || '', updatedGhost.statusOp || '', status, gap);
+                const payload = { ...updatedGhost, statusOp: resolved.status, tempo: resolved.gap, createdAt: new Date().toISOString() } as RouteDeparture;
                 const newId = await SharePointService.updateDeparture(await getAccessToken(), payload);
                 setRoutes(prev => [...prev, { ...payload, id: newId }]);
 
@@ -2840,6 +2866,18 @@ const RouteDepartureView: React.FC<{
       }
     }
 
+    // Exceção: em MONTES CLAROS, permite forçar status para OK quando estiver atrasada/adiantada
+    if (field === 'statusOp') {
+      const canForceOkForMontesClaros =
+        isMontesClarosOperation(route.operacao || '') &&
+        String(value || '').trim().toUpperCase() === 'OK' &&
+        isDelayedOrAdvancedStatus(route.statusOp || '');
+
+      if (!canForceOkForMontesClaros) {
+        return;
+      }
+    }
+
     // Tenta adquirir o lock para esta edição
     if (!tryAcquireLock(id)) {
       console.error('[UPDATE_BLOCKED] Não foi possível adquirir lock para', id);
@@ -2852,6 +2890,7 @@ const RouteDepartureView: React.FC<{
     if (field === 'observacao' && value) {
       const valid = validateDescargaTime(updatedRoute, value);
       if (!valid) {
+        releaseLock(id);
         return; // Cancela a atualização
       }
     }
@@ -2868,11 +2907,13 @@ const RouteDepartureView: React.FC<{
     // Calcula o status automaticamente baseado nos horários (isso só afeta a exibição da coluna STATUS)
     const config = userConfigs.find(c => c.operacao === updatedRoute.operacao);
     const { status, gap } = calculateStatusWithTolerance(updatedRoute.inicio, updatedRoute.saida, config?.tolerancia || "00:00:00", updatedRoute.data);
-    updatedRoute.statusOp = status;
-    updatedRoute.tempo = gap;
+    const resolved = resolveStatusForOperation(updatedRoute.operacao || '', updatedRoute.statusOp || '', status, gap);
+    updatedRoute.statusOp = resolved.status;
+    updatedRoute.tempo = resolved.gap;
 
     // Limpa motivo e observação se o status não for de atraso/adiantamento e não for manutenção
-    if (status !== 'Atrasada' && status !== 'Adiantada' && status !== 'Programada' && status !== 'Previsto') {
+    const effectiveStatus = updatedRoute.statusOp || '';
+    if (!isDelayedOrAdvancedStatus(effectiveStatus) && effectiveStatus !== 'Programada' && effectiveStatus !== 'Previsto') {
       if (updatedRoute.motivo !== 'Manutenção') {
         updatedRoute.motivo = "";
         updatedRoute.observacao = "";
@@ -4373,12 +4414,30 @@ const RouteDepartureView: React.FC<{
                     }
 
                     if (col.id === 'status') {
+                      const canForceOkForMontesClaros =
+                        canEditData &&
+                        isMontesClarosOperation(route.operacao || '') &&
+                        isDelayedOrAdvancedStatus(route.statusOp || '');
+
                       return (
                         <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
-                          <div className="w-full flex items-center justify-center">
+                          <div className="w-full flex items-center justify-center gap-1">
                             <span className={`px-2 py-0.5 rounded-full text-[8px] font-black border whitespace-nowrap ${route.statusOp === 'OK' ? 'bg-emerald-100 border-emerald-400 text-emerald-800' : route.statusOp === 'Atrasada' ? 'bg-yellow-100 border-yellow-400 text-yellow-800' : route.statusOp === 'Programada' ? 'bg-slate-200 border-slate-400 text-slate-600' : route.statusOp === 'Previsto' ? 'bg-slate-100 border-slate-400 text-slate-500' : 'bg-red-100 border-red-400 text-red-800'}`}>
                               {route.statusOp}
                             </span>
+                            {canForceOkForMontesClaros && (
+                              <button
+                                onClick={() => updateCell(route.id!, 'statusOp', 'OK')}
+                                className={`px-2 py-0.5 rounded-full text-[8px] font-black border transition-colors ${
+                                  isDarkMode
+                                    ? 'bg-emerald-900/40 border-emerald-600 text-emerald-300 hover:bg-emerald-900/60'
+                                    : 'bg-emerald-100 border-emerald-400 text-emerald-800 hover:bg-emerald-200'
+                                }`}
+                                title="Forçar status para OK (MONTES CLAROS)"
+                              >
+                                OK
+                              </button>
+                            )}
                           </div>
                         </td>
                       );
