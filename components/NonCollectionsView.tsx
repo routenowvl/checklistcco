@@ -440,6 +440,12 @@ const NonCollectionsView: React.FC<{
     return normalized === 'alizarol positivo' || normalized === 'parou de fornecer';
   };
 
+  const getVisualDataAcaoValue = (dateValue: string | undefined, motivo?: string): string => {
+    const raw = String(dateValue || '').trim();
+    if (!raw && motivoPermiteDataAcaoComHifen(motivo)) return '-';
+    return raw;
+  };
+
   const hasRequiredValue = (value?: string): boolean => String(value || '').trim() !== '';
 
   const isPersistedNonCollectionId = (id?: string): boolean => {
@@ -790,6 +796,10 @@ const NonCollectionsView: React.FC<{
           }
         }
 
+        if (field === 'dataAcao' && finalValue === '-') {
+          finalValue = '';
+        }
+
         if (field === 'data' || field === 'dataAcao' || field === 'ultimaColeta') {
           if (finalValue !== '-' && finalValue.includes('-')) {
             const [year, month, day] = finalValue.split('-');
@@ -826,6 +836,10 @@ const NonCollectionsView: React.FC<{
               codigo = parsed.codigo;
               produtor = parsed.produtor;
             }
+          }
+
+          if (field === 'dataAcao' && finalValue === '-') {
+            finalValue = '';
           }
 
           if (field === 'data' || field === 'dataAcao' || field === 'ultimaColeta') {
@@ -2592,6 +2606,7 @@ const NonCollectionsView: React.FC<{
 
                     // DATA AÇÃO - Input editável com máscara (manual)
                     if (key === 'dataAcao') {
+                      const dataAcaoValue = getVisualDataAcaoValue(row.dataAcao, row.motivo);
                       return (
                         <td
                           key={key}
@@ -2602,12 +2617,14 @@ const NonCollectionsView: React.FC<{
                         >
                           <input
                             type="text"
-                            value={row.dataAcao || ''}
+                            value={dataAcaoValue}
                             onChange={(e) => {
                               const raw = e.target.value;
-                              let val = raw;
+                              let val = '';
 
-                              if (!(raw === '-' && motivoPermiteDataAcaoComHifen(row.motivo))) {
+                              if (raw === '-' && motivoPermiteDataAcaoComHifen(row.motivo)) {
+                                val = '';
+                              } else {
                                 val = raw.replace(/\D/g, '');
                                 if (val.length > 8) val = val.slice(0, 8);
                                 if (val.length >= 8) {
@@ -3058,16 +3075,19 @@ const NonCollectionsView: React.FC<{
 
                   if (key === 'dataAcao' || key === 'ultimaColeta') {
                     if (key === 'dataAcao') {
+                      const dataAcaoValue = getVisualDataAcaoValue(ghostRow.dataAcao, ghostRow.motivo);
                       return (
                         <td key={`ghost-${key}`} className="p-0 border border-slate-200/30 dark:border-slate-800/30" style={{ verticalAlign: 'middle' }}>
                           <input
                             type="text"
-                            value={ghostRow.dataAcao || ''}
+                            value={dataAcaoValue}
                             onChange={(e) => {
                               const raw = e.target.value;
-                              let val = raw;
+                              let val = '';
 
-                              if (!(raw === '-' && motivoPermiteDataAcaoComHifen(ghostRow.motivo))) {
+                              if (raw === '-' && motivoPermiteDataAcaoComHifen(ghostRow.motivo)) {
+                                val = '';
+                              } else {
                                 val = raw.replace(/\D/g, '');
                                 if (val.length > 8) val = val.slice(0, 8);
                                 if (val.length >= 8) {
@@ -4105,7 +4125,7 @@ const NonCollectionsView: React.FC<{
                                     nc.id,
                                     'dataAcao',
                                     raw === '-' && motivoPermiteDataAcaoComHifen(pending.motivo ?? nc.motivo)
-                                      ? raw
+                                      ? ''
                                       : applyDateMask(raw)
                                   );
                                 }}
