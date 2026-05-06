@@ -435,6 +435,11 @@ const NonCollectionsView: React.FC<{
   const isMotivoComCausaRaizObrigatoria = (motivo?: string): boolean =>
     String(motivo || '').trim() === MOTIVO_CAUSA_RAIZ_OBRIGATORIA;
 
+  const motivoPermiteDataAcaoComHifen = (motivo?: string): boolean => {
+    const normalized = String(motivo || '').trim().toLowerCase();
+    return normalized === 'alizarol positivo' || normalized === 'parou de fornecer';
+  };
+
   const hasRequiredValue = (value?: string): boolean => String(value || '').trim() !== '';
 
   const isPersistedNonCollectionId = (id?: string): boolean => {
@@ -786,7 +791,7 @@ const NonCollectionsView: React.FC<{
         }
 
         if (field === 'data' || field === 'dataAcao' || field === 'ultimaColeta') {
-          if (finalValue.includes('-')) {
+          if (finalValue !== '-' && finalValue.includes('-')) {
             const [year, month, day] = finalValue.split('-');
             finalValue = `${day}/${month}/${year}`;
           }
@@ -824,7 +829,7 @@ const NonCollectionsView: React.FC<{
           }
 
           if (field === 'data' || field === 'dataAcao' || field === 'ultimaColeta') {
-            if (finalValue.includes('-')) {
+            if (finalValue !== '-' && finalValue.includes('-')) {
               const [year, month, day] = finalValue.split('-');
               finalValue = `${day}/${month}/${year}`;
             }
@@ -2599,11 +2604,17 @@ const NonCollectionsView: React.FC<{
                             type="text"
                             value={row.dataAcao || ''}
                             onChange={(e) => {
-                              let val = e.target.value.replace(/\D/g, '');
-                              if (val.length > 8) val = val.slice(0, 8);
-                              if (val.length >= 8) {
-                                val = `${val.slice(0, 2)}/${val.slice(2, 4)}/${val.slice(4, 8)}`;
+                              const raw = e.target.value;
+                              let val = raw;
+
+                              if (!(raw === '-' && motivoPermiteDataAcaoComHifen(row.motivo))) {
+                                val = raw.replace(/\D/g, '');
+                                if (val.length > 8) val = val.slice(0, 8);
+                                if (val.length >= 8) {
+                                  val = `${val.slice(0, 2)}/${val.slice(2, 4)}/${val.slice(4, 8)}`;
+                                }
                               }
+
                               const updated = { ...row, dataAcao: val };
                               setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
                             }}
@@ -3053,11 +3064,17 @@ const NonCollectionsView: React.FC<{
                             type="text"
                             value={ghostRow.dataAcao || ''}
                             onChange={(e) => {
-                              let val = e.target.value.replace(/\D/g, '');
-                              if (val.length > 8) val = val.slice(0, 8);
-                              if (val.length >= 8) {
-                                val = `${val.slice(0, 2)}/${val.slice(2, 4)}/${val.slice(4, 8)}`;
+                              const raw = e.target.value;
+                              let val = raw;
+
+                              if (!(raw === '-' && motivoPermiteDataAcaoComHifen(ghostRow.motivo))) {
+                                val = raw.replace(/\D/g, '');
+                                if (val.length > 8) val = val.slice(0, 8);
+                                if (val.length >= 8) {
+                                  val = `${val.slice(0, 2)}/${val.slice(2, 4)}/${val.slice(4, 8)}`;
+                                }
                               }
+
                               updateGhostCell(key, val);
                             }}
                             maxLength={10}
@@ -4082,7 +4099,16 @@ const NonCollectionsView: React.FC<{
                               <input
                                 type="text"
                                 value={pending.dataAcao ?? formatDisplayDate(nc.dataAcao)}
-                                onChange={(e) => handleUpdateHistoryCell(nc.id, 'dataAcao', applyDateMask(e.target.value))}
+                                onChange={(e) => {
+                                  const raw = e.target.value;
+                                  handleUpdateHistoryCell(
+                                    nc.id,
+                                    'dataAcao',
+                                    raw === '-' && motivoPermiteDataAcaoComHifen(pending.motivo ?? nc.motivo)
+                                      ? raw
+                                      : applyDateMask(raw)
+                                  );
+                                }}
                                 onBlur={() => { setEditingHistoryId(null); setEditingHistoryField(null); }}
                                 className="w-full bg-blue-100 dark:bg-blue-900/30 border-2 border-blue-500 px-2 py-1 rounded font-mono font-bold outline-none"
                                 autoFocus
