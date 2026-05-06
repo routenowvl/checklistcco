@@ -293,6 +293,48 @@ const NonCollectionsView: React.FC<{
     return editableOperationKeys.has(String(operacao || '').trim().toUpperCase());
   };
 
+  const hasNonCollectionDateInList = useMemo(() => (
+    nonCollections.some((row) => /^\d{2}\/\d{2}\/\d{4}$/.test(String(row.data || '').trim()))
+  ), [nonCollections]);
+
+  const dominantNonCollectionDate = useMemo(() => {
+    const counts = new Map<string, { count: number; firstIndex: number }>();
+
+    nonCollections.forEach((row, idx) => {
+      const date = String(row.data || '').trim();
+      if (!/^\d{2}\/\d{2}\/\d{4}$/.test(date)) return;
+
+      const current = counts.get(date);
+      if (current) {
+        current.count += 1;
+      } else {
+        counts.set(date, { count: 1, firstIndex: idx });
+      }
+    });
+
+    if (counts.size === 0) return '';
+
+    const sorted = Array.from(counts.entries()).sort((a, b) => {
+      if (b[1].count !== a[1].count) return b[1].count - a[1].count;
+      return a[1].firstIndex - b[1].firstIndex;
+    });
+
+    return sorted[0][0];
+  }, [nonCollections]);
+
+  const getDateForNewNonCollection = (preferredDate?: string): string => {
+    if (hasNonCollectionDateInList && dominantNonCollectionDate) {
+      return dominantNonCollectionDate;
+    }
+
+    const preferred = String(preferredDate || '').trim();
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(preferred)) {
+      return preferred;
+    }
+
+    return getNonCollectionDateForCurrentTime();
+  };
+
   const parseViewerSnapshotNonCollections = (raw: string): NonCollection[] => {
     const source = String(raw || '').trim();
     if (!source) return [];
@@ -482,14 +524,15 @@ const NonCollectionsView: React.FC<{
         return;
       }
 
-      const dataParaSemana = ghostRow.data!.split('/').reverse().join('-');
+      const dataParaRegistro = getDateForNewNonCollection(ghostRow.data);
+      const dataParaSemana = dataParaRegistro.split('/').reverse().join('-');
       const semana = getWeekString(dataParaSemana);
 
       const newRecord: NonCollection = {
         id: Date.now().toString(),
         semana,
         rota: ghostRow.rota!,
-        data: ghostRow.data!,
+        data: dataParaRegistro,
         codigo: ghostRow.codigo || `P${String(nonCollections.length + 1).padStart(3, '0')}`,
         produtor: ghostRow.produtor!,
         motivo: ghostRow.motivo || '',
@@ -509,14 +552,14 @@ const NonCollectionsView: React.FC<{
       setNonCollections(prev => [...prev, { ...newRecord, id: spId }]);
 
       // Busca coletas previstas para a data inserida
-      await fetchColetasPrevistas(ghostRow.data!);
+      await fetchColetasPrevistas(dataParaRegistro);
 
       // Limpa ghost row
       setGhostRow({
         id: 'ghost',
         semana: '',
         rota: '',
-        data: getNonCollectionDateForCurrentTime(),
+        data: dataParaRegistro,
         codigo: '',
         produtor: '',
         motivo: '',
@@ -577,7 +620,7 @@ const NonCollectionsView: React.FC<{
     try {
       // COMPORTAMENTO 1: ROTA sempre cria novas linhas
       if (field === 'rota') {
-        const dataFormatada = getNonCollectionDateForCurrentTime();
+        const dataFormatada = getDateForNewNonCollection();
         const dataParaSemana = dataFormatada.split('/').reverse().join('-');
         const semana = getWeekString(dataParaSemana);
         const localIdBase = Date.now();
@@ -763,7 +806,7 @@ const NonCollectionsView: React.FC<{
 
       const remainingLines = lines.slice(lineIndex);
       if (remainingLines.length > 0) {
-        const dataFormatada = getNonCollectionDateForCurrentTime();
+        const dataFormatada = getDateForNewNonCollection();
         const dataParaSemana = dataFormatada.split('/').reverse().join('-');
         const semana = getWeekString(dataParaSemana);
 
@@ -1112,6 +1155,22 @@ const NonCollectionsView: React.FC<{
     }
   };
 
+  useEffect(() => {
+    if (!hasNonCollectionDateInList || !dominantNonCollectionDate) return;
+
+    setGhostRow((prev) => (
+      prev.data === dominantNonCollectionDate
+        ? prev
+        : { ...prev, data: dominantNonCollectionDate }
+    ));
+
+    setNewNonCollectionData((prev) => (
+      prev.data === dominantNonCollectionDate
+        ? prev
+        : { ...prev, data: dominantNonCollectionDate }
+    ));
+  }, [hasNonCollectionDateInList, dominantNonCollectionDate]);
+
   // Dark mode effect
   useEffect(() => {
     if (isDarkMode) {
@@ -1277,14 +1336,15 @@ const NonCollectionsView: React.FC<{
     }
 
     try {
-      const dataParaSemana = newNonCollectionData.data.split('/').reverse().join('-');
+      const dataParaRegistro = getDateForNewNonCollection(newNonCollectionData.data);
+      const dataParaSemana = dataParaRegistro.split('/').reverse().join('-');
       const semana = getWeekString(dataParaSemana);
 
       const newRecord: NonCollection = {
         id: Date.now().toString(),
         semana,
         rota: newNonCollectionData.rota,
-        data: newNonCollectionData.data,
+        data: dataParaRegistro,
         codigo: newNonCollectionData.codigo || `P${String(nonCollections.length + 1).padStart(3, '0')}`,
         produtor: newNonCollectionData.produtor,
         motivo: '',
@@ -1312,7 +1372,7 @@ const NonCollectionsView: React.FC<{
       setIsAddModalOpen(false);
       setNewNonCollectionData({
         rota: '',
-        data: getNonCollectionDateForCurrentTime(),
+        data: dataParaRegistro,
         codigo: '',
         produtor: '',
         operacao: ''
@@ -2024,7 +2084,11 @@ const NonCollectionsView: React.FC<{
         <div className="flex items-center gap-3">
           {canEditData && (
             <button
-              onClick={() => setIsAddModalOpen(true)}
+              onClick={() => {
+                const baseDate = getDateForNewNonCollection();
+                setNewNonCollectionData(prev => ({ ...prev, data: baseDate }));
+                setIsAddModalOpen(true);
+              }}
               className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-black uppercase text-[10px] tracking-widest transition-all shadow-lg shadow-blue-500/20"
             >
               <Plus size={16} />
