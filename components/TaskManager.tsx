@@ -7,7 +7,7 @@ import { getBrazilDate, getBrazilISOString } from '../utils/dateUtils';
 import {
   Maximize2, Minimize2, Loader2, Database,
   ShieldCheck, AlertCircle, RefreshCw, CheckCircle,
-  Activity, Lock, CheckCircle2, PaintBucket,
+  CheckSquare, Lock, CheckCircle2, PaintBucket,
   HelpCircle, X, LogOut, ChevronDown, ChevronRight,
   RotateCcw, Save, UserCheck, Bell, MessageSquarePlus, Megaphone,
   Clock, Check
@@ -406,7 +406,7 @@ const TaskManager: React.FC<TaskManagerProps> = ({
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2">
             <div className="p-2 bg-blue-600 rounded-lg text-white shadow-lg shadow-blue-500/20">
-              <Activity size={20} />
+              <CheckSquare size={20} />
             </div>
             <h2 className="text-lg font-bold text-gray-800 dark:text-white whitespace-nowrap">
               Checklist CCO

@@ -408,8 +408,14 @@ const AppContent = () => {
       )}
 
       <aside className={`bg-white dark:bg-slate-900 border-r dark:border-slate-800 transition-all ${collapsed ? 'w-20' : 'w-64'} p-4 flex flex-col`}>
-        <div className="mb-10 flex items-center gap-3">
-          <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold">V</div>
+        <div className={`mb-10 flex items-center ${collapsed ? 'justify-center' : 'gap-3'}`}>
+          <div className="w-10 h-10 flex items-center justify-center overflow-hidden">
+            <img
+              src="/logo-via-branca.png"
+              alt="Logo Via"
+              className="w-9 h-9 object-contain"
+            />
+          </div>
           {!collapsed && <h1 className="font-bold dark:text-white text-sm">CCO Digital</h1>}
         </div>
         <nav className="flex-1 space-y-2">

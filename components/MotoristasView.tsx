@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, Loader2, Search, ArrowUpDown } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Loader2, Search, ArrowUpDown, Users } from 'lucide-react';
 import { Motorista, User } from '../types';
 import { SharePointService } from '../services/sharepointService';
 import { getValidToken } from '../services/tokenService';
@@ -256,15 +256,20 @@ const MotoristasView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       <div className="max-w-[1700px] mx-auto space-y-4">
         <div className="bg-white/95 dark:bg-slate-900/95 backdrop-blur-sm border border-white/50 dark:border-slate-800 rounded-[2rem] p-5 shadow-2xl">
           <div className="flex items-center justify-between gap-3 flex-wrap">
-            <div>
-              <h1 className="text-xl font-black uppercase text-slate-800 dark:text-white tracking-tight">Motoristas</h1>
-              <p className="text-[11px] font-bold uppercase text-slate-500 dark:text-slate-400">
-                Total: {filteredAndSortedRows.length} registros
-                {isRefreshing
-                  ? ' • Atualizando dados...'
-                  : (lastUpdatedAt ? ` • Atualizado às ${lastUpdatedAt.toLocaleTimeString('pt-BR')}` : '')
-                }
-              </p>
+            <div className="flex items-center gap-4">
+              <div className="p-3 rounded-2xl shadow-lg bg-blue-600 text-white">
+                <Users size={20} />
+              </div>
+              <div>
+                <h1 className="text-xl font-black uppercase text-slate-800 dark:text-white tracking-tight">Motoristas</h1>
+                <p className="text-[11px] font-bold uppercase text-slate-500 dark:text-slate-400">
+                  Total: {filteredAndSortedRows.length} registros
+                  {isRefreshing
+                    ? ' • Atualizando dados...'
+                    : (lastUpdatedAt ? ` • Atualizado às ${lastUpdatedAt.toLocaleTimeString('pt-BR')}` : '')
+                  }
+                </p>
+              </div>
             </div>
           </div>
 

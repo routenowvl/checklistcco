@@ -7,7 +7,7 @@ import * as XLSX from 'xlsx';
 import { getBrazilDate, getBrazilHours, getBrazilMinutes, toBrazilDate, getWeekString, getRouteDateForCurrentTime } from '../utils/dateUtils';
 import { isDealeUser, getDealeFilteredConfigs, getDealeAnchorOperation, getDealeRealOperations } from '../utils/dealeUtils';
 import {
-  Clock, X, Loader2, RefreshCw, ShieldCheck,
+  Clock, X, Loader2, RefreshCw, ShieldCheck, Truck,
   CheckCircle2, ChevronDown,
   Filter, Search, CheckSquare, Square,
   ChevronRight, Maximize2, Minimize2,
@@ -3874,7 +3874,7 @@ const RouteDepartureView: React.FC<{
       {/* Header Section */}
       <div className="flex justify-between items-center mb-6 shrink-0 px-2">
         <div className="flex items-center gap-4">
-          <div className={`p-3 rounded-2xl shadow-lg ${isDarkMode ? 'bg-primary-600 text-white' : 'bg-primary-500 text-white'}`}><Clock size={20} /></div>
+          <div className={`p-3 rounded-2xl shadow-lg ${isDarkMode ? 'bg-primary-600 text-white' : 'bg-primary-500 text-white'}`}><Truck size={20} /></div>
           <div>
             <h2 className={`text-xl font-black uppercase tracking-tight flex items-center gap-3 ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>
               Controle de Saídas 

@@ -2000,18 +2000,23 @@ const NonCollectionsView: React.FC<{
       {/* Header */}
       <div className="flex items-center justify-between p-6 pb-4">
         <div className="flex items-center gap-6">
-          <div>
-            <h1 className="text-2xl font-black uppercase text-slate-800 dark:text-white tracking-tight">
-              Não coletas
-            </h1>
-            <p className="text-xs font-bold text-slate-500 dark:text-slate-400 mt-1 uppercase tracking-widest">
-              Acompanhamento de ocorrências
-            </p>
-            {!canEditData && (
-              <span className={`inline-flex mt-2 text-[9px] font-black uppercase tracking-widest px-2 py-1 rounded-full border ${isDarkMode ? 'text-amber-300 border-amber-500/60 bg-amber-500/10' : 'text-amber-700 border-amber-500 bg-amber-50'}`}>
-                Somente visualização
-              </span>
-            )}
+          <div className="flex items-center gap-4">
+            <div className={`p-3 rounded-2xl shadow-lg ${isDarkMode ? 'bg-blue-600 text-white' : 'bg-blue-500 text-white'}`}>
+              <Milk size={20} />
+            </div>
+            <div>
+              <h1 className="text-2xl font-black uppercase text-slate-800 dark:text-white tracking-tight">
+                Não coletas
+              </h1>
+              <p className="text-xs font-bold text-slate-500 dark:text-slate-400 mt-1 uppercase tracking-widest">
+                Acompanhamento de ocorrências
+              </p>
+              {!canEditData && (
+                <span className={`inline-flex mt-2 text-[9px] font-black uppercase tracking-widest px-2 py-1 rounded-full border ${isDarkMode ? 'text-amber-300 border-amber-500/60 bg-amber-500/10' : 'text-amber-700 border-amber-500 bg-amber-50'}`}>
+                  Somente visualização
+                </span>
+              )}
+            </div>
           </div>
 
           {/* Cards de Indicadores */}
