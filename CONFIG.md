@@ -31,6 +31,15 @@ VITE_SHAREPOINT_SITE_PATH=seu_site_sharepoint_aqui
 ```
 Exemplo: `vialacteoscombr.sharepoint.com:/sites/CCO`
 
+#### PostgreSQL (Eventos de manutenção - backend)
+```
+MAINT_DB_URL=postgresql://usuario:senha@host:5432/appdb
+MAINT_DB_SSL=true
+MAINT_DB_SCHEMA=public
+MAINT_DB_TABLE=manutencoes
+```
+> Importante: essas variáveis **não** devem ter prefixo `VITE_`, pois são usadas apenas em função server-side (`/api/maintenance-events`).
+
 #### Webhooks (n8n)
 ```
 VITE_WEBHOOK_SAIDAS_URL=https://n8n.datastack.viagroup.com.br/webhook/seu_webhook_aqui

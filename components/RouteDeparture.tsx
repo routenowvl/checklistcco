@@ -13,7 +13,7 @@ import {
   ChevronRight, Maximize2, Minimize2,
   Archive, Database, Save, LinkIcon,
   Layers, Trash2, Settings2, Check, Table, SortAsc,
-  Sun, Moon, AlertTriangle, Calendar, ArrowUpDown, MessageCircle, LogOut
+  Sun, Moon, AlertTriangle, Calendar, ArrowUpDown, MessageCircle, LogOut, Wrench
 } from 'lucide-react';
 
 const MOTIVOS = [
@@ -153,6 +153,14 @@ type MotoristaChatMessage = {
   remetente: string;
   texto: string;
   isBot: boolean;
+};
+
+type MaintenanceEventInfo = {
+  placa: string;
+  tipo: string;
+  area: string;
+  status: string;
+  data_planejada: string;
 };
 
 const HISTORY_EDIT_MAX_DAYS = 2;
@@ -517,6 +525,8 @@ const RouteDepartureView: React.FC<{
   // Estado para alertas de rotas com histórico de problemas
   const [routeAlerts, setRouteAlerts] = useState<Record<string, { count: number; history: RouteDeparture[] }>>({});
   const [selectedRouteAlert, setSelectedRouteAlert] = useState<{ rota: string; history: RouteDeparture[] } | null>(null);
+  const [maintenanceAlerts, setMaintenanceAlerts] = useState<Record<string, MaintenanceEventInfo[]>>({});
+  const [selectedMaintenanceAlert, setSelectedMaintenanceAlert] = useState<{ route: RouteDeparture; events: MaintenanceEventInfo[] } | null>(null);
 
   // Estado para alertas de motoristas com atrasos recorrentes por "Mão de obra"
   const [motoristAlerts, setMotoristAlerts] = useState<Record<string, { count: number; history: RouteDeparture[] }>>({});
@@ -614,6 +624,7 @@ const RouteDepartureView: React.FC<{
   const filterDropdownRef = useRef<HTMLDivElement>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const tooltipTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const maintenanceFetchStateRef = useRef<{ signature: string; fetchedAt: number }>({ signature: '', fetchedAt: 0 });
 
   const getAccessToken = async (): Promise<string> => {
     // Tenta sempre obter o token mais fresco via MSAL (renova silenciosamente se necessário)
@@ -773,6 +784,111 @@ const RouteDepartureView: React.FC<{
     const messages = parseRetornoMotoristaMessages(route.retornoMotorista || '');
     setActiveMotoristaDropdownId(null);
     setSelectedMotoristaChat({ route, messages });
+  };
+
+  const normalizeMaintenancePlate = (value: string): string =>
+    String(value || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+
+  const normalizeMaintenanceDate = (value: string): string => {
+    const raw = String(value || '').trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+    const parsed = new Date(raw);
+    if (Number.isNaN(parsed.getTime())) return '';
+    return parsed.toISOString().slice(0, 10);
+  };
+
+  const loadMaintenanceAlerts = async (targetRoutes: RouteDeparture[]) => {
+    const validRoutes = targetRoutes.filter((route) => route.id !== 'ghost');
+
+    if (validRoutes.length === 0) {
+      setMaintenanceAlerts({});
+      maintenanceFetchStateRef.current = { signature: '', fetchedAt: 0 };
+      return;
+    }
+
+    const lookupPairs = Array.from(
+      new Set(
+        validRoutes
+          .map((route) => {
+            const plate = normalizeMaintenancePlate(route.placa || '');
+            const date = normalizeMaintenanceDate(route.data || '');
+            if (!plate || !date) return '';
+            return `${date}|${plate}`;
+          })
+          .filter(Boolean)
+      )
+    ).sort();
+
+    if (lookupPairs.length === 0) {
+      setMaintenanceAlerts({});
+      maintenanceFetchStateRef.current = { signature: '', fetchedAt: 0 };
+      return;
+    }
+
+    const signature = lookupPairs.join(';');
+    const now = Date.now();
+    const sameSignature = maintenanceFetchStateRef.current.signature === signature;
+    const isRecent = now - maintenanceFetchStateRef.current.fetchedAt < 2 * 60 * 1000;
+    if (sameSignature && isRecent) {
+      return;
+    }
+
+    try {
+      const items = lookupPairs.map((pair) => {
+        const [date, plate] = pair.split('|');
+        return { data: date, placa: plate };
+      });
+
+      const response = await fetch(`${window.location.origin}/api/maintenance-events`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items })
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const payload = await response.json();
+      const events: MaintenanceEventInfo[] = Array.isArray(payload?.events) ? payload.events : [];
+
+      const eventsByPair: Record<string, MaintenanceEventInfo[]> = {};
+      events.forEach((event) => {
+        const plate = normalizeMaintenancePlate(event.placa || '');
+        const date = normalizeMaintenanceDate(event.data_planejada || '');
+        if (!plate || !date) return;
+        const pairKey = `${date}|${plate}`;
+        if (!eventsByPair[pairKey]) {
+          eventsByPair[pairKey] = [];
+        }
+        eventsByPair[pairKey].push({
+          placa: plate,
+          tipo: String(event.tipo || ''),
+          area: String(event.area || ''),
+          status: String(event.status || ''),
+          data_planejada: date
+        });
+      });
+
+      const nextAlerts: Record<string, MaintenanceEventInfo[]> = {};
+      validRoutes.forEach((route) => {
+        const plate = normalizeMaintenancePlate(route.placa || '');
+        const date = normalizeMaintenanceDate(route.data || '');
+        if (!plate || !date) return;
+        const pairKey = `${date}|${plate}`;
+        const routeEvents = eventsByPair[pairKey];
+        if (routeEvents && routeEvents.length > 0) {
+          nextAlerts[pairKey] = routeEvents;
+        }
+      });
+
+      setMaintenanceAlerts(nextAlerts);
+      maintenanceFetchStateRef.current = { signature, fetchedAt: now };
+    } catch (error: any) {
+      console.warn('[MAINTENANCE_ALERT] Não foi possível carregar eventos de manutenção:', error?.message || error);
+      setMaintenanceAlerts({});
+      maintenanceFetchStateRef.current = { signature: '', fetchedAt: 0 };
+    }
   };
 
 
@@ -1886,6 +2002,7 @@ const RouteDepartureView: React.FC<{
         });
 
         setRoutes(recalculatedRoutes);
+        await loadMaintenanceAlerts(recalculatedRoutes);
 
         const motoristaRecords = recalculatedRoutes.filter(r => r.motorista && r.motorista.trim() !== '');
         const byOperation: Record<string, RouteDeparture[]> = {};
@@ -2027,6 +2144,8 @@ const RouteDepartureView: React.FC<{
         // Primeira carga ou refresh manual: substituição total (com spinner)
         setRoutes(recalculatedRoutes);
       }
+
+      await loadMaintenanceAlerts(recalculatedRoutes);
 
       console.log('[LOAD_DATA] Dados carregados com sucesso');
 
@@ -3937,20 +4056,49 @@ const RouteDepartureView: React.FC<{
                                 />
                             ) : (
                                 <div className="relative flex items-center justify-center p-2">
-                                    <input type="text" value={route.rota} onChange={(e) => updateCell(route.id!, 'rota', e.target.value)} className={`${inputClass} font-black text-center w-full`} />
-                                    {/* Indicador de alerta para rotas com histórico de problemas */}
-                                    {routeAlerts[route.rota] && routeAlerts[route.rota].count > 0 && (
-                                        <span
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            setSelectedRouteAlert({ rota: route.rota, history: routeAlerts[route.rota].history });
-                                          }}
-                                          className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 bg-red-500 hover:bg-red-600 text-white text-[9px] font-black rounded-full cursor-pointer transition-colors z-10"
-                                          title={`${routeAlerts[route.rota].count} ocorrência(s) de atraso/adiantamento nos últimos 7 dias. Clique para ver histórico.`}
-                                        >
-                                          {routeAlerts[route.rota].count}
-                                        </span>
-                                    )}
+                                    {(() => {
+                                      const maintenancePlate = normalizeMaintenancePlate(route.placa || '');
+                                      const maintenanceDate = normalizeMaintenanceDate(route.data || '');
+                                      const maintenanceKey = maintenancePlate && maintenanceDate ? `${maintenanceDate}|${maintenancePlate}` : '';
+                                      const maintenanceEvents = maintenanceKey ? (maintenanceAlerts[maintenanceKey] || []) : [];
+                                      const hasMaintenanceAlert = maintenanceEvents.length > 0;
+                                      const hasRouteHistoryAlert = Boolean(routeAlerts[route.rota] && routeAlerts[route.rota].count > 0);
+                                      return (
+                                        <>
+                                          <input type="text" value={route.rota} onChange={(e) => updateCell(route.id!, 'rota', e.target.value)} className={`${inputClass} font-black text-center w-full`} />
+                                          {hasMaintenanceAlert && (
+                                            <button
+                                              type="button"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                setSelectedMaintenanceAlert({ route, events: maintenanceEvents });
+                                              }}
+                                              className={`absolute top-1/2 -translate-y-1/2 inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 border rounded-full cursor-pointer transition-colors z-10 pointer-events-auto ${
+                                                isDarkMode
+                                                  ? 'bg-amber-900/50 border-amber-700 text-amber-300 hover:bg-amber-900/70'
+                                                  : 'bg-amber-100 border-amber-400 text-amber-800 hover:bg-amber-200'
+                                              } ${hasRouteHistoryAlert ? 'right-9' : 'right-2'}`}
+                                              title={`${maintenanceEvents.length} evento(s) de manutenção no dia para a placa. Clique para ver detalhes.`}
+                                            >
+                                              <Wrench size={11} />
+                                            </button>
+                                          )}
+                                          {/* Indicador de alerta para rotas com histórico de problemas */}
+                                          {hasRouteHistoryAlert && (
+                                              <span
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  setSelectedRouteAlert({ rota: route.rota, history: routeAlerts[route.rota].history });
+                                                }}
+                                                className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 bg-red-500 hover:bg-red-600 text-white text-[9px] font-black rounded-full cursor-pointer transition-colors z-10"
+                                                title={`${routeAlerts[route.rota].count} ocorrência(s) de atraso/adiantamento nos últimos 7 dias. Clique para ver histórico.`}
+                                              >
+                                                {routeAlerts[route.rota].count}
+                                              </span>
+                                          )}
+                                        </>
+                                      );
+                                    })()}
                                 </div>
                             )}
                         </td>
@@ -5754,6 +5902,57 @@ const RouteDepartureView: React.FC<{
                       <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 text-center">
                           💡 Clique em qualquer célula para editar • Os dados são sincronizados com o SharePoint
                       </p>
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* Modal de Evento de Manutenção por Placa/Data */}
+      {selectedMaintenanceAlert && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[300] flex items-center justify-center p-4" onClick={() => setSelectedMaintenanceAlert(null)}>
+              <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] shadow-2xl w-full max-w-2xl border dark:border-slate-800 overflow-hidden" onClick={(e) => e.stopPropagation()}>
+                  <div className="bg-amber-600 p-6 flex justify-between items-center text-white">
+                      <div className="flex items-center gap-4">
+                          <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center">
+                              <Wrench size={26} />
+                          </div>
+                          <div>
+                              <h3 className="font-black uppercase tracking-widest text-lg">Evento de Manutenção</h3>
+                              <p className="text-[10px] font-bold text-white/85 uppercase tracking-wide">
+                                Rota: {selectedMaintenanceAlert.route.rota || '---'} • Placa: {selectedMaintenanceAlert.route.placa || '---'} • Data: {formatDateToBR(selectedMaintenanceAlert.route.data || '') || '---'}
+                              </p>
+                          </div>
+                      </div>
+                      <button onClick={() => setSelectedMaintenanceAlert(null)} className="p-2 hover:bg-white/20 rounded-xl transition-colors">
+                          <X size={28} />
+                      </button>
+                  </div>
+                  <div className="p-6 max-h-[60vh] overflow-y-auto scrollbar-thin">
+                      <div className="mb-4 p-4 bg-amber-50 dark:bg-amber-900/20 rounded-2xl border border-amber-200 dark:border-amber-800">
+                          <p className="text-[11px] font-black uppercase text-amber-700 dark:text-amber-400 text-center">
+                              {selectedMaintenanceAlert.events.length} evento(s) encontrado(s) para esta placa no dia
+                          </p>
+                      </div>
+                      <div className="space-y-3">
+                          {selectedMaintenanceAlert.events.map((event, idx) => (
+                              <div key={`${event.placa}-${event.data_planejada}-${idx}`} className="p-4 bg-white dark:bg-slate-900 rounded-2xl border-2 border-slate-200 dark:border-slate-700 shadow-sm">
+                                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                      <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
+                                          <p className="text-[9px] font-black uppercase text-slate-500 dark:text-slate-400 mb-1">Tipo</p>
+                                          <p className="text-[11px] font-bold text-slate-800 dark:text-slate-200">{event.tipo || '---'}</p>
+                                      </div>
+                                      <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
+                                          <p className="text-[9px] font-black uppercase text-slate-500 dark:text-slate-400 mb-1">Área</p>
+                                          <p className="text-[11px] font-bold text-slate-800 dark:text-slate-200">{event.area || '---'}</p>
+                                      </div>
+                                      <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
+                                          <p className="text-[9px] font-black uppercase text-slate-500 dark:text-slate-400 mb-1">Status</p>
+                                          <p className="text-[11px] font-bold text-slate-800 dark:text-slate-200">{event.status || '---'}</p>
+                                      </div>
+                                  </div>
+                              </div>
+                          ))}
+                      </div>
                   </div>
               </div>
           </div>
