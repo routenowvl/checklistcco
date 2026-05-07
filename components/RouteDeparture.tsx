@@ -1474,6 +1474,32 @@ const RouteDepartureView: React.FC<{
   const isMontesClarosOperation = (operacao: string): boolean =>
     normalizeOperationKey(operacao || '') === 'MONTES CLAROS';
 
+  const normalizeMontesClarosStatusValue = (status: string): string => {
+    const normalized = String(status || '').trim();
+    if (normalized === 'Atrasado') return 'Atrasada';
+    if (normalized === 'Adiantado') return 'Adiantada';
+    return normalized;
+  };
+
+  const isMontesClarosManualStatusOption = (status: string): boolean => {
+    const normalized = normalizeMontesClarosStatusValue(status);
+    return normalized === 'OK' || normalized === 'Atrasada' || normalized === 'Adiantada';
+  };
+
+  const canManuallyEditMontesClarosStatus = (
+    operacao: string,
+    currentStatus: string,
+    calculatedStatus: string
+  ): boolean => {
+    if (!isMontesClarosOperation(operacao)) return false;
+    const normalizedCurrent = normalizeMontesClarosStatusValue(currentStatus);
+    const normalizedCalculated = normalizeMontesClarosStatusValue(calculatedStatus);
+    return (
+      isDelayedOrAdvancedStatus(normalizedCurrent) ||
+      (normalizedCurrent === 'OK' && isDelayedOrAdvancedStatus(normalizedCalculated))
+    );
+  };
+
   const resolveStatusForOperation = (
     operacao: string,
     currentStatus: string,
@@ -2866,16 +2892,27 @@ const RouteDepartureView: React.FC<{
       }
     }
 
-    // Exceção: em MONTES CLAROS, permite forçar status para OK quando estiver atrasada/adiantada
+    // Exceção: em MONTES CLAROS, permite ajuste manual do status (OK/Atrasada/Adiantada)
     if (field === 'statusOp') {
-      const canForceOkForMontesClaros =
-        isMontesClarosOperation(route.operacao || '') &&
-        String(value || '').trim().toUpperCase() === 'OK' &&
-        isDelayedOrAdvancedStatus(route.statusOp || '');
+      const normalizedValue = normalizeMontesClarosStatusValue(value || '');
+      const config = userConfigs.find(c => c.operacao === route.operacao);
+      const { status: calculatedStatusForRoute } = calculateStatusWithTolerance(
+        route.inicio || '',
+        route.saida || '',
+        config?.tolerancia || "00:00:00",
+        route.data || ''
+      );
+      const canEditMontesClarosStatus = canManuallyEditMontesClarosStatus(
+        route.operacao || '',
+        route.statusOp || '',
+        calculatedStatusForRoute
+      );
 
-      if (!canForceOkForMontesClaros) {
+      if (!canEditMontesClarosStatus || !isMontesClarosManualStatusOption(normalizedValue)) {
         return;
       }
+
+      value = normalizedValue;
     }
 
     // Tenta adquirir o lock para esta edição
@@ -4414,29 +4451,46 @@ const RouteDepartureView: React.FC<{
                     }
 
                     if (col.id === 'status') {
-                      const canForceOkForMontesClaros =
+                      const config = userConfigs.find(c => c.operacao === route.operacao);
+                      const { status: calculatedStatusForRoute } = calculateStatusWithTolerance(
+                        route.inicio || '',
+                        route.saida || '',
+                        config?.tolerancia || "00:00:00",
+                        route.data || ''
+                      );
+                      const canEditMontesClarosStatus =
                         canEditData &&
-                        isMontesClarosOperation(route.operacao || '') &&
-                        isDelayedOrAdvancedStatus(route.statusOp || '');
+                        canManuallyEditMontesClarosStatus(
+                          route.operacao || '',
+                          route.statusOp || '',
+                          calculatedStatusForRoute
+                        );
+                      const normalizedStatus = normalizeMontesClarosStatusValue(route.statusOp || '');
 
                       return (
                         <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
                           <div className="w-full flex items-center justify-center gap-1">
-                            <span className={`px-2 py-0.5 rounded-full text-[8px] font-black border whitespace-nowrap ${route.statusOp === 'OK' ? 'bg-emerald-100 border-emerald-400 text-emerald-800' : route.statusOp === 'Atrasada' ? 'bg-yellow-100 border-yellow-400 text-yellow-800' : route.statusOp === 'Programada' ? 'bg-slate-200 border-slate-400 text-slate-600' : route.statusOp === 'Previsto' ? 'bg-slate-100 border-slate-400 text-slate-500' : 'bg-red-100 border-red-400 text-red-800'}`}>
-                              {route.statusOp}
-                            </span>
-                            {canForceOkForMontesClaros && (
-                              <button
-                                onClick={() => updateCell(route.id!, 'statusOp', 'OK')}
-                                className={`px-2 py-0.5 rounded-full text-[8px] font-black border transition-colors ${
-                                  isDarkMode
-                                    ? 'bg-emerald-900/40 border-emerald-600 text-emerald-300 hover:bg-emerald-900/60'
-                                    : 'bg-emerald-100 border-emerald-400 text-emerald-800 hover:bg-emerald-200'
+                            {canEditMontesClarosStatus ? (
+                              <select
+                                value={normalizedStatus}
+                                onChange={(e) => updateCell(route.id!, 'statusOp', e.target.value)}
+                                className={`px-2 py-0.5 rounded-full text-[8px] font-black border outline-none cursor-pointer ${
+                                  normalizedStatus === 'OK'
+                                    ? 'bg-emerald-100 border-emerald-400 text-emerald-800'
+                                    : normalizedStatus === 'Atrasada'
+                                      ? 'bg-yellow-100 border-yellow-400 text-yellow-800'
+                                      : 'bg-red-100 border-red-400 text-red-800'
                                 }`}
-                                title="Forçar status para OK (MONTES CLAROS)"
+                                title="Alterar status manual (MONTES CLAROS)"
                               >
-                                OK
-                              </button>
+                                <option value="OK">OK</option>
+                                <option value="Atrasada">Atrasada</option>
+                                <option value="Adiantada">Adiantada</option>
+                              </select>
+                            ) : (
+                              <span className={`px-2 py-0.5 rounded-full text-[8px] font-black border whitespace-nowrap ${route.statusOp === 'OK' ? 'bg-emerald-100 border-emerald-400 text-emerald-800' : route.statusOp === 'Atrasada' ? 'bg-yellow-100 border-yellow-400 text-yellow-800' : route.statusOp === 'Programada' ? 'bg-slate-200 border-slate-400 text-slate-600' : route.statusOp === 'Previsto' ? 'bg-slate-100 border-slate-400 text-slate-500' : 'bg-red-100 border-red-400 text-red-800'}`}>
+                                {route.statusOp}
+                              </span>
                             )}
                           </div>
                         </td>
