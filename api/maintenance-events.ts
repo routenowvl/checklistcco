@@ -11,6 +11,8 @@ type MaintenanceEventRow = {
   tipo: string;
   area: string;
   status: string;
+  titulo: string;
+  categoria: string;
   data_planejada: string;
 };
 
@@ -100,6 +102,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         tipo,
         area,
         status,
+        titulo,
+        categoria,
         data_planejada::date AS data_planejada
       FROM "${schema}"."${table}"
       WHERE data_planejada::date = ANY($1::date[])
@@ -115,6 +119,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       tipo: String(row.tipo || ''),
       area: String(row.area || ''),
       status: String(row.status || ''),
+      titulo: String(row.titulo || ''),
+      categoria: String(row.categoria || ''),
       data_planejada: normalizeDate(String(row.data_planejada || ''))
     }));
 

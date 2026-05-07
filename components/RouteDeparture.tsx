@@ -160,6 +160,8 @@ type MaintenanceEventInfo = {
   tipo: string;
   area: string;
   status: string;
+  titulo: string;
+  categoria: string;
   data_planejada: string;
 };
 
@@ -866,6 +868,8 @@ const RouteDepartureView: React.FC<{
           tipo: String(event.tipo || ''),
           area: String(event.area || ''),
           status: String(event.status || ''),
+          titulo: String(event.titulo || ''),
+          categoria: String(event.categoria || ''),
           data_planejada: date
         });
       });
@@ -5936,10 +5940,18 @@ const RouteDepartureView: React.FC<{
                       <div className="space-y-3">
                           {selectedMaintenanceAlert.events.map((event, idx) => (
                               <div key={`${event.placa}-${event.data_planejada}-${idx}`} className="p-4 bg-white dark:bg-slate-900 rounded-2xl border-2 border-slate-200 dark:border-slate-700 shadow-sm">
-                                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
                                       <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
                                           <p className="text-[9px] font-black uppercase text-slate-500 dark:text-slate-400 mb-1">Tipo</p>
                                           <p className="text-[11px] font-bold text-slate-800 dark:text-slate-200">{event.tipo || '---'}</p>
+                                      </div>
+                                      <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
+                                          <p className="text-[9px] font-black uppercase text-slate-500 dark:text-slate-400 mb-1">Título</p>
+                                          <p className="text-[11px] font-bold text-slate-800 dark:text-slate-200">{event.titulo || '---'}</p>
+                                      </div>
+                                      <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
+                                          <p className="text-[9px] font-black uppercase text-slate-500 dark:text-slate-400 mb-1">Categoria</p>
+                                          <p className="text-[11px] font-bold text-slate-800 dark:text-slate-200">{event.categoria || '---'}</p>
                                       </div>
                                       <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
                                           <p className="text-[9px] font-black uppercase text-slate-500 dark:text-slate-400 mb-1">Área</p>

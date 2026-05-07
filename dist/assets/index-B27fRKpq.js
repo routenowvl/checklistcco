@@ -1,2 +1,2 @@
 // Compat alias generated post-build
-import './index-BIMhU2IJ.js';
+import './index-zJSJqMCQ.js';
