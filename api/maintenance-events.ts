@@ -108,7 +108,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       FROM "${schema}"."${table}"
       WHERE data_planejada::date = ANY($1::date[])
         AND UPPER(REGEXP_REPLACE(COALESCE(placa, ''), '[^A-Za-z0-9]', '', 'g')) = ANY($2::text[])
-      ORDER BY data_planejada DESC
+      ORDER BY data_planejada ASC
     `;
 
     const pool = getPool();

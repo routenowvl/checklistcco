@@ -808,16 +808,31 @@ const RouteDepartureView: React.FC<{
       return;
     }
 
+    // Gera itens de busca: data da rota + 3 dias à frente (para cada placa)
+    const addDays = (dateStr: string, days: number): string => {
+      const d = new Date(dateStr);
+      d.setDate(d.getDate() + days);
+      return d.toISOString().slice(0, 10);
+    };
+
+    const allDatesByPlate: Record<string, string[]> = {};
+    validRoutes.forEach((route) => {
+      const plate = normalizeMaintenancePlate(route.placa || '');
+      const date = normalizeMaintenanceDate(route.data || '');
+      if (!plate || !date) return;
+      if (!allDatesByPlate[plate]) allDatesByPlate[plate] = [];
+      allDatesByPlate[plate].push(date);
+    });
+
+    // Gera pares únicos: cada placa x (dia + D+1, D+2, D+3)
     const lookupPairs = Array.from(
       new Set(
-        validRoutes
-          .map((route) => {
-            const plate = normalizeMaintenancePlate(route.placa || '');
-            const date = normalizeMaintenanceDate(route.data || '');
-            if (!plate || !date) return '';
-            return `${date}|${plate}`;
-          })
-          .filter(Boolean)
+        Object.entries(allDatesByPlate).flatMap(([plate, dates]) => {
+          const uniqueDates = Array.from(new Set(dates));
+          return uniqueDates.flatMap((date) =>
+            [0, 1, 2, 3].map((offset) => `${addDays(date, offset)}|${plate}`)
+          );
+        })
       )
     ).sort();
 
@@ -854,16 +869,14 @@ const RouteDepartureView: React.FC<{
       const payload = await response.json();
       const events: MaintenanceEventInfo[] = Array.isArray(payload?.events) ? payload.events : [];
 
-      const eventsByPair: Record<string, MaintenanceEventInfo[]> = {};
+      // Agrupa todos os eventos por placa (independentemente da data)
+      const eventsByPlate: Record<string, MaintenanceEventInfo[]> = {};
       events.forEach((event) => {
         const plate = normalizeMaintenancePlate(event.placa || '');
         const date = normalizeMaintenanceDate(event.data_planejada || '');
         if (!plate || !date) return;
-        const pairKey = `${date}|${plate}`;
-        if (!eventsByPair[pairKey]) {
-          eventsByPair[pairKey] = [];
-        }
-        eventsByPair[pairKey].push({
+        if (!eventsByPlate[plate]) eventsByPlate[plate] = [];
+        eventsByPlate[plate].push({
           placa: plate,
           tipo: String(event.tipo || ''),
           area: String(event.area || ''),
@@ -874,15 +887,16 @@ const RouteDepartureView: React.FC<{
         });
       });
 
+      // Mapeia por par data|placa (key original da rota) → todos os eventos daquela placa (D a D+3)
       const nextAlerts: Record<string, MaintenanceEventInfo[]> = {};
       validRoutes.forEach((route) => {
         const plate = normalizeMaintenancePlate(route.placa || '');
         const date = normalizeMaintenanceDate(route.data || '');
         if (!plate || !date) return;
         const pairKey = `${date}|${plate}`;
-        const routeEvents = eventsByPair[pairKey];
-        if (routeEvents && routeEvents.length > 0) {
-          nextAlerts[pairKey] = routeEvents;
+        const plateEvents = eventsByPlate[plate];
+        if (plateEvents && plateEvents.length > 0) {
+          nextAlerts[pairKey] = plateEvents;
         }
       });
 
@@ -4082,7 +4096,7 @@ const RouteDepartureView: React.FC<{
                                                   ? 'bg-amber-900/50 border-amber-700 text-amber-300 hover:bg-amber-900/70'
                                                   : 'bg-amber-100 border-amber-400 text-amber-800 hover:bg-amber-200'
                                               } ${hasRouteHistoryAlert ? 'right-9' : 'right-2'}`}
-                                              title={`${maintenanceEvents.length} evento(s) de manutenção no dia para a placa. Clique para ver detalhes.`}
+                                              title={`${maintenanceEvents.length} evento(s) de manutenção (hoje até D+3) para a placa. Clique para ver detalhes.`}
                                             >
                                               <Wrench size={11} />
                                             </button>

@@ -3,7 +3,9 @@
     "allow": [
       "Bash(npm run:*)",
       "Bash(grep -rni -E \"saida|saída|departure|envio.*mail|send.*mail|send.*email|email.*send|mail.*send|auto.*mail\" C:/Projetos/checklistcco --include=*.tsx --include=*.ts --include=*.jsx --include=*.js)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx vite:*)"
     ]
   }
 }
