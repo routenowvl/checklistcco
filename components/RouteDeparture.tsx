@@ -5926,7 +5926,20 @@ const RouteDepartureView: React.FC<{
       )}
 
       {/* Modal de Evento de Manutenção por Placa/Data */}
-      {selectedMaintenanceAlert && (
+      {selectedMaintenanceAlert && (() => {
+          const routeDate = normalizeMaintenanceDate(selectedMaintenanceAlert.route.data || '');
+          const eventsByDate = selectedMaintenanceAlert.events
+            .reduce<Record<string, MaintenanceEventInfo[]>>((acc, event) => {
+              const d = event.data_planejada || '';
+              if (!acc[d]) acc[d] = [];
+              acc[d].push(event);
+              return acc;
+            }, {});
+          const sortedDates = Object.keys(eventsByDate).sort();
+          const todayEvents = eventsByDate[routeDate] || [];
+          const futureDates = sortedDates.filter(d => d > routeDate);
+
+          return (
           <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[300] flex items-center justify-center p-4" onClick={() => setSelectedMaintenanceAlert(null)}>
               <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] shadow-2xl w-full max-w-2xl border dark:border-slate-800 overflow-hidden" onClick={(e) => e.stopPropagation()}>
                   <div className="bg-amber-600 p-6 flex justify-between items-center text-white">
@@ -5935,9 +5948,9 @@ const RouteDepartureView: React.FC<{
                               <Wrench size={26} />
                           </div>
                           <div>
-                              <h3 className="font-black uppercase tracking-widest text-lg">Evento de Manutenção</h3>
+                              <h3 className="font-black uppercase tracking-widest text-lg">Eventos de Manutenção</h3>
                               <p className="text-[10px] font-bold text-white/85 uppercase tracking-wide">
-                                Rota: {selectedMaintenanceAlert.route.rota || '---'} • Placa: {selectedMaintenanceAlert.route.placa || '---'} • Data: {formatDateToBR(selectedMaintenanceAlert.route.data || '') || '---'}
+                                Rota: {selectedMaintenanceAlert.route.rota || '---'} • Placa: {selectedMaintenanceAlert.route.placa || '---'}
                               </p>
                           </div>
                       </div>
@@ -5946,14 +5959,18 @@ const RouteDepartureView: React.FC<{
                       </button>
                   </div>
                   <div className="p-6 max-h-[60vh] overflow-y-auto scrollbar-thin">
-                      <div className="mb-4 p-4 bg-amber-50 dark:bg-amber-900/20 rounded-2xl border border-amber-200 dark:border-amber-800">
-                          <p className="text-[11px] font-black uppercase text-amber-700 dark:text-amber-400 text-center">
-                              {selectedMaintenanceAlert.events.length} evento(s) encontrado(s) para esta placa no dia
-                          </p>
-                      </div>
-                      <div className="space-y-3">
-                          {selectedMaintenanceAlert.events.map((event, idx) => (
-                              <div key={`${event.placa}-${event.data_planejada}-${idx}`} className="p-4 bg-white dark:bg-slate-900 rounded-2xl border-2 border-slate-200 dark:border-slate-700 shadow-sm">
+                      {/* Card: Manutenções do Dia */}
+                      {todayEvents.length > 0 && (
+                        <div className="mb-5">
+                          <div className="mb-3 flex items-center gap-2">
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-black uppercase border-2 bg-amber-100 border-amber-400 text-amber-800 dark:bg-amber-900/40 dark:border-amber-700 dark:text-amber-300">
+                              <Calendar size={12} /> Hoje — {formatDateToBR(routeDate)}
+                            </span>
+                            <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500">{todayEvents.length} evento(s)</span>
+                          </div>
+                          <div className="space-y-3">
+                            {todayEvents.map((event, idx) => (
+                              <div key={`today-${idx}`} className="p-4 bg-white dark:bg-slate-900 rounded-2xl border-2 border-amber-300 dark:border-amber-800 shadow-sm">
                                   <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
                                       <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
                                           <p className="text-[9px] font-black uppercase text-slate-500 dark:text-slate-400 mb-1">Tipo</p>
@@ -5977,12 +5994,73 @@ const RouteDepartureView: React.FC<{
                                       </div>
                                   </div>
                               </div>
-                          ))}
-                      </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Cards: Manutenções Futuras (D+1 a D+3) */}
+                      {futureDates.length > 0 && (
+                        <div className="mb-2">
+                          <div className="mb-3 flex items-center gap-2">
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-black uppercase border-2 bg-blue-100 border-blue-400 text-blue-800 dark:bg-blue-900/40 dark:border-blue-700 dark:text-blue-300">
+                              <Calendar size={12} /> Programado
+                            </span>
+                            <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500">{futureDates.reduce((sum, d) => sum + eventsByDate[d].length, 0)} evento(s)</span>
+                          </div>
+                          <div className="space-y-4">
+                            {futureDates.map(date => (
+                              <div key={date}>
+                                <div className="flex items-center gap-2 mb-2">
+                                  <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-[10px] font-black uppercase bg-blue-50 text-blue-700 border border-blue-200 dark:bg-blue-950 dark:text-blue-400 dark:border-blue-800">
+                                    {formatDateToBR(date)}
+                                  </span>
+                                </div>
+                                <div className="space-y-3">
+                                  {eventsByDate[date].map((event, idx) => (
+                                    <div key={`future-${date}-${idx}`} className="p-4 bg-white dark:bg-slate-900 rounded-2xl border-2 border-blue-200 dark:border-blue-900 shadow-sm">
+                                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
+                                            <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
+                                                <p className="text-[9px] font-black uppercase text-slate-500 dark:text-slate-400 mb-1">Tipo</p>
+                                                <p className="text-[11px] font-bold text-slate-800 dark:text-slate-200">{event.tipo || '---'}</p>
+                                            </div>
+                                            <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
+                                                <p className="text-[9px] font-black uppercase text-slate-500 dark:text-slate-400 mb-1">Título</p>
+                                                <p className="text-[11px] font-bold text-slate-800 dark:text-slate-200">{event.titulo || '---'}</p>
+                                            </div>
+                                            <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
+                                                <p className="text-[9px] font-black uppercase text-slate-500 dark:text-slate-400 mb-1">Categoria</p>
+                                                <p className="text-[11px] font-bold text-slate-800 dark:text-slate-200">{event.categoria || '---'}</p>
+                                            </div>
+                                            <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
+                                                <p className="text-[9px] font-black uppercase text-slate-500 dark:text-slate-400 mb-1">Área</p>
+                                                <p className="text-[11px] font-bold text-slate-800 dark:text-slate-200">{event.area || '---'}</p>
+                                            </div>
+                                            <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
+                                                <p className="text-[9px] font-black uppercase text-slate-500 dark:text-slate-400 mb-1">Status</p>
+                                                <p className="text-[11px] font-bold text-slate-800 dark:text-slate-200">{event.status || '---'}</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Mensagem quando não há eventos */}
+                      {todayEvents.length === 0 && futureDates.length === 0 && (
+                        <div className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-200 dark:border-slate-700">
+                          <p className="text-[11px] font-bold text-slate-500 dark:text-slate-400 text-center">Nenhum evento de manutenção encontrado para esta placa.</p>
+                        </div>
+                      )}
                   </div>
               </div>
           </div>
-      )}
+          );
+      })()}
 
       {/* Modal de Alerta de Rota com Histórico de Problemas */}
       {selectedRouteAlert && (
