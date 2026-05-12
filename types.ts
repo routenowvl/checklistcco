@@ -170,11 +170,6 @@ export interface HistoryRecord {
   email?: string; // Novo campo para rastreabilidade e filtro
 }
 
-export const VALID_USERS = [
-  { email: 'cco.logistica@viagroup.com.br', password: '1234', name: 'Logística 1' },
-  { email: 'cco.logistica2@viagroup.com.br', password: '1234', name: 'Logística 2' }
-];
-
 export const INITIAL_LOCATIONS: string[] = [];
 export const LOCATIONS: string[] = [];
 export const LOGISTICA_2_LOCATIONS: string[] = ['LAT-CWB', 'LAT-SJP', 'LAT-LDB', 'LAT-MGA'];

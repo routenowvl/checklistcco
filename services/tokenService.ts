@@ -41,8 +41,6 @@ export const getValidToken = async (): Promise<string | null> => {
       .acquireTokenSilent({ scopes, account })
       .then(response => {
         const token = response.accessToken;
-        // Mantém window.__access_token sempre atualizado para compatibilidade
-        (window as any).__access_token = token;
         activeRefreshPromise = null;
 
         const expiresIn = response.expiresOn
@@ -63,7 +61,6 @@ export const getValidToken = async (): Promise<string | null> => {
               account,
               forceRefresh: true,
             });
-            (window as any).__access_token = forced.accessToken;
             return forced.accessToken;
           } catch {
             // Não conseguiu renovar silenciosamente — dispara evento para o App mostrar modal
@@ -97,7 +94,7 @@ export const getValidTokenOrThrow = async (): Promise<string> => {
  * Deve ser chamado UMA VEZ após o login bem-sucedido.
  * Retorna função de cleanup para parar o loop.
  * 
- * IMPORTANTE: O refresh ocorre apenas em background (window.__access_token),
+ * IMPORTANTE: O refresh ocorre apenas em background (closure interna),
  * sem atualizar estado React, evitando re-renderização dos componentes.
  */
 export const startTokenRefreshLoop = (
@@ -137,12 +134,8 @@ export const startTokenRefreshLoop = (
             account,
             forceRefresh: true,
           });
-          // Atualiza APENAS no window — sem re-renderização
-          (window as any).__access_token = forced.accessToken;
           console.log('[TOKEN_LOOP] ✅ Token renovado proativamente (background)');
         } else {
-          // Token ainda válido — apenas sincroniza no window
-          (window as any).__access_token = response.accessToken;
         }
       }
     } catch (err: any) {
@@ -197,7 +190,6 @@ export const forceTokenRefresh = async (): Promise<string | null> => {
       forceRefresh: true,
     });
 
-    (window as any).__access_token = response.accessToken;
     console.log('[TOKEN] 🔄 Force refresh concluído');
     return response.accessToken;
   } catch (err: any) {

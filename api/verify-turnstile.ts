@@ -3,13 +3,101 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 /**
  * Serverless Function: /api/verify-turnstile
  *
- * Valida o token do Cloudflare Turnstile server-side.
+ * Valida o token do Cloudflare Turnstile server-side + rate limiting por IP.
  * A SECRET_KEY fica segura no servidor (Vercel Environment Variables).
  */
+
+// ── Rate Limiting (in-memory, por serverless instance) ──
+interface RateEntry { count: number; firstAttempt: number; lockedUntil: number | null }
+const rateLimitMap = new Map<string, RateEntry>();
+
+const MAX_ATTEMPTS = Number(process.env.LIMITAR_RETRY_LOGIN) || 5;
+const LOCKOUT_MS = (Number(process.env.LOGIN_LOCKOUT_MINUTES) || 15) * 60 * 1000;
+const WINDOW_MS = 15 * 60 * 1000; // janela de 15 min para contagem
+
+function getClientIp(req: VercelRequest): string {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string') return forwarded.split(',')[0].trim();
+  if (Array.isArray(forwarded)) return forwarded[0].trim();
+  return (req.headers['x-real-ip'] as string) || 'unknown';
+}
+
+function checkRateLimit(ip: string): { allowed: boolean; remaining: number; lockedUntil: number | null } {
+  const now = Date.now();
+  let entry = rateLimitMap.get(ip);
+
+  if (!entry || (now - entry.firstAttempt > WINDOW_MS && !entry.lockedUntil)) {
+    entry = { count: 0, firstAttempt: now, lockedUntil: null };
+    rateLimitMap.set(ip, entry);
+  }
+
+  // Verifica lockout ativo
+  if (entry.lockedUntil && now < entry.lockedUntil) {
+    return { allowed: false, remaining: 0, lockedUntil: entry.lockedUntil };
+  }
+
+  // Lockout expirado — reset
+  if (entry.lockedUntil && now >= entry.lockedUntil) {
+    entry.count = 0;
+    entry.firstAttempt = now;
+    entry.lockedUntil = null;
+  }
+
+  return { allowed: true, remaining: MAX_ATTEMPTS - entry.count, lockedUntil: null };
+}
+
+function recordFailedAttempt(ip: string): { lockedOut: boolean; lockedUntil: number | null } {
+  const entry = rateLimitMap.get(ip);
+  if (!entry) return { lockedOut: false, lockedUntil: null };
+
+  entry.count += 1;
+
+  if (entry.count >= MAX_ATTEMPTS) {
+    entry.lockedUntil = Date.now() + LOCKOUT_MS;
+    return { lockedOut: true, lockedUntil: entry.lockedUntil };
+  }
+
+  return { lockedOut: false, lockedUntil: null };
+}
+
+// ── Limpeza periodica de entradas expiradas (evita memory leak) ──
+const CLEANUP_INTERVAL = 5 * 60 * 1000;
+let lastCleanup = Date.now();
+
+function cleanupExpired() {
+  const now = Date.now();
+  if (now - lastCleanup < CLEANUP_INTERVAL) return;
+  lastCleanup = now;
+  for (const [ip, entry] of rateLimitMap) {
+    if (entry.lockedUntil && now >= entry.lockedUntil) {
+      rateLimitMap.delete(ip);
+    } else if (!entry.lockedUntil && now - entry.firstAttempt > WINDOW_MS) {
+      rateLimitMap.delete(ip);
+    }
+  }
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Apenas POST
   if (req.method !== 'POST') {
     return res.status(405).json({ success: false, error: 'Method not allowed' });
+  }
+
+  cleanupExpired();
+
+  const clientIp = getClientIp(req);
+
+  // Rate limiting check
+  const rateCheck = checkRateLimit(clientIp);
+  if (!rateCheck.allowed) {
+    const remainingMs = rateCheck.lockedUntil! - Date.now();
+    const remainingMin = Math.ceil(remainingMs / 60000);
+    console.warn(`[RATE_LIMIT] IP ${clientIp} bloqueado. Restam ${remainingMin} min.`);
+    return res.status(429).json({
+      success: false,
+      error: `Muitas tentativas. Tente novamente em ${remainingMin} minutos.`,
+      lockedUntil: rateCheck.lockedUntil,
+    });
   }
 
   const { token } = req.body as { token?: string };
@@ -35,24 +123,33 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       body: JSON.stringify({
         secret: secretKey,
         response: token,
-        // Opcional: validar remoteip para mais segurança
-        remoteip: req.headers['x-real-ip'] || req.headers['x-forwarded-for'] as string,
+        remoteip: clientIp,
       }),
     });
 
     const data = await result.json();
 
-    console.log('[TURNSTILE] Cloudflare response:', JSON.stringify(data));
-
     if (data.success) {
-      return res.status(200).json({ success: true });
+      return res.status(200).json({ success: true, remaining: rateCheck.remaining });
     } else {
-      // Cloudflare retornou erros
+      // Turnstile falhou — registra tentativa falha
+      const { lockedOut, lockedUntil } = recordFailedAttempt(clientIp);
+
+      if (lockedOut) {
+        console.warn(`[RATE_LIMIT] IP ${clientIp} atingiu o limite de ${MAX_ATTEMPTS} tentativas.`);
+        return res.status(429).json({
+          success: false,
+          error: `Muitas tentativas falhas. Acesso bloqueado por ${Math.ceil(LOCKOUT_MS / 60000)} minutos.`,
+          lockedUntil,
+        });
+      }
+
       const errors = data['error-codes'] || ['unknown_error'];
       console.warn('[TURNSTILE] Falha na verificação. Erros:', errors);
       return res.status(403).json({
         success: false,
         errors,
+        remaining: rateCheck.remaining - 1,
       });
     }
   } catch (error: any) {

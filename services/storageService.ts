@@ -1,5 +1,5 @@
 
-import { Task, OperationStatus, INITIAL_LOCATIONS, LOGISTICA_2_LOCATIONS, Customer, HistoryRecord, VALID_USERS, RouteDeparture } from '../types';
+import { Task, OperationStatus, INITIAL_LOCATIONS, LOGISTICA_2_LOCATIONS, Customer, HistoryRecord, RouteDeparture } from '../types';
 
 // Base Keys
 const BASE_TASKS_KEY = 'crm_logistics_tasks_v3';

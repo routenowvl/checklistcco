@@ -4,8 +4,6 @@ import { PublicClientApplication, Configuration, AuthenticationResult } from "@a
 export type AuthMode = 'primary' | 'viewer';
 
 const AUTH_MODE_STORAGE_KEY = 'cco_auth_mode';
-const DEFAULT_PRIMARY_CLIENT_ID = "0b6eaa08-a78b-47a0-81d2-22417bab69b3";
-const DEFAULT_PRIMARY_TENANT_ID = "7d9754b3-dcdb-4efe-8bb7-c0e5587b86ed";
 const DEFAULT_SCOPES = ["User.Read", "Sites.ReadWrite.All"];
 
 const parseScopes = (raw: string | undefined, fallback: string[] = DEFAULT_SCOPES): string[] => {
@@ -16,8 +14,16 @@ const parseScopes = (raw: string | undefined, fallback: string[] = DEFAULT_SCOPE
     return parsed.length > 0 ? parsed : fallback;
 };
 
-const primaryClientId = String(import.meta.env.VITE_AZURE_CLIENT_ID || DEFAULT_PRIMARY_CLIENT_ID).trim();
-const primaryTenantId = String(import.meta.env.VITE_AZURE_TENANT_ID || DEFAULT_PRIMARY_TENANT_ID).trim();
+const primaryClientId = String(import.meta.env.VITE_AZURE_CLIENT_ID || '').trim();
+const primaryTenantId = String(import.meta.env.VITE_AZURE_TENANT_ID || '').trim();
+
+if (!primaryClientId || !primaryTenantId) {
+    throw new Error(
+        '[AUTH] VITE_AZURE_CLIENT_ID e VITE_AZURE_TENANT_ID são obrigatórios. ' +
+        'Configure as variáveis de ambiente antes de iniciar o app.'
+    );
+}
+
 const primaryAuthority = `https://login.microsoftonline.com/${primaryTenantId}`;
 
 const viewerClientId = String(import.meta.env.VITE_AZURE_VIEWER_CLIENT_ID || '').trim();
@@ -35,7 +41,7 @@ const createMsalConfig = (clientId: string, authority: string): Configuration =>
         redirectUri: window.location.origin,
     },
     cache: {
-        cacheLocation: "localStorage",
+        cacheLocation: "sessionStorage",
         storeAuthStateInCookie: false,
     }
 });
@@ -205,11 +211,13 @@ export const logout = async () => {
             });
         } else {
             localStorage.clear();
+            sessionStorage.clear();
             window.location.reload();
         }
     } catch (e) {
         console.error("Erro durante o logout:", e);
         localStorage.clear();
+        sessionStorage.clear();
         window.location.reload();
     }
 };

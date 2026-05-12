@@ -37,6 +37,25 @@ const sanitizeIdentifier = (value: string, fallback: string): string => {
   return fallback;
 };
 
+const validateToken = async (authHeader: string | undefined): Promise<boolean> => {
+  if (!authHeader) return false;
+
+  const token = authHeader.startsWith('Bearer ')
+    ? authHeader.slice(7).trim()
+    : authHeader.trim();
+
+  if (!token) return false;
+
+  try {
+    const res = await fetch('https://graph.microsoft.com/v1.0/me', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+};
+
 const getBooleanEnv = (value: string | undefined, defaultValue: boolean): boolean => {
   if (value == null) return defaultValue;
   const normalized = value.trim().toLowerCase();
@@ -58,7 +77,7 @@ const getPool = (): Pool => {
 
   holder.__maintenanceDbPool = new Pool({
     connectionString,
-    ssl: sslEnabled ? { rejectUnauthorized: false } : undefined,
+    ssl: sslEnabled ? true : undefined,
     max: 3,
     idleTimeoutMillis: 15000,
     connectionTimeoutMillis: 10000
@@ -70,6 +89,11 @@ const getPool = (): Pool => {
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ success: false, error: 'Method not allowed' });
+  }
+
+  const isAuthenticated = await validateToken(req.headers.authorization);
+  if (!isAuthenticated) {
+    return res.status(401).json({ success: false, error: 'Unauthorized' });
   }
 
   try {
