@@ -182,8 +182,6 @@ const AppContent = () => {
       }
 
       if (response?.accessToken) {
-        // Atualiza window E estado (renovação manual requer atualização do estado)
-        (window as any).__access_token = response.accessToken;
         setUser(prev => prev ? { ...prev, accessToken: response.accessToken } : prev);
         setSessionExpired(false);
         lastTokenErrorRef.current = 0; // Reset debounce após renovação bem-sucedida
@@ -200,7 +198,6 @@ const AppContent = () => {
 
   const handleLogin = (user: User) => {
     setUser(user);
-    (window as any).__access_token = user.accessToken;
     setSessionExpired(false);
     lastTokenErrorRef.current = Date.now(); // Previne modal imediato após login
 
@@ -219,7 +216,6 @@ const AppContent = () => {
       return;
     }
 
-    (window as any).__access_token = token;
     setIsLoading(true);
 
     try {
@@ -235,7 +231,6 @@ const AppContent = () => {
 
         if (viewerToken) {
           token = viewerToken;
-          (window as any).__access_token = viewerToken;
           setUser(prev => prev ? { ...prev, accessToken: viewerToken } : prev);
 
           // Revalida acesso com o novo token
@@ -251,7 +246,6 @@ const AppContent = () => {
         const primaryToken = await ensurePrimaryAuthSession(user.email);
         if (primaryToken) {
           token = primaryToken;
-          (window as any).__access_token = primaryToken;
           setUser(prev => prev ? { ...prev, accessToken: primaryToken } : prev);
         } else {
           console.warn('[APP] Sessão primária não pôde ser reestabelecida sem interação. Mantendo sessão atual.');
@@ -371,7 +365,6 @@ const AppContent = () => {
     await msalLogout();
     setUser(null);
     setStorageUser(null);
-    delete (window as any).__access_token;
     navigate('/');
   };
 

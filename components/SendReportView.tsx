@@ -47,10 +47,10 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
   const [isSendingNCSummary, setIsSendingNCSummary] = useState(false);
   const [coletasPrevistas, setColetasPrevistas] = useState<ColetaPrevista[]>([]);
 
-  const WEBHOOK_URL = import.meta.env.VITE_WEBHOOK_SAIDAS_URL || "https://n8n.datastack.viagroup.com.br/webhook/8cb1f3e1-833d-42a7-a3f0-2f959ea390d6";
-  const WEBHOOK_URL_NAO_COLETAS = "https://n8n.datastack.viagroup.com.br/webhook/d712d06e-b81f-40f4-9ca8-5b2403a90fdd";
-  const WEBHOOK_URL_RESUMO = import.meta.env.VITE_WEBHOOK_RESUMO_URL || "https://n8n.datastack.viagroup.com.br/webhook/8cb1f3e1-833d-42a7-a3f0-2f959ea390d6";
-  const WEBHOOK_URL_NC_RESUMO = "https://n8n.datastack.viagroup.com.br/webhook/20541afc-08c7-4799-b3e9-26dd3afdbb5a";
+  const WEBHOOK_URL = import.meta.env.VITE_WEBHOOK_SAIDAS_URL || "";
+  const WEBHOOK_URL_NAO_COLETAS = import.meta.env.VITE_WEBHOOK_NAO_COLETAS_URL || "";
+  const WEBHOOK_URL_RESUMO = import.meta.env.VITE_WEBHOOK_RESUMO_URL || "";
+  const WEBHOOK_URL_NC_RESUMO = import.meta.env.VITE_WEBHOOK_NC_RESUMO_URL || "";
 
   // Estado para não coletas reais do SharePoint (usado na coluna da direita)
   const [realNonCollections, setRealNonCollections] = useState<any[]>([]);
@@ -212,7 +212,6 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
     try {
       console.log('[FETCH_ALL] Buscando dados completos...', forceRefresh ? '(force refresh)' : '');
-      console.log('[FETCH_ALL] Usuário logado:', currentUser.email);
 
       const [depData, configs, spNonCollections] = await Promise.all([
         SharePointService.getDepartures(token, forceRefresh),
@@ -270,10 +269,6 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       try {
         console.log('[POLLING_CONFIGS] Buscando configs atualizadas...', force ? '(force refresh)' : '');
         const configs = await SharePointService.getRouteConfigs(token, currentUser.email, force);
-        console.log('[DEBUG_CONFIGS] Configs carregadas:', configs);
-        configs.forEach(c => {
-          console.log(`[DEBUG_CONFIG] ${c.operacao}: ultimoEnvioSaida = "${c.ultimoEnvioSaida}" | Status = "${c.Status}" | Envio = "${c.Envio}" | Copia = "${c.Copia}" | UltimoEnvioResumoSaida = "${c.UltimoEnvioResumoSaida}" | StatusResumoSaida = "${c.StatusResumoSaida}"`);
-        });
 
         // Detecta DEALE e mantém estado atualizado
         const deale = isDealeUser(configs || []);
@@ -444,15 +439,8 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
     // Debug DEALE: log completo de todas as configs do usuário
     if (isDealeSelection) {
-      console.log('[SEND_DEPARTURES][DEALE_DEBUG] Todas as userConfigs:', userConfigs.map(c => ({
-        operacao: c.operacao,
-        Envio: c.Envio,
-        Copia: c.Copia,
-        nomeExibicao: c.nomeExibicao
-      })));
-      console.log('[SEND_DEPARTURES][DEALE_DEBUG] Config encontrada para ALMIRANTE:', config);
       if (!config) {
-        console.error('[SEND_DEPARTURES][DEALE_DEBUG] ❌ Config de ALMIRANTE NÃO encontrada!');
+        console.error('[SEND_DEPARTURES][DEALE_DEBUG] Config de ALMIRANTE NÃO encontrada!');
       }
     }
 
@@ -460,8 +448,6 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     console.log('[SEND_DEPARTURES] Operação selecionada:', selectedOperacao);
     console.log('[SEND_DEPARTURES] Operações reais sendo enviadas:', realOperations);
     console.log('[SEND_DEPARTURES] Rotas encontradas:', selectedDepartures.length);
-    console.log('[SEND_DEPARTURES] Config (efetiva):', config);
-    console.log('[SEND_DEPARTURES] Config - Envio:', config?.Envio, '| Copia:', config?.Copia);
 
     if (selectedDepartures.length === 0) {
       setSendError("Nenhuma saída encontrada para esta operação.");
@@ -765,8 +751,6 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     console.log('[SEND_NAO_COLETA] Operação selecionada:', selectedOperacaoNC);
     console.log('[SEND_NAO_COLETA] Operações reais sendo enviadas:', realOperations);
     console.log('[SEND_NAO_COLETA] Total de rotas:', selectedDepartures.length);
-    console.log('[SEND_NAO_COLETA] Config (efetiva):', config);
-    console.log('[SEND_NAO_COLETA] Config - Envio:', config?.Envio, '| Copia:', config?.Copia);
 
     // BUSCA NÃO COLETAS REAIS NO SHAREPOINT PARA ESTA OPERAÇÃO
     const spNonCollections = await SharePointService.getNonCollections(token, currentUser.email);
@@ -1123,17 +1107,12 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
     // LOG FINAL DE CONFIRMAÇÃO ANTES DO ENVIO
     console.log('[RESUMO_GERAL] ========================================');
-    console.log('[RESUMO_GERAL] 📋 RESUMO FINAL DO PAYLOAD:');
-    console.log('[RESUMO_GERAL]    Usuário:', currentUser.email);
-    console.log('[RESUMO_GERAL]    Total de rotas:', payload.totalRotas);
-    console.log('[RESUMO_GERAL]    Total de operações:', payload.operacoes);
-    console.log('[RESUMO_GERAL]    Operações sendo enviadas:');
+    console.log('[RESUMO_GERAL] Total de rotas:', payload.totalRotas);
+    console.log('[RESUMO_GERAL] Total de operações:', payload.operacoes);
     payload.rotasPorOperacao.forEach((op: any) => {
       console.log(`[RESUMO_GERAL]      - ${op.operacao}: ${op.totalRotas} rotas`);
     });
     console.log('[RESUMO_GERAL] ========================================');
-
-    console.log('[RESUMO_GERAL] Enviando payload:', payload);
 
     try {
       const response = await fetch(WEBHOOK_URL_RESUMO, {
@@ -1351,7 +1330,6 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     };
 
     console.log('[RESUMO_NC] Operações sendo enviadas:', payload.naoColetasPorOperacao.map((op: any) => `${op.operacao}: ${op.totalNaoColetas} NCs`));
-    console.log('[RESUMO_NC] Enviando payload:', payload);
 
     try {
       const response = await fetch(WEBHOOK_URL_NC_RESUMO, {

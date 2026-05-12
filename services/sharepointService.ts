@@ -32,7 +32,7 @@ export interface SPNonCollection {
   CausaRaiz?: string;
 }
 
-const SITE_PATH = import.meta.env.VITE_SHAREPOINT_SITE_PATH || "vialacteoscombr.sharepoint.com:/sites/CCO";
+const SITE_PATH = import.meta.env.VITE_SHAREPOINT_SITE_PATH || "";
 const VIEWER_ACCESS_LIST_CANDIDATES = [
   String(import.meta.env.VITE_VIEWER_ACCESS_LIST_NAME || '').trim(),
   'Usuário_filial',
@@ -500,7 +500,8 @@ export const SharePointService = {
     const siteId = await getResolvedSiteId(token);
     const list = await findListByIdOrName(siteId, 'Status_Checklist', token);
     const { mapping, readOnly, internalNames } = await getListColumnMapping(siteId, list.id, token);
-    const filter = `fields/Title eq '${status.Title}'`;
+    const escapedTitle = status.Title.replace(/'/g, "''");
+    const filter = `fields/Title eq '${escapedTitle}'`;
     const existing = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}`, token);
     const fields: any = {};
     if (!existing.value?.length) {
@@ -557,7 +558,7 @@ export const SharePointService = {
       })).filter((record: HistoryRecord) => record.email?.toLowerCase() === userEmail.toLowerCase().trim())
         .sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
       
-      console.log(`[HISTORY_QUERY] ✅ ${result.length} registros filtrados por usuário ${userEmail}`);
+      console.log(`[HISTORY_QUERY] ✅ ${result.length} registros filtrados`);
       return result;
     } catch (e) { return []; }
   },
@@ -571,7 +572,7 @@ export const SharePointService = {
         const configs = await this.getAllRouteConfigs(token, forceRefresh);
         const result = configs.filter(c => c.email === userEmail.toLowerCase().trim());
 
-        console.log('[DEBUG_SHAREPOINT] Configs filtradas por email:', result);
+        console.log(`[DEBUG_SHAREPOINT] Configs filtradas: ${result.length} encontradas`);
         return result;
     } catch (e: any) {
       console.error('[SHAREPOINT] Erro ao buscar CONFIG_OPERACAO_SAIDA_DE_ROTAS:', e.message);

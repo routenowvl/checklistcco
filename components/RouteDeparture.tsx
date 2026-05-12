@@ -633,7 +633,7 @@ const RouteDepartureView: React.FC<{
     const freshToken = await getValidToken();
     if (freshToken) return freshToken;
     // Fallback para o token em memória (pode estar próximo de expirar, mas evita quebrar a operação)
-    const fallback = currentUser?.accessToken || (window as any).__access_token;
+    const fallback = currentUser?.accessToken;
     if (fallback) return fallback;
     throw new Error('Sessão expirada. Por favor, renove sua sessão.');
   };
@@ -856,9 +856,13 @@ const RouteDepartureView: React.FC<{
         return { data: date, placa: plate };
       });
 
+      const maintToken = await getAccessToken();
       const response = await fetch(`${window.location.origin}/api/maintenance-events`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${maintToken}`
+        },
         body: JSON.stringify({ items })
       });
 

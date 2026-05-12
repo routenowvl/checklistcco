@@ -147,7 +147,7 @@ const Login: React.FC<{ onLogin: (user: User) => void }> = ({ onLogin }) => {
   // Verifica se o script do Turnstile já carregou
   useEffect(() => {
     if (!isTurnstileConfigured(TURNSTILE_SITE_KEY)) {
-      console.warn('[TURNSTILE] SITE_KEY não configurada — pulando verificação');
+      console.warn('[TURNSTILE] SITE_KEY não configurada — verificação desabilitada (apenas desenvolvimento)');
       setTurnstileLoaded(true);
       setTurnstileVerified(true);
       setTurnstileReady(true);
@@ -165,12 +165,10 @@ const Login: React.FC<{ onLogin: (user: User) => void }> = ({ onLogin }) => {
 
     const timeout = setTimeout(() => {
       if (!window.turnstile) {
-        console.warn('[TURNSTILE] Script não carregou após 5s — pulando verificação');
-        setTurnstileLoaded(true);
-        setTurnstileVerified(true);
-        setTurnstileReady(true);
+        console.error('[TURNSTILE] Script não carregou após 10s — verificação de segurança indisponível');
+        setError('Não foi possível carregar a verificação de segurança. Recarregue a página ou verifique sua conexão.');
       }
-    }, 5000);
+    }, 10000);
 
     checkTurnstile();
     return () => clearTimeout(timeout);
@@ -244,6 +242,17 @@ const Login: React.FC<{ onLogin: (user: User) => void }> = ({ onLogin }) => {
       });
 
       const data = await response.json();
+
+      if (response.status === 429) {
+        // Rate limiting server-side ativado
+        console.warn('[TURNSTILE] Rate limiting server-side:', data.error);
+        const remainingMin = data.lockedUntil
+          ? Math.ceil((data.lockedUntil - Date.now()) / 60000)
+          : LOCKOUT_MINUTES;
+        setLockoutRemaining(data.lockedUntil || Date.now() + LOCKOUT_MINUTES * 60 * 1000);
+        setError(data.error || `Muitas tentativas. Tente novamente em ${remainingMin} minutos.`);
+        return false;
+      }
 
       if (data.success) {
         console.log('[TURNSTILE] ✅ Verificação server-side aprovada');
@@ -367,6 +376,7 @@ const Login: React.FC<{ onLogin: (user: User) => void }> = ({ onLogin }) => {
             localStorage.removeItem('msal_manual_logout');
             resetRetry();
             setCurrentUser(response.account.username);
+
             onLogin({
                 email: response.account.username,
                 name: response.account.name || response.account.username,

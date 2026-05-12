@@ -5,7 +5,14 @@
       "Bash(grep -rni -E \"saida|saída|departure|envio.*mail|send.*mail|send.*email|email.*send|mail.*send|auto.*mail\" C:/Projetos/checklistcco --include=*.tsx --include=*.ts --include=*.jsx --include=*.js)",
       "Bash(grep:*)",
       "Bash(npx tsc:*)",
-      "Bash(npx vite:*)"
+      "Bash(npx vite:*)",
+      "Bash(find /c/Projetos/checklistcco -type f -name *.json -not -path */node_modules/* -not -path */.git/*)",
+      "Bash(find /c/Projetos/checklistcco -type f \\\\\\(-name *.ts -o -name *.tsx -o -name *.js -o -name *.jsx \\\\\\) -not -path */node_modules/* -not -path */.git/* -not -path */dist/*)",
+      "Bash(find C:/Projetos/checklistcco -type f \\\\\\(-name *.ts -o -name *.tsx -o -name *.js -o -name *.jsx \\\\\\))",
+      "Bash(find /c/Projetos/checklistcco -path */api/* -type f)",
+      "Bash(grep -o .{0,50}1234.{0,50} dist/assets/index-c0VLFV1n.js)",
+      "Bash(find C:/Projetos/checklistcco -type f \\\\\\(-name *.ts -o -name *.tsx -o -name *.js -o -name *.jsx -o -name *.json -o -name .env* -o -name *.config.* -o -name *.html -o -name *.md \\\\\\) ! -path */node_modules/* ! -path */.git/* ! -path */dist/*)",
+      "Bash(npm audit:*)"
     ]
   }
 }
