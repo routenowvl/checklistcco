@@ -12,7 +12,11 @@
       "Bash(find /c/Projetos/checklistcco -path */api/* -type f)",
       "Bash(grep -o .{0,50}1234.{0,50} dist/assets/index-c0VLFV1n.js)",
       "Bash(find C:/Projetos/checklistcco -type f \\\\\\(-name *.ts -o -name *.tsx -o -name *.js -o -name *.jsx -o -name *.json -o -name .env* -o -name *.config.* -o -name *.html -o -name *.md \\\\\\) ! -path */node_modules/* ! -path */.git/* ! -path */dist/*)",
-      "Bash(npm audit:*)"
+      "Bash(npm audit:*)",
+      "Bash(ls -la /c/Projetos/checklistcco/.env*)",
+      "Bash(ls -la \"C:/Projetos/checklistcco/.env\"*)",
+      "Bash(find C:/Projetos/checklistcco -type f \\\\\\(-name *.ts -o -name *.tsx -o -name *.js -o -name *.jsx -o -name *.json -o -name *.html -o -name *.css -o -name *.yaml -o -name *.yml -o -name *.vue -o -name *.py -o -name *.env -o -name *.env.* \\\\\\) ! -path */node_modules/* ! -path */.git/* ! -path */dist/*)",
+      "Bash(git:*)"
     ]
   }
 }
