@@ -5,7 +5,7 @@ import {
   getRouteWebRoutesEnvDebug,
   getTokenPreview,
   requestRouteWebToken
-} from '../utils/routeWebServer';
+} from '../utils/routeWebServer.js';
 
 type RouteWebRouteEventsBody = {
   routeId?: number | string;

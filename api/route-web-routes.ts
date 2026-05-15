@@ -5,7 +5,7 @@ import {
   getRouteWebRoutesEnvDebug,
   getTokenPreview,
   requestRouteWebToken
-} from '../utils/routeWebServer';
+} from '../utils/routeWebServer.js';
 
 type RouteWebRoutesBody = {
   plantId?: number | string;

@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { getTokenPreview, getRouteWebTokenUrl, requestRouteWebToken } from '../utils/routeWebServer';
+import { getTokenPreview, getRouteWebTokenUrl, requestRouteWebToken } from '../utils/routeWebServer.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') {

@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { getRouteWebUpstreamUrl, getTokenPreview, requestRouteWebToken } from '../utils/routeWebServer';
+import { getRouteWebUpstreamUrl, getTokenPreview, requestRouteWebToken } from '../utils/routeWebServer.js';
 
 type ProxyRequestBody = {
   path?: string;

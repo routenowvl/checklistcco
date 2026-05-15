@@ -4,9 +4,9 @@ import {
   getRouteWebRouteEventsEndpointUrl,
   getRouteWebRoutesEndpointUrl,
   requestRouteWebToken
-} from '../utils/routeWebServer';
-import { getPlantConfigsFromSharePoint, type PlantConfig } from '../utils/graphAppAuth';
-import { upsertRouteWebEvents, closeRwePool, type RouteWebEventRow } from '../utils/rweDb';
+} from '../utils/routeWebServer.js';
+import { getPlantConfigsFromSharePoint, type PlantConfig } from '../utils/graphAppAuth.js';
+import { upsertRouteWebEvents, closeRwePool, type RouteWebEventRow } from '../utils/rweDb.js';
 
 // ---------------------------------------------------------------------------
 // Helpers

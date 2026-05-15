@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { getRouteWebUpstreamUrl, getTokenPreview, requestRouteWebToken } from '../utils/routeWebServer';
+import { getRouteWebUpstreamUrl, getTokenPreview, requestRouteWebToken } from '../utils/routeWebServer.js';
 
 const parseUpstreamResponse = async (response: Response): Promise<{ contentType: string; raw: string; data: any }> => {
   const contentType = String(response.headers.get('content-type') || '');

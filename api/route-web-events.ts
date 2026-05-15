@@ -3,7 +3,7 @@ import {
   getRouteWebEventsByDateAndPlants,
   closeRwePool,
   type RouteWebEventDbRow
-} from '../utils/rweDb';
+} from '../utils/rweDb.js';
 
 export type { RouteWebEventDbRow };
 
