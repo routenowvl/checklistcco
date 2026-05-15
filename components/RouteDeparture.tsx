@@ -3885,7 +3885,7 @@ const RouteDepartureView: React.FC<{
     { id: 'operacao', label: 'OPERAÇÃO' }, { id: 'status', label: 'STATUS' }, { id: 'tempo', label: 'TEMPO' }
   ];
 
-  if (isLoading) return <div className="h-full flex flex-col items-center justify-center text-primary-500 gap-4"><Loader2 size={48} className="animate-spin" /><p className="font-bold text-[10px] uppercase tracking-widest">Carregando Grid...</p></div>;
+  if (isLoading) return <div className="h-full flex flex-col items-center justify-center text-primary-500"><Loader2 size={48} className="animate-spin" /></div>;
 
   return (
     <div className={`flex flex-col h-full p-4 overflow-hidden select-none font-sans animate-fade-in relative ${isDarkMode ? 'bg-[#020617]' : 'bg-gradient-to-br from-white via-slate-50/50 to-slate-50'}`}>
@@ -5293,73 +5293,58 @@ const RouteDepartureView: React.FC<{
 
       {isHistoryModalOpen && (
           <div className={`fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[200] flex items-center justify-center p-4 ${isHistoryFullscreen ? 'p-0' : ''}`}>
-              <div className={`bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-[2.5rem] shadow-2xl w-full flex flex-col ${isHistoryFullscreen ? 'max-w-none w-full h-full rounded-none' : 'max-w-7xl max-h-[90vh]'}`}>
-                  <div className="bg-[#1e293b] p-6 flex justify-between items-center text-white shrink-0">
-                      <div className="flex items-center gap-4">
-                          <Database size={24} />
-                          <h3 className="font-black uppercase tracking-widest text-base">Histórico Definitivo</h3>
-                          {archivedResults.length > 0 && (
-                              <span className="text-[10px] font-bold text-slate-400 bg-slate-800 px-3 py-1 rounded-full">
-                                  {archivedResults.length} registro(s)
-                              </span>
-                          )}
-                          {/* Indicador de edições pendentes */}
-                          {Object.keys(pendingHistoryEdits).length > 0 && (
-                              <span className="text-[10px] font-black uppercase tracking-widest text-amber-400 bg-amber-900/30 px-3 py-1 rounded-full border border-amber-600 animate-pulse">
-                                  {Object.keys(pendingHistoryEdits).length} alteração(ões) pendente(s) - Pressione ENTER para salvar
-                              </span>
-                          )}
-                      </div>
-                      <div className="flex items-center gap-2">
-                          {/* Botão de salvar edições pendentes */}
-                          {canEditData && Object.keys(pendingHistoryEdits).length > 0 && (
-                              <button
-                                  onClick={savePendingHistoryEdits}
-                                  disabled={isSyncing}
-                                  className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black uppercase text-[10px] rounded-xl shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
-                                  title="Salvar alterações (Enter)"
-                              >
-                                  {isSyncing ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-                                  SALVAR ({Object.keys(pendingHistoryEdits).length})
-                              </button>
-                          )}
-                          <button
-                              onClick={() => setIsHistoryFullscreen(!isHistoryFullscreen)}
-                              className="p-2 hover:bg-slate-700 rounded-lg transition-colors"
-                              title={isHistoryFullscreen ? 'Sair da tela cheia' : 'Tela cheia'}
-                          >
-                              {isHistoryFullscreen ? <Minimize2 size={20} /> : <Maximize2 size={20} />}
-                          </button>
-                          <button onClick={() => { setIsHistoryModalOpen(false); setHistoryEditWarning(null); setEditingHistoryId(null); setEditingHistoryField(null); setPendingHistoryEdits({}); }} className="p-2 hover:bg-slate-700 rounded-lg transition-colors">
-                              <X size={28} />
-                          </button>
-                      </div>
-                  </div>
+              <div className={`bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-[2.5rem] shadow-2xl w-full flex flex-col ${isHistoryFullscreen ? 'max-w-none w-full h-full rounded-none' : 'max-w-7xl max-h-[94vh]'}`}>
                   {historyEditWarning && (
-                      <div className="mx-6 mt-4 mb-2 px-4 py-3 rounded-xl border border-amber-300 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-700 text-amber-800 dark:text-amber-200 text-[11px] font-bold flex items-start gap-2">
+                      <div className="mx-5 mt-2 mb-1 px-3 py-2 rounded-xl border border-amber-300 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-700 text-amber-800 dark:text-amber-200 text-[10px] font-bold flex items-start gap-2">
                           <AlertTriangle size={16} className="mt-0.5 shrink-0" />
                           <span>{historyEditWarning}</span>
                       </div>
                   )}
-                  <div className="p-6 bg-slate-50 dark:bg-slate-900 border-b dark:border-slate-800 grid grid-cols-4 gap-4 shrink-0">
-                      <input type="date" value={histStart} onChange={e => setHistStart(e.target.value)} className="p-3 border dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-[11px] font-bold outline-none dark:text-white" />
-                      <input type="date" value={histEnd} onChange={e => setHistEnd(e.target.value)} className="p-3 border dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-[11px] font-bold outline-none dark:text-white" />
-                      <button onClick={handleSearchArchive} disabled={isSearchingArchive} className="py-3 bg-primary-600 text-white font-black uppercase text-[11px] rounded-xl flex items-center justify-center gap-2 hover:bg-primary-700 shadow-lg">
+                  <div className="px-4 py-2 bg-slate-50 dark:bg-slate-900 border-b dark:border-slate-800 shrink-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                      <input type="date" value={histStart} onChange={e => setHistStart(e.target.value)} className="px-3 py-2 border dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-[11px] font-bold outline-none dark:text-white" />
+                      <input type="date" value={histEnd} onChange={e => setHistEnd(e.target.value)} className="px-3 py-2 border dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-[11px] font-bold outline-none dark:text-white" />
+                      <button onClick={handleSearchArchive} disabled={isSearchingArchive} className="px-4 py-2 min-w-[128px] bg-primary-600 text-white font-black uppercase text-[11px] rounded-xl flex items-center justify-center gap-2 whitespace-nowrap hover:bg-primary-700 shadow-lg">
                           {isSearchingArchive ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />} BUSCAR
                       </button>
                       {archivedResults.length > 0 && (
                           <button
                               onClick={handleExportToExcel}
-                              className="py-3 bg-emerald-600 text-white font-black uppercase text-[11px] rounded-xl flex items-center justify-center gap-2 hover:bg-emerald-700 shadow-lg"
+                              className="px-4 py-2 min-w-[116px] bg-emerald-600 text-white font-black uppercase text-[11px] rounded-xl flex items-center justify-center gap-2 whitespace-nowrap hover:bg-emerald-700 shadow-lg"
                               title="Exportar para Excel (.xlsx)"
                           >
                               <Table size={16} /> EXCEL
                           </button>
                       )}
+                      {canEditData && Object.keys(pendingHistoryEdits).length > 0 && (
+                          <button
+                              onClick={savePendingHistoryEdits}
+                              disabled={isSyncing}
+                              className="flex items-center gap-2 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black uppercase text-[10px] rounded-xl shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                              title="Salvar alterações (Enter)"
+                          >
+                              {isSyncing ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                              SALVAR ({Object.keys(pendingHistoryEdits).length})
+                          </button>
+                      )}
+                      <span className="ml-auto text-[10px] font-bold text-slate-500 dark:text-slate-400">
+                          {archivedResults.length} registro(s)
+                      </span>
+                      <button
+                          onClick={() => setIsHistoryFullscreen(!isHistoryFullscreen)}
+                          className="p-1.5 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors"
+                          title={isHistoryFullscreen ? 'Sair da tela cheia' : 'Tela cheia'}
+                      >
+                          {isHistoryFullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
+                      </button>
+                      <button onClick={() => { setIsHistoryModalOpen(false); setHistoryEditWarning(null); setEditingHistoryId(null); setEditingHistoryField(null); setPendingHistoryEdits({}); }} className="p-1.5 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors">
+                          <X size={20} />
+                      </button>
+                      </div>
                   </div>
                   {/* Cards de Desempenho (FILTRADO) - Atualizam conforme filtros aplicados */}
                   {filteredArchivedResults.length > 0 && (
-                      <div className="px-6 py-4 bg-slate-100 dark:bg-slate-800/50 border-b dark:border-slate-800 flex items-center gap-4 shrink-0">
+                      <div className="px-5 py-2 bg-slate-100 dark:bg-slate-800/50 border-b dark:border-slate-800 flex items-center gap-3 shrink-0">
                           <div className="flex items-center gap-2">
                               <Database size={18} className="text-slate-400" />
                               <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">Desempenho do Período</span>
@@ -5369,11 +5354,11 @@ const RouteDepartureView: React.FC<{
                                   </span>
                               )}
                           </div>
-                          <div className="flex items-center gap-3 ml-auto">
-                              <div className={`flex items-center gap-3 px-5 py-2 rounded-xl min-w-[130px] ${isDarkMode ? 'bg-emerald-900/30 border border-emerald-700/50' : 'bg-emerald-100 border border-emerald-300'}`}>
+                          <div className="flex items-center gap-2 ml-auto">
+                              <div className={`flex items-center gap-2 px-4 py-1.5 rounded-xl min-w-[120px] ${isDarkMode ? 'bg-emerald-900/30 border border-emerald-700/50' : 'bg-emerald-100 border border-emerald-300'}`}>
                                 <div className="text-center flex-1">
                                   <p className={`text-[8px] font-black uppercase tracking-wider mb-0.5 ${isDarkMode ? 'text-emerald-400' : 'text-emerald-700'}`}>Geral</p>
-                                  <p className={`text-xl font-black leading-none ${isDarkMode ? 'text-emerald-400' : 'text-emerald-700'}`}>{
+                                  <p className={`text-base font-black leading-none ${isDarkMode ? 'text-emerald-400' : 'text-emerald-700'}`}>{
                                     (() => {
                                       const total = filteredArchivedResults.length;
                                       const okPrevistoCount = filteredArchivedResults.filter(r => r.statusOp === 'OK' || r.statusOp === 'Previsto').length;
@@ -5383,10 +5368,10 @@ const RouteDepartureView: React.FC<{
                                 </div>
                                 <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full shrink-0"></div>
                               </div>
-                              <div className={`flex items-center gap-3 px-5 py-2 rounded-xl min-w-[130px] ${isDarkMode ? 'bg-blue-900/30 border border-blue-700/50' : 'bg-blue-100 border border-blue-300'}`}>
+                              <div className={`flex items-center gap-2 px-4 py-1.5 rounded-xl min-w-[120px] ${isDarkMode ? 'bg-blue-900/30 border border-blue-700/50' : 'bg-blue-100 border border-blue-300'}`}>
                                 <div className="text-center flex-1">
                                   <p className={`text-[8px] font-black uppercase tracking-wider mb-0.5 ${isDarkMode ? 'text-blue-400' : 'text-blue-700'}`}>Interno</p>
-                                  <p className={`text-xl font-black leading-none ${isDarkMode ? 'text-blue-400' : 'text-blue-700'}`}>{
+                                  <p className={`text-base font-black leading-none ${isDarkMode ? 'text-blue-400' : 'text-blue-700'}`}>{
                                     (() => {
                                       const total = filteredArchivedResults.length;
                                       const justificativas = ['Manutenção', 'Mão de obra', 'Logística'];
@@ -5919,11 +5904,6 @@ const RouteDepartureView: React.FC<{
                               )}
                           </div>
                       )}
-                  </div>
-                  <div className="p-4 bg-slate-100 dark:bg-slate-800 border-t dark:border-slate-700 shrink-0">
-                      <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 text-center">
-                          💡 Clique em qualquer célula para editar • Os dados são sincronizados com o SharePoint
-                      </p>
                   </div>
               </div>
           </div>

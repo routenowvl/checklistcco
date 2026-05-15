@@ -1,0 +1,241 @@
+import pg from 'pg';
+
+const { Pool } = pg;
+
+let pool: pg.Pool | null = null;
+
+const getPool = (): pg.Pool => {
+  if (pool) return pool;
+
+  const dbUrl = String(process.env.RWE_DB_URL || '').trim();
+  if (!dbUrl) {
+    throw new Error('RWE_DB_URL não configurada');
+  }
+
+  const ssl = String(process.env.RWE_DB_SSL || 'true').trim().toLowerCase();
+  const schema = String(process.env.RWE_DB_SCHEMA || 'public').trim();
+
+  pool = new Pool({
+    connectionString: dbUrl,
+    ssl: ssl === 'true' || ssl === '1' ? { rejectUnauthorized: false } : undefined,
+    max: 4,
+    idleTimeoutMillis: 15_000,
+    connectionTimeoutMillis: 8_000
+  });
+
+  pool.on('connect', (client) => {
+    client.query(`SET search_path TO ${schema}`);
+  });
+
+  return pool;
+};
+
+export type RouteWebEventRow = {
+  route_id: number;
+  event_id: number | null;
+  plant_id: number;
+  filial: string;
+  operacao: string;
+  rota_codigo: string;
+  motorista: string;
+  placa: string;
+  type_name: string;
+  reference: string;
+  reference_code: string;
+  status: string;
+  executed: boolean | null;
+  expected_arrival: string | null;
+  actual_arrival: string | null;
+  expected_departure: string | null;
+  actual_departure: string | null;
+  motivo: string;
+  status_type: string;
+  occurrence_id: number | null;
+  occurrence_type_id: number | null;
+  occurrence_type_description: string;
+  occurrence_inserted_by: string;
+  occurrence_inserted_at: string | null;
+  event_created_at: string | null;
+  event_updated_at: string | null;
+  data_referencia: string;
+};
+
+const toNullIfEmpty = (value: unknown): string | null => {
+  const str = String(value ?? '').trim();
+  return str || null;
+};
+
+const toBooleanOrNull = (value: unknown): boolean | null => {
+  if (value == null) return null;
+  if (typeof value === 'boolean') return value;
+  const raw = String(value).trim().toLowerCase();
+  if (raw === 'true' || raw === '1') return true;
+  if (raw === 'false' || raw === '0') return false;
+  return null;
+};
+
+export const upsertRouteWebEvents = async (rows: RouteWebEventRow[]): Promise<number> => {
+  if (rows.length === 0) return 0;
+
+  const client = getPool();
+  let inserted = 0;
+
+  const sql = `
+    INSERT INTO route_web_events (
+      route_id, event_id, plant_id, filial, operacao, rota_codigo, motorista, placa,
+      type_name, reference, reference_code, status, executed,
+      expected_arrival, actual_arrival, expected_departure, actual_departure,
+      motivo, status_type,
+      occurrence_id, occurrence_type_id, occurrence_type_description,
+      occurrence_inserted_by, occurrence_inserted_at,
+      event_created_at, event_updated_at, data_referencia
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)
+    ON CONFLICT (route_id, event_id, occurrence_id, data_referencia)
+    DO UPDATE SET
+      filial = EXCLUDED.filial,
+      operacao = EXCLUDED.operacao,
+      rota_codigo = EXCLUDED.rota_codigo,
+      motorista = EXCLUDED.motorista,
+      placa = EXCLUDED.placa,
+      type_name = EXCLUDED.type_name,
+      reference = EXCLUDED.reference,
+      reference_code = EXCLUDED.reference_code,
+      status = EXCLUDED.status,
+      executed = EXCLUDED.executed,
+      expected_arrival = EXCLUDED.expected_arrival,
+      actual_arrival = EXCLUDED.actual_arrival,
+      expected_departure = EXCLUDED.expected_departure,
+      actual_departure = EXCLUDED.actual_departure,
+      motivo = EXCLUDED.motivo,
+      status_type = EXCLUDED.status_type,
+      occurrence_type_id = EXCLUDED.occurrence_type_id,
+      occurrence_type_description = EXCLUDED.occurrence_type_description,
+      occurrence_inserted_by = EXCLUDED.occurrence_inserted_by,
+      occurrence_inserted_at = EXCLUDED.occurrence_inserted_at,
+      event_created_at = EXCLUDED.event_created_at,
+      event_updated_at = EXCLUDED.event_updated_at,
+      fetched_at = NOW()
+  `;
+
+  for (const row of rows) {
+    const values = [
+      row.route_id,
+      row.event_id,
+      row.plant_id,
+      row.filial,
+      row.operacao,
+      row.rota_codigo,
+      row.motorista,
+      row.placa,
+      row.type_name,
+      row.reference,
+      row.reference_code,
+      row.status,
+      row.executed,
+      toNullIfEmpty(row.expected_arrival),
+      toNullIfEmpty(row.actual_arrival),
+      toNullIfEmpty(row.expected_departure),
+      toNullIfEmpty(row.actual_departure),
+      row.motivo,
+      row.status_type,
+      row.occurrence_id,
+      row.occurrence_type_id,
+      row.occurrence_type_description,
+      row.occurrence_inserted_by,
+      toNullIfEmpty(row.occurrence_inserted_at),
+      toNullIfEmpty(row.event_created_at),
+      toNullIfEmpty(row.event_updated_at),
+      row.data_referencia
+    ];
+
+    await client.query(sql, values);
+    inserted += 1;
+  }
+
+  return inserted;
+};
+
+export const deleteRouteWebEventsByDate = async (dataReferencia: string): Promise<number> => {
+  const client = getPool();
+  const result = await client.query(
+    'DELETE FROM route_web_events WHERE data_referencia = $1',
+    [dataReferencia]
+  );
+  return result.rowCount ?? 0;
+};
+
+export type RouteWebEventDbRow = {
+  id: number;
+  route_id: number;
+  event_id: number | null;
+  plant_id: number;
+  filial: string;
+  operacao: string;
+  rota_codigo: string;
+  motorista: string;
+  placa: string;
+  type_name: string;
+  reference: string;
+  reference_code: string;
+  status: string;
+  executed: boolean | null;
+  expected_arrival: string | null;
+  actual_arrival: string | null;
+  expected_departure: string | null;
+  actual_departure: string | null;
+  motivo: string;
+  status_type: string;
+  is_already_launched: boolean;
+  occurrence_id: number | null;
+  occurrence_type_id: number | null;
+  occurrence_type_description: string;
+  occurrence_inserted_by: string;
+  occurrence_inserted_at: string | null;
+  event_created_at: string | null;
+  event_updated_at: string | null;
+  fetched_at: string;
+  data_referencia: string;
+};
+
+export const getRouteWebEventsByDateAndPlants = async (
+  dataReferencia: string,
+  plantIds: number[]
+): Promise<RouteWebEventDbRow[]> => {
+  const client = getPool();
+
+  if (plantIds.length === 0) {
+    const result = await client.query(
+      'SELECT * FROM route_web_events WHERE data_referencia = $1 ORDER BY route_id, event_id, occurrence_id',
+      [dataReferencia]
+    );
+    return result.rows as RouteWebEventDbRow[];
+  }
+
+  const placeholders = plantIds.map((_, i) => `$${i + 2}`).join(',');
+  const result = await client.query(
+    `SELECT * FROM route_web_events WHERE data_referencia = $1 AND plant_id = ANY(ARRAY[${placeholders}]) ORDER BY route_id, event_id, occurrence_id`,
+    [dataReferencia, ...plantIds]
+  );
+  return result.rows as RouteWebEventDbRow[];
+};
+
+export const markEventsAsLaunched = async (
+  dataReferencia: string,
+  eventIds: number[]
+): Promise<number> => {
+  if (eventIds.length === 0) return 0;
+  const client = getPool();
+  const placeholders = eventIds.map((_, i) => `$${i + 2}`).join(',');
+  const result = await client.query(
+    `UPDATE route_web_events SET is_already_launched = true WHERE data_referencia = $1 AND event_id = ANY(ARRAY[${placeholders}])`,
+    [dataReferencia, ...eventIds]
+  );
+  return result.rowCount ?? 0;
+};
+
+export const closeRwePool = async (): Promise<void> => {
+  if (pool) {
+    await pool.end();
+    pool = null;
+  }
+};

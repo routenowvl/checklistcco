@@ -304,6 +304,71 @@ function resolveFieldName(mapping: Record<string, string>, target: string): stri
   return mapping[normalized] || target;
 }
 
+function parseNumericId(value: unknown): number | null {
+  if (value == null) return null;
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.trunc(value);
+  }
+
+  const raw = String(value).trim();
+  if (!raw) return null;
+
+  const match = raw.match(/-?\d+(?:[.,]\d+)?/);
+  if (!match) return null;
+
+  const parsed = Number(match[0].replace(',', '.'));
+  if (!Number.isFinite(parsed)) return null;
+  return Math.trunc(parsed);
+}
+
+function extractPlantFieldValue(
+  fields: Record<string, any>,
+  mapping: Record<string, string>
+): any {
+  const candidates = [
+    resolveFieldName(mapping, 'Plant_id'),
+    resolveFieldName(mapping, 'Plant Id'),
+    resolveFieldName(mapping, 'PlantId'),
+    resolveFieldName(mapping, 'plant_id'),
+    resolveFieldName(mapping, 'IdPlant'),
+    resolveFieldName(mapping, 'ID_PLANT')
+  ];
+
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const value = fields?.[candidate];
+    if (value != null && String(value).trim() !== '') {
+      return value;
+    }
+  }
+
+  for (const [key, value] of Object.entries(fields || {})) {
+    const normalizedKey = normalizeString(key);
+    if (normalizedKey.includes('plantid') || normalizedKey.includes('idplant')) {
+      if (value != null && String(value).trim() !== '') {
+        return value;
+      }
+    }
+  }
+
+  return null;
+}
+
+function collectPlantLikeFieldsForDebug(fields: Record<string, any>): Record<string, any> {
+  const result: Record<string, any> = {};
+  for (const [key, value] of Object.entries(fields || {})) {
+    const normalizedKey = normalizeString(key);
+    if (
+      normalizedKey.includes('plant') ||
+      normalizedKey.includes('filial') ||
+      normalizedKey.includes('idplant')
+    ) {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
 export const SharePointService = {
   parseEmailList(raw: string): string[] {
     return String(raw || '')
@@ -358,7 +423,7 @@ export const SharePointService = {
 
       const siteId = await getResolvedSiteId(token);
       const list = await findListByIdOrName(siteId, 'CONFIG_OPERACAO_SAIDA_DE_ROTAS', token);
-      const { mapping } = await getListColumnMapping(siteId, list.id, token);
+      const { mapping } = await getListColumnMapping(siteId, list.id, token, forceRefresh);
 
       const timestamp = Date.now();
       const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&t=${timestamp}`, token);
@@ -367,11 +432,13 @@ export const SharePointService = {
 
       const result = (data.value || []).map((item: any): RouteConfig => {
         const f = item.fields;
+        const plantRaw = extractPlantFieldValue(f, mapping);
         const config = {
           operacao: String(f[resolveFieldName(mapping, 'OPERACAO')] || ""),
           email: String(f[resolveFieldName(mapping, 'EMAIL')] || "").toString().toLowerCase().trim(),
           tolerancia: String(f[resolveFieldName(mapping, 'TOLERANCIA')] || "00:00:00"),
           nomeExibicao: String(f[resolveFieldName(mapping, 'NomeExibicao')] || String(f[resolveFieldName(mapping, 'OPERACAO')] || "")),
+          plantId: parseNumericId(plantRaw),
           Conteudo: String(f[resolveFieldName(mapping, 'Conteudo')] || ""),
           ConteudoNcoletas: String(f[resolveFieldName(mapping, 'ConteudoNcoletas')] || ""),
           ultimoEnvioSaida: String(f[resolveFieldName(mapping, 'UltimoEnvioSaida')] || ""),
@@ -385,6 +452,7 @@ export const SharePointService = {
         };
         console.log('[DEBUG_SHAREPOINT] Config item:', {
           operacao: config.operacao,
+          email: config.email,
           ultimoEnvioSaida_raw: f[resolveFieldName(mapping, 'UltimoEnvioSaida')],
           ultimoEnvioSaida: config.ultimoEnvioSaida,
           Status: config.Status,
@@ -393,6 +461,9 @@ export const SharePointService = {
           ConteudoLength: config.Conteudo?.length || 0,
           ConteudoNcoletasLength: config.ConteudoNcoletas?.length || 0,
           CodigoKmm: config.CodigoKmm,
+          plantRaw,
+          plantId: config.plantId,
+          plantLikeFields: collectPlantLikeFieldsForDebug(f),
           UltimoEnvioResumoSaida: config.UltimoEnvioResumoSaida,
           StatusResumoSaida: config.StatusResumoSaida
         });
@@ -817,6 +888,15 @@ export const SharePointService = {
 
       const editableConfigs = allConfigs.filter((config) => config.email === normalizedEmail);
       if (editableConfigs.length > 0) {
+        console.log('[DEBUG_SHAREPOINT_ACCESS] Modo editor:', {
+          userEmail: normalizedEmail,
+          totalAllConfigs: allConfigs.length,
+          editableCount: editableConfigs.length,
+          editablePlantIds: editableConfigs.map((cfg) => ({
+            operacao: cfg.operacao,
+            plantId: cfg.plantId
+          }))
+        });
         return { configs: editableConfigs, canEdit: true };
       }
 
@@ -832,6 +912,20 @@ export const SharePointService = {
       const readableConfigs = allConfigs.filter((config) =>
         allowedOps.has(String(config.operacao || '').trim().toUpperCase())
       );
+
+      console.log('[DEBUG_SHAREPOINT_ACCESS] Modo visualização:', {
+        userEmail: normalizedEmail,
+        totalAllConfigs: allConfigs.length,
+        viewerEntries: viewerEntries
+          .filter((entry) => entry.email === normalizedEmail)
+          .map((entry) => entry.operacao),
+        allowedOps: Array.from(allowedOps),
+        readableCount: readableConfigs.length,
+        readablePlantIds: readableConfigs.map((cfg) => ({
+          operacao: cfg.operacao,
+          plantId: cfg.plantId
+        }))
+      });
 
       return { configs: readableConfigs, canEdit: false };
     } catch (e: any) {

@@ -1987,9 +1987,8 @@ const NonCollectionsView: React.FC<{
   if (isLoading) {
     return (
       <div className="h-full flex items-center justify-center">
-        <div className="flex flex-col items-center gap-4">
+        <div className="flex items-center">
           <Loader2 size={40} className="animate-spin text-blue-600" />
-          <p className="font-bold uppercase text-sm tracking-widest text-slate-500">Carregando...</p>
         </div>
       </div>
     );
@@ -3714,76 +3713,25 @@ const NonCollectionsView: React.FC<{
       {isHistoryModalOpen && (
         <div className={`fixed inset-0 bg-black/80 backdrop-blur-md z-[110] flex items-center justify-center animate-in zoom-in duration-300 ${isHistoryFullscreen ? 'p-0' : 'p-4'}`}>
           <div className={`rounded-[2.5rem] shadow-2xl w-full overflow-hidden border flex flex-col ${
-            isHistoryFullscreen ? 'max-w-none w-full h-full rounded-none' : 'max-w-7xl max-h-[90vh]'
+            isHistoryFullscreen ? 'max-w-none w-full h-full rounded-none' : 'max-w-7xl max-h-[94vh]'
           } ${isDarkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'}`}>
-            {/* Header */}
-            <div className={`p-6 flex justify-between items-center shrink-0 ${
-              isDarkMode ? 'bg-slate-800' : 'bg-slate-100'
-            }`}>
-              <div className="flex items-center gap-4">
-                <Database size={32} className={isDarkMode ? 'text-blue-400' : 'text-blue-600'} />
-                <div>
-                  <h3 className={`text-xl font-black uppercase tracking-tight ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Histórico de Não Coletas</h3>
-                  <p className={`text-xs font-bold uppercase tracking-widest ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Busca na lista nao_coletas_web_hist</p>
-                </div>
-                {archivedResults.length > 0 && (
-                  <span className={`text-[10px] font-bold px-3 py-1 rounded-full ${
-                    isDarkMode ? 'text-slate-400 bg-slate-700' : 'text-slate-500 bg-slate-200'
-                  }`}>
-                    {archivedResults.length} registro(s)
-                  </span>
-                )}
-                {canEditData && Object.keys(pendingHistoryEdits).length > 0 && (
-                  <span className="text-[10px] font-black uppercase tracking-widest text-amber-500 bg-amber-100 dark:bg-amber-900/30 px-3 py-1 rounded-full border border-amber-300 dark:border-amber-700">
-                    {Object.keys(pendingHistoryEdits).length} alteração(ões) pendente(s)
-                  </span>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                {canEditData && Object.keys(pendingHistoryEdits).length > 0 && (
-                  <button
-                    onClick={savePendingHistoryEdits}
-                    disabled={isSavingHistoryEdits}
-                    className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black uppercase text-[10px] tracking-widest transition-all disabled:opacity-60"
-                    title="Salvar alterações (Enter)"
-                  >
-                    {isSavingHistoryEdits ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-                    Salvar
-                  </button>
-                )}
-                <button
-                  onClick={() => setIsHistoryFullscreen(!isHistoryFullscreen)}
-                  className={`p-2 rounded-lg transition-all ${isDarkMode ? 'hover:bg-slate-700' : 'hover:bg-slate-200'}`}
-                  title={isHistoryFullscreen ? 'Sair da tela cheia' : 'Tela cheia'}
-                >
-                  {isHistoryFullscreen ? <Minimize2 size={20} className={isDarkMode ? 'text-slate-400' : 'text-slate-600'} /> : <Maximize2 size={20} className={isDarkMode ? 'text-slate-400' : 'text-slate-600'} />}
-                </button>
-                <button
-                  onClick={closeHistoryModal}
-                  className={`p-2 rounded-full transition-all ${isDarkMode ? 'hover:bg-slate-700' : 'hover:bg-slate-200'}`}
-                >
-                  <X size={24} className={isDarkMode ? 'text-slate-400' : 'text-slate-600'} />
-                </button>
-              </div>
-            </div>
-
             {historyEditWarning && (
-              <div className="mx-6 mt-4 mb-2 px-4 py-3 rounded-xl border border-amber-300 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-700 text-amber-800 dark:text-amber-200 text-[11px] font-bold flex items-start gap-2">
+              <div className="mx-5 mt-2 mb-1 px-3 py-2 rounded-xl border border-amber-300 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-700 text-amber-800 dark:text-amber-200 text-[10px] font-bold flex items-start gap-2">
                 <AlertTriangle size={16} className="mt-0.5 shrink-0" />
                 <span>{historyEditWarning}</span>
               </div>
             )}
 
             {/* Filtros */}
-            <div className={`p-4 border-b shrink-0 ${isDarkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'}`}>
-              <div className="flex items-center gap-4 flex-wrap">
+            <div className={`px-5 py-3 border-b shrink-0 ${isDarkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'}`}>
+              <div className="flex items-center gap-3 flex-wrap">
                 <div className="flex items-center gap-2">
                   <label className={`text-[10px] font-black uppercase ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Início:</label>
                   <input
                     type="date"
                     value={histStart}
                     onChange={(e) => setHistStart(e.target.value)}
-                    className={`p-2 border rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500 ${
+                    className={`px-3 py-1.5 border rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500 ${
                       isDarkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-white border-slate-300 text-slate-800'
                     }`}
                   />
@@ -3794,7 +3742,7 @@ const NonCollectionsView: React.FC<{
                     type="date"
                     value={histEnd}
                     onChange={(e) => setHistEnd(e.target.value)}
-                    className={`p-2 border rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500 ${
+                    className={`px-3 py-1.5 border rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500 ${
                       isDarkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-white border-slate-300 text-slate-800'
                     }`}
                   />
@@ -3802,21 +3750,32 @@ const NonCollectionsView: React.FC<{
                 <button
                   onClick={handleSearchArchive}
                   disabled={isSearchingArchive}
-                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-black uppercase text-[10px] tracking-widest transition-all shadow-lg disabled:opacity-60"
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-black uppercase text-[10px] tracking-widest transition-all shadow-lg disabled:opacity-60"
                 >
                   {isSearchingArchive ? <><Loader2 size={16} className="animate-spin" /> Buscando...</> : <><Search size={16} /> Buscar</>}
                 </button>
                 {filteredArchivedResults.length > 0 && (
                   <button
                     onClick={handleExportToExcel}
-                    className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black uppercase text-[10px] tracking-widest transition-all shadow-lg"
+                    className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black uppercase text-[10px] tracking-widest transition-all shadow-lg"
                     title="Exportar para Excel (.xlsx)"
                   >
                     <Table size={16} /> Excel
                   </button>
                 )}
+                {canEditData && Object.keys(pendingHistoryEdits).length > 0 && (
+                  <button
+                    onClick={savePendingHistoryEdits}
+                    disabled={isSavingHistoryEdits}
+                    className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black uppercase text-[10px] tracking-widest transition-all disabled:opacity-60"
+                    title="Salvar alterações (Enter)"
+                  >
+                    {isSavingHistoryEdits ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                    Salvar
+                  </button>
+                )}
                 <span className={`text-[10px] font-bold ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>
-                  {filteredArchivedResults.length} resultado(s)
+                  {filteredArchivedResults.length} resultado(s) • {archivedResults.length} registro(s)
                 </span>
                 {hasHistoryActiveFilters && (
                   <span className={`text-[10px] font-bold px-2 py-1 rounded-full ${
@@ -3833,6 +3792,19 @@ const NonCollectionsView: React.FC<{
                     Limpar Filtros
                   </button>
                 )}
+                <button
+                  onClick={() => setIsHistoryFullscreen(!isHistoryFullscreen)}
+                  className={`p-1.5 rounded-lg transition-all ${isDarkMode ? 'hover:bg-slate-700' : 'hover:bg-slate-200'}`}
+                  title={isHistoryFullscreen ? 'Sair da tela cheia' : 'Tela cheia'}
+                >
+                  {isHistoryFullscreen ? <Minimize2 size={18} className={isDarkMode ? 'text-slate-400' : 'text-slate-600'} /> : <Maximize2 size={18} className={isDarkMode ? 'text-slate-400' : 'text-slate-600'} />}
+                </button>
+                <button
+                  onClick={closeHistoryModal}
+                  className={`p-1.5 rounded-full transition-all ${isDarkMode ? 'hover:bg-slate-700' : 'hover:bg-slate-200'}`}
+                >
+                  <X size={20} className={isDarkMode ? 'text-slate-400' : 'text-slate-600'} />
+                </button>
               </div>
             </div>
 

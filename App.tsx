@@ -8,6 +8,7 @@ import NonCollectionsView from './components/NonCollectionsView';
 import SendReportView from './components/SendReportView';
 import MotoristasView from './components/MotoristasView';
 import ViewerUsersView from './components/ViewerUsersView';
+import RouteWebLabView from './components/RouteWebLabView';
 import Login from './components/Login';
 import LoadingScreen from './components/LoadingScreen';
 import PWAInstallPrompt from './components/PWAInstallPrompt';
@@ -426,6 +427,7 @@ const AppContent = () => {
                   <SidebarLink to="/resumo" icon={TowerControl} label="Resumo" active={window.location.hash === '#/resumo'} collapsed={collapsed} />
                   <SidebarLink to="/history" icon={History} label="Histórico" active={window.location.hash === '#/history'} collapsed={collapsed} />
                   <SidebarLink to="/motoristas" icon={Users} label="Motoristas" active={window.location.hash === '#/motoristas'} collapsed={collapsed} />
+                  <SidebarLink to="/route-web" icon={Settings2} label="Route Web" active={window.location.hash === '#/route-web'} collapsed={collapsed} />
                   <SidebarLink to="/usuarios-visualizacao" icon={UserPlus} label="Usuários" active={window.location.hash === '#/usuarios-visualizacao'} collapsed={collapsed} />
                 </>
               )}
@@ -496,6 +498,7 @@ const AppContent = () => {
                 <Route path="/resumo" element={<SendReportView currentUser={currentUser} />} />
                 <Route path="/history" element={<HistoryViewer currentUser={currentUser} />} />
                 <Route path="/motoristas" element={<MotoristasView currentUser={currentUser} />} />
+                <Route path="/route-web" element={<RouteWebLabView currentUser={currentUser} />} />
                 <Route path="/usuarios-visualizacao" element={<ViewerUsersView currentUser={currentUser} />} />
               </>
             )}
