@@ -27,7 +27,7 @@ type RouteWebLabResult = {
   failedRouteIds: Array<{ routeId: number; error: string; status?: number }>;
 };
 
-type CollectionFilterTab = 'nao-coletas';
+type CollectionFilterTab = 'nao-coletas' | 'coletas-previstas';
 
 type CollectionRow = {
   key: string;
@@ -44,8 +44,8 @@ type CollectionRow = {
   horarioPrevisto: string;
   horarioRealizado: string;
   motivo: string;
-  statusLabel: 'Realizada' | 'Pendente' | 'Não Coleta';
-  statusType: 'realizada' | 'pendente' | 'nao-coleta';
+  statusLabel: 'Realizada' | 'Pendente' | 'Não Coleta' | 'Prevista';
+  statusType: 'realizada' | 'pendente' | 'nao-coleta' | 'coleta-prevista';
   rawStatus: string;
   typeName: string;
   operacao: string;
@@ -348,12 +348,14 @@ const formatDateBR = (value: unknown): string => {
 const getStatusBadgeClass = (type: CollectionRow['statusType']): string => {
   if (type === 'realizada') return 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30';
   if (type === 'nao-coleta') return 'bg-rose-500/15 text-rose-300 border border-rose-500/30';
+  if (type === 'coleta-prevista') return 'bg-amber-500/15 text-amber-300 border border-amber-500/30';
   return 'bg-amber-500/15 text-amber-300 border border-amber-500/30';
 };
 
 const getStatusPriority = (statusType: CollectionRow['statusType']): number => {
   if (statusType === 'nao-coleta') return 0;
   if (statusType === 'pendente') return 1;
+  if (statusType === 'coleta-prevista') return 3;
   return 2;
 };
 
@@ -788,6 +790,7 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
         const plantId = toNumericId(row.plant_id) || 0;
         const filial = String(row.filial || plantDisplayMap.get(plantId) || `Plant ${plantId}`).trim();
         const isLaunched = Boolean(row.is_already_launched);
+        const isColetaPrevista = String(row.status_type || '') === 'coleta-prevista';
 
         return {
           key: `${routeId || 'sem-rota'}-${eventRowId || index}`,
@@ -802,10 +805,10 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
           motorista: String(row.motorista || '-'),
           placa: String(row.placa || '-'),
           horarioPrevisto: formatHour(row.expected_arrival || row.expected_departure || row.event_created_at),
-          horarioRealizado: formatHour(row.actual_arrival || row.actual_departure || row.event_updated_at),
+          horarioRealizado: isColetaPrevista ? '--' : formatHour(row.actual_arrival || row.actual_departure || row.event_updated_at),
           motivo: String(row.motivo || '').trim(),
-          statusLabel: 'Não Coleta' as const,
-          statusType: 'nao-coleta' as const,
+          statusLabel: isColetaPrevista ? ('Prevista' as const) : ('Não Coleta' as const),
+          statusType: isColetaPrevista ? ('coleta-prevista' as const) : ('nao-coleta' as const),
           rawStatus: String(row.status || ''),
           typeName: String(row.type_name || ''),
           operacao: String(row.operacao || filial).trim(),
@@ -891,7 +894,11 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
   const rowsForExcelFilters = useMemo(() => {
     let rows = collectionRows;
 
-    rows = rows.filter((row) => row.statusType === 'nao-coleta');
+    if (activeTab === 'nao-coletas') {
+      rows = rows.filter((row) => row.statusType === 'nao-coleta');
+    } else if (activeTab === 'coletas-previstas') {
+      rows = rows.filter((row) => row.statusType === 'coleta-prevista');
+    }
 
     if (filialFilter !== 'todas') {
       rows = rows.filter((row) => row.filial === filialFilter);
@@ -910,7 +917,7 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     }
 
     return rows;
-  }, [collectionRows, filialFilter, launchStatusFilter, searchText]);
+  }, [collectionRows, filialFilter, launchStatusFilter, searchText, activeTab]);
 
   const excelFilterOptionsByColumn = useMemo(() => {
     const next: Record<ExcelFilterColumn, string[]> = {
@@ -968,12 +975,14 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
   const tabCounts = useMemo(() => {
     const naoColetas = collectionRows.filter((row) => row.statusType === 'nao-coleta').length;
+    const coletasPrevistas = collectionRows.filter((row) => row.statusType === 'coleta-prevista').length;
 
     return {
       todas: naoColetas,
       realizadas: 0,
       pendentes: 0,
-      'nao-coletas': naoColetas
+      'nao-coletas': naoColetas,
+      'coletas-previstas': coletasPrevistas
     };
   }, [collectionRows]);
 
@@ -1072,7 +1081,11 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     }, {});
 
     let afterTab = collectionRows;
-    afterTab = afterTab.filter((row) => row.statusType === 'nao-coleta');
+    if (activeTab === 'nao-coletas') {
+      afterTab = afterTab.filter((row) => row.statusType === 'nao-coleta');
+    } else if (activeTab === 'coletas-previstas') {
+      afterTab = afterTab.filter((row) => row.statusType === 'coleta-prevista');
+    }
 
     let afterFilial = afterTab;
     if (filialFilter !== 'todas') {
@@ -1171,6 +1184,13 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
                 className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition ${activeTab === 'nao-coletas' ? 'bg-slate-700 text-white' : 'text-slate-300 hover:bg-slate-800'}`}
               >
                 Não Coletas ({tabCounts['nao-coletas']})
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('coletas-previstas')}
+                className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition ${activeTab === 'coletas-previstas' ? 'bg-amber-700 text-white' : 'text-amber-300 hover:bg-amber-900/40'}`}
+              >
+                Coletas Previstas ({tabCounts['coletas-previstas']})
               </button>
               <div className="px-3 py-1.5 rounded-lg border border-cyan-500/30 bg-cyan-500/10 min-w-[220px]">
                 <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-cyan-300/85">% não coletas lançadas</div>
@@ -1426,7 +1446,11 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
                           <td className="px-4 py-3 text-slate-200" style={{ width: `${columnWidths.horario}px`, maxWidth: `${columnWidths.horario}px` }}>
                             <div className="leading-tight">
                               <div>Previsto: {row.horarioPrevisto}</div>
-                              <div className="text-emerald-300">Realizado: {row.horarioRealizado}</div>
+                              {row.statusType === 'coleta-prevista' ? (
+                                <div className="text-amber-300/70">Aguardando coleta</div>
+                              ) : (
+                                <div className="text-emerald-300">Realizado: {row.horarioRealizado}</div>
+                              )}
                             </div>
                           </td>
                           <td className="px-4 py-3" style={{ width: `${columnWidths.status}px`, maxWidth: `${columnWidths.status}px` }}>
@@ -1434,7 +1458,7 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
                               <span className={`inline-flex items-center px-2.5 py-1 rounded-md text-xs font-bold ${getStatusBadgeClass(row.statusType)}`}>
                                 {row.statusLabel}
                               </span>
-                              {row.isAlreadyLaunched ? (
+                              {row.statusType === 'coleta-prevista' ? null : row.isAlreadyLaunched ? (
                                 <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
                                   <Check size={12} />
                                   Não coleta lançada

@@ -464,18 +464,56 @@ const syncAll = async () => {
 
               const occurrences = Array.isArray(event?.occurrences) ? event.occurrences : [];
               const nonCollectionOccs = occurrences.filter(isNonCollectionOccurrence);
-              if (nonCollectionOccs.length === 0) continue;
-
-              totalEvents += 1;
-              const scraperReason = getScraperOccurrenceReason(event);
-              const fallbackReason = nonCollectionOccs.length > 0 ? getOccurrenceDescription(nonCollectionOccs[0]) : '';
-              const motivo = scraperReason || fallbackReason || String(event?.motivo || event?.reason || '').trim();
               const placa = getPlate(event, route);
+              const eventId = toOptionalInt(event?.id);
+              const isScheduled = !event?.executed && normalizeText(event?.status) === 'scheduled';
 
-              for (const occ of nonCollectionOccs) {
+              // Não coletas (ocorrências)
+              if (nonCollectionOccs.length > 0) {
+                totalEvents += 1;
+                const scraperReason = getScraperOccurrenceReason(event);
+                const fallbackReason = getOccurrenceDescription(nonCollectionOccs[0]);
+                const motivo = scraperReason || fallbackReason || String(event?.motivo || event?.reason || '').trim();
+
+                for (const occ of nonCollectionOccs) {
+                  allRows.push({
+                    route_id: routeId,
+                    event_id: eventId,
+                    plant_id: config.plantId,
+                    filial: filialName,
+                    operacao,
+                    rota_codigo: rotaCodigo,
+                    motorista,
+                    placa,
+                    type_name: String(event?.type_name || ''),
+                    reference: String(event?.reference || ''),
+                    reference_code: String(event?.reference_code || ''),
+                    status: String(event?.status || ''),
+                    executed: event?.executed == null ? null : Boolean(event.executed),
+                    expected_arrival: event?.expected_arrival || null,
+                    actual_arrival: event?.actual_arrival || null,
+                    expected_departure: event?.expected_departure || null,
+                    actual_departure: event?.actual_departure || null,
+                    motivo,
+                    status_type: 'nao-coleta',
+                    occurrence_id: toOptionalInt(occ?.id),
+                    occurrence_type_id: toOptionalInt(occ?.occurrence_type_id ?? occ?.occurrence_type?.id),
+                    occurrence_type_description: getOccurrenceDescription(occ),
+                    occurrence_inserted_by: String(occ?.inserted_by || ''),
+                    occurrence_inserted_at: occ?.inserted_at || null,
+                    event_created_at: event?.created_at || null,
+                    event_updated_at: event?.updated_at || null,
+                    data_referencia: dateRef
+                  });
+                }
+              }
+
+              // Coletas previstas (scheduled, not executed, sem ocorrências relevantes)
+              if (isScheduled) {
+                totalEvents += 1;
                 allRows.push({
                   route_id: routeId,
-                  event_id: toOptionalInt(event?.id),
+                  event_id: eventId,
                   plant_id: config.plantId,
                   filial: filialName,
                   operacao,
@@ -486,18 +524,18 @@ const syncAll = async () => {
                   reference: String(event?.reference || ''),
                   reference_code: String(event?.reference_code || ''),
                   status: String(event?.status || ''),
-                  executed: event?.executed == null ? null : Boolean(event.executed),
+                  executed: false,
                   expected_arrival: event?.expected_arrival || null,
-                  actual_arrival: event?.actual_arrival || null,
+                  actual_arrival: null,
                   expected_departure: event?.expected_departure || null,
-                  actual_departure: event?.actual_departure || null,
-                  motivo,
-                  status_type: 'nao-coleta',
-                  occurrence_id: toOptionalInt(occ?.id),
-                  occurrence_type_id: toOptionalInt(occ?.occurrence_type_id ?? occ?.occurrence_type?.id),
-                  occurrence_type_description: getOccurrenceDescription(occ),
-                  occurrence_inserted_by: String(occ?.inserted_by || ''),
-                  occurrence_inserted_at: occ?.inserted_at || null,
+                  actual_departure: null,
+                  motivo: 'Coleta prevista',
+                  status_type: 'coleta-prevista',
+                  occurrence_id: -1,
+                  occurrence_type_id: null,
+                  occurrence_type_description: '',
+                  occurrence_inserted_by: '',
+                  occurrence_inserted_at: null,
                   event_created_at: event?.created_at || null,
                   event_updated_at: event?.updated_at || null,
                   data_referencia: dateRef
