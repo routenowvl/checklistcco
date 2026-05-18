@@ -211,10 +211,11 @@ export const getRouteWebEventsByDateAndPlants = async (
     return result.rows as RouteWebEventDbRow[];
   }
 
-  const placeholders = plantIds.map((_, i) => `$${i + 2}`).join(',');
+  const intPlantIds = plantIds.map((id) => Number(id)).filter(Number.isFinite);
+  const placeholders = intPlantIds.map((_, i) => `$${i + 2}::int`).join(',');
   const result = await client.query(
     `SELECT * FROM route_web_events WHERE data_referencia = $1 AND plant_id = ANY(ARRAY[${placeholders}]) ORDER BY route_id, event_id, occurrence_id`,
-    [dataReferencia, ...plantIds]
+    [dataReferencia, ...intPlantIds]
   );
   return result.rows as RouteWebEventDbRow[];
 };
@@ -225,10 +226,11 @@ export const markEventsAsLaunched = async (
 ): Promise<number> => {
   if (eventIds.length === 0) return 0;
   const client = getPool();
-  const placeholders = eventIds.map((_, i) => `$${i + 2}`).join(',');
+  const intEventIds = eventIds.map((id) => Number(id)).filter(Number.isFinite);
+  const placeholders = intEventIds.map((_, i) => `$${i + 2}::int`).join(',');
   const result = await client.query(
     `UPDATE route_web_events SET is_already_launched = true WHERE data_referencia = $1 AND event_id = ANY(ARRAY[${placeholders}])`,
-    [dataReferencia, ...eventIds]
+    [dataReferencia, ...intEventIds]
   );
   return result.rowCount ?? 0;
 };
