@@ -14,7 +14,9 @@
       "Bash(find C:/Projetos/checklistcco -type f \\\\\\(-name *.ts -o -name *.tsx -o -name *.js -o -name *.jsx -o -name *.json -o -name .env* -o -name *.config.* -o -name *.html -o -name *.md \\\\\\) ! -path */node_modules/* ! -path */.git/* ! -path */dist/*)",
       "Bash(npm audit:*)",
       "Bash(find C:/Projetos/checklistcco/api -type f -not -path */node_modules/*)",
-      "Bash(find C:/Projetos/checklistcco/components -type f -not -path */node_modules/*)"
+      "Bash(find C:/Projetos/checklistcco/components -type f -not -path */node_modules/*)",
+      "Bash(find /c/Projetos/checklistcco -name *.py -o -name *.sh)",
+      "Bash(git:*)"
     ]
   }
 }
