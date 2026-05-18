@@ -16,7 +16,8 @@
       "Bash(find C:/Projetos/checklistcco/api -type f -not -path */node_modules/*)",
       "Bash(find C:/Projetos/checklistcco/components -type f -not -path */node_modules/*)",
       "Bash(find /c/Projetos/checklistcco -name *.py -o -name *.sh)",
-      "Bash(git:*)"
+      "Bash(git:*)",
+      "Bash(find /c/Projetos/checklistcco/components -type f -name *.ts -o -name *.tsx)"
     ]
   }
 }

@@ -781,7 +781,27 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
         throw new Error(eventsData?.error || 'Falha ao consultar eventos do banco de dados');
       }
 
-      const dbEvents: any[] = eventsData.events || [];
+      let dbEvents: any[] = eventsData.events || [];
+
+      // Deduplicar: um único registro por event_id (manter o com occurrence_inserted_at mais recente)
+      const seenEvents = new Map<string, any>();
+      for (const row of dbEvents) {
+        const key = String(row.event_id ?? '');
+        if (!key) continue;
+        const existing = seenEvents.get(key);
+        if (!existing) {
+          seenEvents.set(key, row);
+          continue;
+        }
+        const existingTime = String(existing.occurrence_inserted_at || existing.event_updated_at || '');
+        const rowTime = String(row.occurrence_inserted_at || row.event_updated_at || '');
+        if (rowTime > existingTime) {
+          seenEvents.set(key, row);
+        }
+      }
+      if (seenEvents.size > 0) {
+        dbEvents = Array.from(seenEvents.values());
+      }
 
       // Build CollectionRow[] from DB rows
       const rows: CollectionRow[] = dbEvents.map((row: any, index: number): CollectionRow => {
