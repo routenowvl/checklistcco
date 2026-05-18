@@ -978,7 +978,7 @@ const RouteDepartureView: React.FC<{
   };
 
   // Analisa histórico dos últimos 30 dias e identifica motoristas com atrasos recorrentes por "Mão de obra"
-  const analyzeMotoristHistory = async (motoristaNome: string, token: string): Promise<{ count: number; history: RouteDeparture[] } | null> => {
+  const analyzeMotoristHistory = async (motoristaNome: string, token: string, motoristaOperacao?: string): Promise<{ count: number; history: RouteDeparture[] } | null> => {
     try {
       if (!motoristaNome || motoristaNome.trim() === '') return null;
 
@@ -990,17 +990,21 @@ const RouteDepartureView: React.FC<{
       const startDate = thirtyDaysAgo.toISOString().split('T')[0];
       const endDate = getBrazilDate();
 
+      // Operações que o usuário tem acesso
+      const userOps = new Set(userConfigs.map(c => c.operacao.trim().toLowerCase()));
+
       // Busca histórico no SharePoint (sem filtrar por operação para pegar todas as ocorrências do motorista)
       const history = await SharePointService.getArchivedDepartures(token, null, startDate, endDate);
 
-      // Filtra apenas registros com motivo "Mão de obra" E o motorista específico
+      // Filtra apenas registros com motivo "Mão de obra", o motorista específico E operações do usuário
       const maodeObraRecords = history.filter(r =>
         r.motivo === 'Mão de obra' &&
         r.motorista &&
-        r.motorista.toLowerCase().trim() === motoristaNome.toLowerCase().trim()
+        r.motorista.toLowerCase().trim() === motoristaNome.toLowerCase().trim() &&
+        r.operacao && userOps.has(r.operacao.trim().toLowerCase())
       );
 
-      console.log(`[MOTORIST_ALERT] ${maodeObraRecords.length} ocorrência(s) de "Mão de obra" para ${motoristaNome}`);
+      console.log(`[MOTORIST_ALERT] ${maodeObraRecords.length} ocorrência(s) de "Mão de obra" para ${motoristaNome} (filtro por operações do usuário)`);
 
       if (maodeObraRecords.length === 0) return null;
 
@@ -1062,6 +1066,9 @@ const RouteDepartureView: React.FC<{
 
       console.log(`[MOTORIST_SCAN] ${motoristasWithMaDeObra.size} motorista(s) com "Mão de obra" na tabela:`, Array.from(motoristasWithMaDeObra));
 
+      // Operações que o usuário tem acesso
+      const userOps = new Set(userConfigs.map(c => c.operacao.trim().toLowerCase()));
+
       // Busca histórico dos últimos 30 dias UMA VEZ (compartilhado entre todos)
       const thirtyDaysAgo = new Date();
       thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
@@ -1070,8 +1077,12 @@ const RouteDepartureView: React.FC<{
 
       const history = await SharePointService.getArchivedDepartures(token, null, startDate, endDate);
 
-      // Filtra apenas "Mão de obra"
-      const maodeObraHistory = history.filter(r => r.motivo === 'Mão de obra' && r.motorista && r.motorista.trim() !== '');
+      // Filtra apenas "Mão de obra" E apenas das operações do usuário
+      const maodeObraHistory = history.filter(r =>
+        r.motivo === 'Mão de obra' &&
+        r.motorista && r.motorista.trim() !== '' &&
+        r.operacao && userOps.has(r.operacao.trim().toLowerCase())
+      );
 
       // Agrupa por motorista
       const alerts: Record<string, { count: number; history: RouteDeparture[] }> = {};
