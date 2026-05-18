@@ -203,9 +203,11 @@ export const getRouteWebEventsByDateAndPlants = async (
 ): Promise<RouteWebEventDbRow[]> => {
   const client = getPool();
 
+  const dateFilter = `DATE(expected_arrival AT TIME ZONE 'America/Sao_Paulo') = $1::date`;
+
   if (plantIds.length === 0) {
     const result = await client.query(
-      'SELECT * FROM route_web_events WHERE data_referencia = $1 ORDER BY route_id, event_id, occurrence_id',
+      `SELECT * FROM route_web_events WHERE ${dateFilter} ORDER BY route_id, event_id, occurrence_id`,
       [dataReferencia]
     );
     return result.rows as RouteWebEventDbRow[];
@@ -214,7 +216,7 @@ export const getRouteWebEventsByDateAndPlants = async (
   const intPlantIds = plantIds.map((id) => Number(id)).filter(Number.isFinite);
   const placeholders = intPlantIds.map((_, i) => `$${i + 2}::int`).join(',');
   const result = await client.query(
-    `SELECT * FROM route_web_events WHERE data_referencia = $1 AND plant_id = ANY(ARRAY[${placeholders}]) ORDER BY route_id, event_id, occurrence_id`,
+    `SELECT * FROM route_web_events WHERE ${dateFilter} AND plant_id = ANY(ARRAY[${placeholders}]) ORDER BY route_id, event_id, occurrence_id`,
     [dataReferencia, ...intPlantIds]
   );
   return result.rows as RouteWebEventDbRow[];
