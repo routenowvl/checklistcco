@@ -424,8 +424,8 @@ const syncAll = async (): Promise<{
 // ---------------------------------------------------------------------------
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Vercel Cron envia GET; aceita POST também para teste manual
-  if (req.method !== 'GET' && req.method !== 'POST') {
+  // Somente POST para chamadas manuais (desativado cron automático Vercel — sync via EC2)
+  if (req.method !== 'POST') {
     return res.status(405).json({ success: false, error: 'Method not allowed' });
   }
 
