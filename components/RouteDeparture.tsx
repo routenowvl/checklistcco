@@ -13,7 +13,7 @@ import {
   ChevronRight, Maximize2, Minimize2,
   Archive, Database, Save, LinkIcon,
   Layers, Trash2, Settings2, Check, Table, SortAsc,
-  Sun, Moon, AlertTriangle, Calendar, ArrowUpDown, MessageCircle, LogOut, Wrench
+  Sun, Moon, AlertTriangle, Calendar, ArrowUpDown, MessageCircle, LogOut, Wrench, Info
 } from 'lucide-react';
 
 const MOTIVOS = [
@@ -393,6 +393,10 @@ const RouteDepartureView: React.FC<{
   // Armazena os últimos checklists de motorista por operação
   const [lastMotoristaChecklist, setLastMotoristaChecklist] = useState<Record<string, { data: string, porcentagem: string }>>({});
 
+  // Dados de rotas do banco de dados (route_web_routes) para comparação de placa
+  const [dbRoutesMap, setDbRoutesMap] = useState<Record<string, { smartquestion_unloading_plate: string; placa: string; motorista: string; smartquestion_actual_start_time: string | null; roadmap_code: string }>>({});
+  const [dbRoutePopup, setDbRoutePopup] = useState<{ routeId: string; anchorRect: DOMRect } | null>(null);
+
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
   const [isMappingModalOpen, setIsMappingModalOpen] = useState(false);
   const [pendingMappingRoute, setPendingMappingRoute] = useState<string | null>(null);
@@ -587,7 +591,7 @@ const RouteDepartureView: React.FC<{
         console.log('[ROUTE_DEPARTURE] Larguras das colunas restauradas:', JSON.parse(saved));
         return JSON.parse(saved);
     }
-    return { rota: 140, data: 125, inicio: 95, motorista: 230, placa: 100, saida: 95, motivo: 170, observacao: 400, geral: 120, operacao: 140, status: 90, tempo: 90 };
+    return { rota: 140, data: 125, inicio: 95, motorista: 230, placa: 100, saida: 95, motivo: 170, observacao: 400, geral: 120, operacao: 140, status: 90, tempo: 90, tempoResposta: 130 };
   });
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(() => {
     const saved = sessionStorage.getItem('route_departure_hidden_cols');
@@ -2251,6 +2255,37 @@ const RouteDepartureView: React.FC<{
           }
         });
         setLastMotoristaChecklist(result);
+      }
+
+      // Busca dados de rotas do banco (route_web_routes) para comparação de placa
+      try {
+        const dbDateRef = getBrazilDate();
+        const dbRes = await fetch('/api/route-web-routes-db', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ dataReferencia: dbDateRef })
+        });
+        if (dbRes.ok) {
+          const dbJson = await dbRes.json();
+          if (dbJson.success && Array.isArray(dbJson.routes)) {
+            const map: Record<string, { placa: string; motorista: string; smartquestion_actual_start_time: string | null; roadmap_code: string }> = {};
+            for (const r of dbJson.routes) {
+              if (r.roadmap_code) {
+                map[r.roadmap_code] = {
+                  placa: r.placa || '',
+                  smartquestion_unloading_plate: r.smartquestion_unloading_plate || '',
+                  motorista: r.motorista || '',
+                  smartquestion_actual_start_time: r.smartquestion_actual_start_time || null,
+                  roadmap_code: r.roadmap_code
+                };
+              }
+            }
+            setDbRoutesMap(map);
+            console.log('[LOAD_DATA] DB routes carregadas:', Object.keys(map).length);
+          }
+        }
+      } catch (dbErr: any) {
+        console.warn('[LOAD_DATA] Falha ao buscar DB routes:', dbErr?.message || dbErr);
       }
 
       // Atualiza snapshot de visualização por operação (somente se houver mudança no Conteudo)
@@ -3940,7 +3975,7 @@ const RouteDepartureView: React.FC<{
     { id: 'rota', label: 'ROTA' }, { id: 'data', label: 'DATA' }, { id: 'inicio', label: 'INÍCIO' },
     { id: 'motorista', label: 'MOTORISTA' }, { id: 'placa', label: 'PLACA' }, { id: 'saida', label: 'SAÍDA' },
     { id: 'motivo', label: 'MOTIVO' }, { id: 'observacao', label: 'OBSERVAÇÃO' }, { id: 'geral', label: 'GERAL' },
-    { id: 'operacao', label: 'OPERAÇÃO' }, { id: 'status', label: 'STATUS' }, { id: 'tempo', label: 'TEMPO' }
+    { id: 'operacao', label: 'OPERAÇÃO' }, { id: 'status', label: 'STATUS' }, { id: 'tempo', label: 'TEMPO' }, { id: 'tempoResposta', label: 'DELAY DE MAPEAMENTO' }
   ];
 
   if (isLoading) return <div className="h-full flex flex-col items-center justify-center text-primary-500"><Loader2 size={48} className="animate-spin" /></div>;
@@ -4406,8 +4441,17 @@ const RouteDepartureView: React.FC<{
                         return route.saida;
                       })();
 
+                      // Verifica divergência de placa com o banco de dados
+                      const dbRouteInfo = route.rota ? dbRoutesMap[route.rota] : undefined;
+                      const hasSmartPlate = dbRouteInfo && dbRouteInfo.smartquestion_unloading_plate && dbRouteInfo.smartquestion_unloading_plate.trim() !== '';
+                      const hasPlacaMismatch = hasSmartPlate
+                        && route.placa
+                        && route.placa.trim() !== ''
+                        && dbRouteInfo.smartquestion_unloading_plate.trim() !== ''
+                        && route.placa.trim().toUpperCase() !== dbRouteInfo.smartquestion_unloading_plate.trim().toUpperCase();
+
                       return (
-                        <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
+                        <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px', position: 'relative' }}>
                           <input
                             type="text"
                             value={displayValue}
@@ -4464,6 +4508,22 @@ const RouteDepartureView: React.FC<{
                             }}
                             className={`${inputClass} font-mono text-center`}
                           />
+                          {hasSmartPlate && (
+                            <span
+                              className="absolute right-0.5 top-0.5 cursor-pointer z-10"
+                              title={hasPlacaMismatch ? "Divergência de placa — clique para ver dados do Smart" : "Dados do Smart — clique para ver"}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const rect = (e.target as HTMLElement).getBoundingClientRect();
+                                setDbRoutePopup({ routeId: route.id!, anchorRect: rect });
+                              }}
+                            >
+                              {hasPlacaMismatch
+                                ? <AlertTriangle size={13} className="text-amber-500 dark:text-amber-400" />
+                                : <Info size={12} className="text-blue-400 dark:text-blue-500 hover:text-blue-600 dark:hover:text-blue-400 transition-colors" />
+                              }
+                            </span>
+                          )}
                         </td>
                       );
                     }
@@ -4730,6 +4790,16 @@ const RouteDepartureView: React.FC<{
                         <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
                           <div className="w-full flex items-center justify-center text-[10px] font-bold">
                             {route.tempo}
+                          </div>
+                        </td>
+                      );
+                    }
+
+                    if (col.id === 'tempoResposta') {
+                      return (
+                        <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
+                          <div className="w-full flex items-center justify-center text-[10px] font-bold">
+                            {route.tempoResposta || '---'}
                           </div>
                         </td>
                       );
@@ -5067,6 +5137,16 @@ const RouteDepartureView: React.FC<{
                       );
                     }
 
+                    if (col.id === 'tempoResposta') {
+                      return (
+                        <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
+                          <div className="w-full flex items-center justify-center text-[10px] font-bold">
+                            {route.tempoResposta || '---'}
+                          </div>
+                        </td>
+                      );
+                    }
+
                     return null;
                   })}
                   <td className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} flex items-center justify-center gap-1`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
@@ -5348,6 +5428,69 @@ const RouteDepartureView: React.FC<{
           </div>
         </div>
       )}
+
+      {dbRoutePopup && (() => {
+        const dbRoute = routes.find(rt => rt.id === dbRoutePopup.routeId);
+        const dbInfo = dbRoute?.rota ? dbRoutesMap[dbRoute.rota] : null;
+        if (!dbInfo) { setDbRoutePopup(null); return null; }
+        const hasMismatch = dbRoute?.placa && dbRoute.placa.trim() !== '' && dbInfo.smartquestion_unloading_plate.trim() !== '' && dbRoute.placa.trim().toUpperCase() !== dbInfo.smartquestion_unloading_plate.trim().toUpperCase();
+        const rect = dbRoutePopup.anchorRect;
+        const popupLeft = Math.min(rect.left, window.innerWidth - 260);
+        const popupTop = rect.bottom + 4;
+        const formatSmartTime = (isoStr: string) => {
+          const match = isoStr.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/);
+          if (!match) return isoStr;
+          const [, y, mo, d, hh, mm, ss] = match;
+          const timeOnly = `${hh}:${mm}:${ss}`;
+          if (dbRoute?.data) {
+            const [ry, rm, rd] = dbRoute.data.split('-').map(Number);
+            if (Number(d) !== rd || Number(mo) !== rm || Number(y) !== ry) {
+              return `${d}/${mo} ${timeOnly}`;
+            }
+          }
+          return timeOnly;
+        };
+        return (
+          <div
+            className="fixed inset-0 z-[150]"
+            onClick={() => setDbRoutePopup(null)}
+          >
+            <div
+              className={`fixed z-[151] rounded-lg shadow-xl border text-[11px] font-medium select-text ${isDarkMode ? 'bg-slate-800 border-slate-600 text-slate-100' : 'bg-white border-slate-300 text-slate-800'}`}
+              style={{ left: popupLeft, top: popupTop, minWidth: '220px', padding: '10px 12px' }}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-1.5 mb-2">
+                {hasMismatch
+                  ? <AlertTriangle size={13} className="text-amber-500" />
+                  : <Info size={13} className="text-blue-400" />
+                }
+                <span className={`font-bold text-[10px] ${hasMismatch ? 'text-amber-600 dark:text-amber-400' : 'text-blue-500 dark:text-blue-400'}`}>Informações Smartquestion</span>
+              </div>
+              <div className="space-y-1">
+                <div className="flex justify-between gap-3">
+                  <span className="text-slate-500 dark:text-slate-400">Placa:</span>
+                  <span className="font-bold font-mono">{dbInfo.smartquestion_unloading_plate || dbInfo.placa || '—'}</span>
+                </div>
+                {/* Motorista oculto — será ativado com campo do smartquestion */}
+                {false && dbInfo.motorista && (
+                <div className="flex justify-between gap-3">
+                  <span className="text-slate-500 dark:text-slate-400">Motorista:</span>
+                  <span className="font-bold">{dbInfo.motorista}</span>
+                </div>
+                )}
+                {dbInfo.smartquestion_actual_start_time && (
+                  <div className="flex justify-between gap-3">
+                    <span className="text-slate-500 dark:text-slate-400">Saída:</span>
+                    <span className="font-bold font-mono">{formatSmartTime(dbInfo.smartquestion_actual_start_time)}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {isHistoryModalOpen && (
           <div className={`fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[200] flex items-center justify-center p-4 ${isHistoryFullscreen ? 'p-0' : ''}`}>
@@ -5718,6 +5861,7 @@ const RouteDepartureView: React.FC<{
                                               )}
                                           </th>
                                           <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center">Tempo</th>
+                                          <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center">Delay de Mapeamento</th>
                                       </tr>
                                   </thead>
                                   <tbody>
@@ -5940,6 +6084,9 @@ const RouteDepartureView: React.FC<{
                                               </td>
                                               <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center font-mono font-bold">
                                                   {r.tempo}
+                                              </td>
+                                              <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center font-mono font-bold">
+                                                  {r.tempoResposta || '---'}
                                               </td>
                                           </tr>
                                           );
