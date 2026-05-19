@@ -365,6 +365,93 @@ const upsertRouteWebEvents = async (rows) => {
 };
 
 // ---------------------------------------------------------------------------
+// Route Web Routes DB
+// ---------------------------------------------------------------------------
+
+const upsertRouteWebRoutes = async (rows) => {
+  if (rows.length === 0) return 0;
+  const client = getPool();
+
+  const sql = `
+    INSERT INTO route_web_routes (
+      route_id, route_plan_id, schedule_order_id, plant_id, datalake_plant_id,
+      filial, operacao, roadmap_code, status, specific_status, general_status,
+      placa, motorista, last_driver_id, last_vehicle_id,
+      smartquestion_actual_start_time, smartquestion_actual_end_time,
+      smartquestion_collected_liters, smartquestion_unloading_plate,
+      start_time, actual_start_time, expected_end_time, actual_end_time,
+      expected_liters, collected_liters, unloaded_liters, volume,
+      expected_km, actual_km, last_landmark, data_referencia
+    ) VALUES (
+      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
+      $11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+      $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31
+    )
+    ON CONFLICT (route_id, data_referencia)
+    DO UPDATE SET
+      route_plan_id = EXCLUDED.route_plan_id,
+      schedule_order_id = EXCLUDED.schedule_order_id,
+      plant_id = EXCLUDED.plant_id,
+      datalake_plant_id = EXCLUDED.datalake_plant_id,
+      filial = EXCLUDED.filial,
+      operacao = EXCLUDED.operacao,
+      roadmap_code = EXCLUDED.roadmap_code,
+      status = EXCLUDED.status,
+      specific_status = EXCLUDED.specific_status,
+      general_status = EXCLUDED.general_status,
+      placa = EXCLUDED.placa,
+      motorista = EXCLUDED.motorista,
+      last_driver_id = EXCLUDED.last_driver_id,
+      last_vehicle_id = EXCLUDED.last_vehicle_id,
+      smartquestion_actual_start_time = EXCLUDED.smartquestion_actual_start_time,
+      smartquestion_actual_end_time = EXCLUDED.smartquestion_actual_end_time,
+      smartquestion_collected_liters = EXCLUDED.smartquestion_collected_liters,
+      smartquestion_unloading_plate = EXCLUDED.smartquestion_unloading_plate,
+      start_time = EXCLUDED.start_time,
+      actual_start_time = EXCLUDED.actual_start_time,
+      expected_end_time = EXCLUDED.expected_end_time,
+      actual_end_time = EXCLUDED.actual_end_time,
+      expected_liters = EXCLUDED.expected_liters,
+      collected_liters = EXCLUDED.collected_liters,
+      unloaded_liters = EXCLUDED.unloaded_liters,
+      volume = EXCLUDED.volume,
+      expected_km = EXCLUDED.expected_km,
+      actual_km = EXCLUDED.actual_km,
+      last_landmark = EXCLUDED.last_landmark,
+      fetched_at = NOW()
+  `;
+
+  let inserted = 0;
+  for (const row of rows) {
+    const values = [
+      row.route_id, toNullIfEmpty(row.route_plan_id), row.schedule_order_id,
+      row.plant_id, row.datalake_plant_id,
+      row.filial, row.operacao, row.roadmap_code, row.status, row.specific_status,
+      row.general_status, row.placa, row.motorista, row.last_driver_id, row.last_vehicle_id,
+      toNullIfEmpty(row.smartquestion_actual_start_time), toNullIfEmpty(row.smartquestion_actual_end_time),
+      toNumericOrNull(row.smartquestion_collected_liters), row.smartquestion_unloading_plate,
+      toNullIfEmpty(row.start_time), toNullIfEmpty(row.actual_start_time),
+      toNullIfEmpty(row.expected_end_time), toNullIfEmpty(row.actual_end_time),
+      toNumericOrNull(row.expected_liters), toNumericOrNull(row.collected_liters),
+      toNumericOrNull(row.unloaded_liters), toNumericOrNull(row.volume),
+      toNumericOrNull(row.expected_km), toNumericOrNull(row.actual_km),
+      row.last_landmark, row.data_referencia
+    ];
+    await client.query(sql, values);
+    inserted += 1;
+  }
+  return inserted;
+};
+
+const toNumericOrNull = (value) => {
+  if (value == null) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+// ---------------------------------------------------------------------------
 // Main sync
 // ---------------------------------------------------------------------------
 
@@ -390,6 +477,7 @@ const syncAll = async () => {
   const routesUrlBase = readRequiredEnv('ROUTE_WEB_ROUTES_URL').replace(/\/+$/, '');
 
   const allRows = [];
+  const allRouteRows = [];
   let totalRoutes = 0;
   let totalEvents = 0;
   const errors = [];
@@ -427,6 +515,51 @@ const syncAll = async () => {
       const routes = pickRoutesArray(payload);
       totalRoutes += routes.length;
       console.log(`[SYNC] Plant ${config.plantId} (${config.filial}): ${routes.length} rotas`);
+
+      // 4a. Extrair dados das rotas para a tabela route_web_routes
+      for (const route of routes) {
+        const routeId = toOptionalInt(route?.id);
+        if (routeId == null) continue;
+
+        const filialName = String(route?.plant?.display_name || route?.plant?.name || route?.plant_name || config.filial).trim();
+        const operacao = String(config.operacao || '').trim();
+        const placa = String(route?.unloading_plate || route?.smartquestion_unloading_plate || route?.last_vehicle?.registration_number || '').trim();
+        const motorista = getDriverName(route);
+
+        allRouteRows.push({
+          route_id: routeId,
+          route_plan_id: route?.route_plan_id || null,
+          schedule_order_id: toOptionalInt(route?.schedule_order_id),
+          plant_id: config.plantId,
+          datalake_plant_id: toOptionalInt(route?.datalake_plant_id),
+          filial: filialName,
+          operacao,
+          roadmap_code: getRouteCode(route),
+          status: String(route?.status || '').trim(),
+          specific_status: String(route?.specific_status || '').trim(),
+          general_status: String(route?.general_status || '').trim(),
+          placa,
+          motorista,
+          last_driver_id: toOptionalInt(route?.last_driver_id || route?.last_driver?.id),
+          last_vehicle_id: toOptionalInt(route?.last_vehicle_id || route?.last_vehicle?.id),
+          smartquestion_actual_start_time: route?.smartquestion_actual_start_time || route?.start_date || null,
+          smartquestion_actual_end_time: route?.smartquestion_actual_end_time || route?.end_date || null,
+          smartquestion_collected_liters: toNumericOrNull(route?.smartquestion_collected_liters),
+          smartquestion_unloading_plate: String(route?.smartquestion_unloading_plate || '').trim(),
+          start_time: route?.start_time || null,
+          actual_start_time: route?.actual_start_time || null,
+          expected_end_time: route?.expected_end_time || null,
+          actual_end_time: route?.actual_end_time || null,
+          expected_liters: toNumericOrNull(route?.expected_liters),
+          collected_liters: toNumericOrNull(route?.collected_liters),
+          unloaded_liters: toNumericOrNull(route?.unloaded_liters),
+          volume: toNumericOrNull(route?.volume),
+          expected_km: toNumericOrNull(route?.expected_km),
+          actual_km: toNumericOrNull(route?.actual_km),
+          last_landmark: String(route?.last_landmark || '').trim(),
+          data_referencia: dateRef
+        });
+      }
 
       // 5. Fetch events per route (batch of 4)
       const batchSize = 4;
@@ -554,14 +687,25 @@ const syncAll = async () => {
     }
   }
 
-  // 6. Persist
+  // 6. Persist events
   let totalUpserted = 0;
   if (allRows.length > 0) {
-    console.log(`[SYNC] Persistindo ${allRows.length} registros no banco...`);
+    console.log(`[SYNC] Persistindo ${allRows.length} eventos no banco...`);
     try {
       totalUpserted = await upsertRouteWebEvents(allRows);
     } catch (err) {
-      errors.push(`DB: ${err?.message || 'erro ao persistir'}`);
+      errors.push(`DB events: ${err?.message || 'erro ao persistir'}`);
+    }
+  }
+
+  // 6b. Persist routes
+  let totalRoutesUpserted = 0;
+  if (allRouteRows.length > 0) {
+    console.log(`[SYNC] Persistindo ${allRouteRows.length} rotas no banco...`);
+    try {
+      totalRoutesUpserted = await upsertRouteWebRoutes(allRouteRows);
+    } catch (err) {
+      errors.push(`DB routes: ${err?.message || 'erro ao persistir rotas'}`);
     }
   }
 
@@ -572,7 +716,7 @@ const syncAll = async () => {
   }
 
   const durationMs = Date.now() - startedAt;
-  console.log(`[SYNC] Concluído em ${(durationMs / 1000).toFixed(1)}s: ${totalRoutes} rotas, ${totalEvents} eventos, ${totalUpserted} upserted, ${errors.length} erros`);
+  console.log(`[SYNC] Concluído em ${(durationMs / 1000).toFixed(1)}s: ${totalRoutes} rotas, ${totalEvents} eventos, ${totalUpserted} events upserted, ${totalRoutesUpserted} routes upserted, ${errors.length} erros`);
   if (errors.length > 0) {
     console.error('[SYNC] Erros:', errors);
   }

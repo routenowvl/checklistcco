@@ -60,6 +60,7 @@ export interface RouteDeparture {
   checklistMotorista?: string; // Dados do checklist: "DD/MM/AAAA - **% - motivos"
   retornoMotorista?: string; // Histórico de conversa entre bot e motorista
   causaRaiz?: string; // Causa raiz para rotas de Manutenção
+  tempoResposta?: string; // Tempo entre horário real e horário inserido pelo usuário (HH:MM:SS)
   editingUser?: string; // E-mail do usuário editando esta linha (lock temporário)
   lockExpiresAt?: number; // Timestamp em ms quando o lock expira
 }

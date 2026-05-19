@@ -11,6 +11,12 @@ import {
   getTokenPreview,
   requestRouteWebToken
 } from './utils/routeWebServer';
+import {
+  getRouteWebEventsByDateAndPlants,
+  getRouteWebRoutesByDateAndPlants,
+  type RouteWebEventDbRow,
+  type RouteWebRouteDbRow
+} from './utils/rweDb';
 
 const parseUpstreamResponse = async (response: Response): Promise<{ contentType: string; raw: string; data: any }> => {
   const contentType = String(response.headers.get('content-type') || '');
@@ -775,6 +781,78 @@ const routeWebDevPlugin = (mode: string) => ({
           return writeJson(res, 500, {
             success: false,
             error: error?.message || 'Erro ao consultar events da rota'
+          });
+        }
+      }
+
+      if ((req.method === 'POST' || req.method === 'GET') && pathname === '/api/route-web-events') {
+        try {
+          const body = req.method === 'POST' ? await readJsonBody(req) : Object.fromEntries(new URL(String(req.url || ''), 'http://localhost').searchParams);
+          const dataReferencia = String(body?.dataReferencia || '').trim();
+
+          if (!dataReferencia || !/^\d{4}-\d{2}-\d{2}$/.test(dataReferencia)) {
+            return writeJson(res, 400, { success: false, error: 'dataReferencia inválida (YYYY-MM-DD)' });
+          }
+
+          let plantIds: number[] = [];
+          const plantIdsRaw = body?.plantIds;
+          if (Array.isArray(plantIdsRaw)) {
+            plantIds = plantIdsRaw.map(Number).filter(Number.isFinite);
+          } else if (plantIdsRaw != null) {
+            const parsed = Number(plantIdsRaw);
+            if (Number.isFinite(parsed)) plantIds = [parsed];
+          }
+
+          const rows: RouteWebEventDbRow[] = await getRouteWebEventsByDateAndPlants(dataReferencia, plantIds);
+
+          return writeJson(res, 200, {
+            success: true,
+            dataReferencia,
+            plantIds,
+            count: rows.length,
+            events: rows
+          });
+        } catch (error: any) {
+          console.error('[ROUTE_WEB_EVENTS][DEV] Erro:', error?.message || error);
+          return writeJson(res, 500, {
+            success: false,
+            error: error?.message || 'Erro ao consultar eventos'
+          });
+        }
+      }
+
+      if ((req.method === 'POST' || req.method === 'GET') && pathname === '/api/route-web-routes-db') {
+        try {
+          const body = req.method === 'POST' ? await readJsonBody(req) : Object.fromEntries(new URL(String(req.url || ''), 'http://localhost').searchParams);
+          const dataReferencia = String(body?.dataReferencia || '').trim();
+
+          if (!dataReferencia || !/^\d{4}-\d{2}-\d{2}$/.test(dataReferencia)) {
+            return writeJson(res, 400, { success: false, error: 'dataReferencia inválida (YYYY-MM-DD)' });
+          }
+
+          let plantIds: number[] = [];
+          const plantIdsRaw = body?.plantIds;
+          if (Array.isArray(plantIdsRaw)) {
+            plantIds = plantIdsRaw.map(Number).filter(Number.isFinite);
+          } else if (plantIdsRaw != null) {
+            const parsed = Number(plantIdsRaw);
+            if (Number.isFinite(parsed)) plantIds = [parsed];
+          }
+
+          const rows: RouteWebRouteDbRow[] = await getRouteWebRoutesByDateAndPlants(dataReferencia, plantIds);
+
+          return writeJson(res, 200, {
+            success: true,
+            dataReferencia,
+            plantIds,
+            count: rows.length,
+            routes: rows
+          });
+        } catch (error: any) {
+          console.error('[ROUTE_WEB_ROUTES_DB][DEV] Erro:', error?.message || error);
+          return writeJson(res, 500, {
+            success: false,
+            error: error?.message || 'Erro ao consultar rotas'
           });
         }
       }

@@ -1531,6 +1531,42 @@ const RouteDepartureView: React.FC<{
     return (parts[0] || 0) * 3600 + (parts[1] || 0) * 60 + (parts[2] || 0);
   };
 
+  /**
+   * Calcula o TempoResposta: diferença entre o horário atual (Brasília) e o horário de saída informado pelo usuário.
+   * Suporta saída no formato "HH:MM:SS" (mesmo dia) ou "DD/MM/AAAA HH:MM:SS" (dia anterior/diferente).
+   * Retorna string no formato "HH:MM:SS" ou "-" se não for possível calcular.
+   */
+  const calculateTempoResposta = (saida: string): string => {
+    if (!saida || saida.trim() === '' || saida.trim() === '-') return '';
+
+    try {
+      const nowBrazil = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+      let saidaMs: number;
+
+      const dateTimeMatch = saida.match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})$/);
+      if (dateTimeMatch) {
+        const [, day, month, year, hour, minute, second] = dateTimeMatch;
+        saidaMs = new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second)).getTime();
+      } else {
+        // Apenas HH:MM:SS - assume mesmo dia (data da rota ou hoje)
+        const [h, m, s] = saida.split(':').map(Number);
+        if (isNaN(h) || isNaN(m) || isNaN(s)) return '';
+        saidaMs = new Date(nowBrazil.getFullYear(), nowBrazil.getMonth(), nowBrazil.getDate(), h, m, s).getTime();
+      }
+
+      const diffMs = nowBrazil.getTime() - saidaMs;
+      if (diffMs < 0) return ''; // saída no futuro, não calcula
+
+      const totalSeconds = Math.floor(diffMs / 1000);
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+      return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    } catch {
+      return '';
+    }
+  };
+
   const secondsToTime = (totalSeconds: number): string => {
     const isNegative = totalSeconds < 0;
     const absSeconds = Math.abs(totalSeconds);
@@ -2742,7 +2778,8 @@ const RouteDepartureView: React.FC<{
         statusOp: status,
         tempo: gap,
         createdAt: new Date().toISOString(),
-        causaRaiz: ''
+        causaRaiz: '',
+        tempoResposta: ''
       };
 
       const newId = await SharePointService.updateDeparture(token, newRoute);
@@ -2813,7 +2850,8 @@ const RouteDepartureView: React.FC<{
         const rotaName = pendingBulkRoutes[i];
         setBulkStatus((prev: any) => prev ? { ...prev, current: i + 1 } : null);
         const { status, gap } = calculateStatusWithTolerance(ghostRow.inicio || '', ghostRow.saida || '', config?.tolerancia || "00:00:00", ghostRow.data || "");
-        const payload: RouteDeparture = { ...ghostRow, id: '', rota: rotaName, operacao: operacao, statusOp: status, tempo: gap, createdAt: new Date().toISOString() } as RouteDeparture;
+        const tempoResposta = ghostRow.saida ? calculateTempoResposta(ghostRow.saida) : '';
+        const payload: RouteDeparture = { ...ghostRow, id: '', rota: rotaName, operacao: operacao, statusOp: status, tempo: gap, tempoResposta, createdAt: new Date().toISOString() } as RouteDeparture;
         try { const newId = await SharePointService.updateDeparture(token, payload); newRoutes.push({ ...payload, id: newId }); } catch (e) {}
     }
     setRoutes(prev => [...prev, ...newRoutes]);
@@ -2895,6 +2933,9 @@ const RouteDepartureView: React.FC<{
         const resolved = resolveStatusForOperation(updatedRoute.operacao || '', updatedRoute.statusOp || '', status, gap);
         updatedRoute.statusOp = resolved.status;
         updatedRoute.tempo = resolved.gap;
+        if (field === 'saida' && finalValue && finalValue !== '-') {
+            updatedRoute.tempoResposta = calculateTempoResposta(finalValue);
+        }
 
         try {
             await SharePointService.updateDeparture(token, updatedRoute);
@@ -3004,7 +3045,8 @@ const RouteDepartureView: React.FC<{
                 const config = userConfigs.find(c => c.operacao === updatedGhost.operacao);
                 const { status, gap } = calculateStatusWithTolerance(updatedGhost.inicio || '', updatedGhost.saida || '', config?.tolerancia || "00:00:00", updatedGhost.data || "");
                 const resolved = resolveStatusForOperation(updatedGhost.operacao || '', updatedGhost.statusOp || '', status, gap);
-                const payload = { ...updatedGhost, statusOp: resolved.status, tempo: resolved.gap, createdAt: new Date().toISOString() } as RouteDeparture;
+                const tempoResposta = updatedGhost.saida ? calculateTempoResposta(updatedGhost.saida) : '';
+                const payload = { ...updatedGhost, statusOp: resolved.status, tempo: resolved.gap, tempoResposta, createdAt: new Date().toISOString() } as RouteDeparture;
                 const newId = await SharePointService.updateDeparture(await getAccessToken(), payload);
                 setRoutes(prev => [...prev, { ...payload, id: newId }]);
 
@@ -3099,6 +3141,11 @@ const RouteDepartureView: React.FC<{
     const resolved = resolveStatusForOperation(updatedRoute.operacao || '', updatedRoute.statusOp || '', status, gap);
     updatedRoute.statusOp = resolved.status;
     updatedRoute.tempo = resolved.gap;
+
+    // Calcula TempoResposta quando o campo saida for preenchido
+    if (field === 'saida' && value && value !== '-') {
+      updatedRoute.tempoResposta = calculateTempoResposta(value);
+    }
 
     // Limpa motivo e observação se o status não for de atraso/adiantamento e não for manutenção
     const effectiveStatus = updatedRoute.statusOp || '';

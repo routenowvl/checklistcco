@@ -1477,7 +1477,8 @@ export const SharePointService = {
           createdAt: f.Created || new Date().toISOString(),
           checklistMotorista: f[resolveFieldName(mapping, 'ChecklistMotorista')] || "",
           retornoMotorista: f[resolveFieldName(mapping, 'RetornoMotorista')] || f.RetornoMotorista || "",
-          causaRaiz: f[resolveFieldName(mapping, 'CausaRaiz')] || ""
+          causaRaiz: f[resolveFieldName(mapping, 'CausaRaiz')] || "",
+          tempoResposta: f[resolveFieldName(mapping, 'TempoResposta')] || ""
         };
       });
 
@@ -1558,7 +1559,8 @@ export const SharePointService = {
             createdAt: f.Created || new Date().toISOString(),
             checklistMotorista: f[resolveFieldName(mapping, 'ChecklistMotorista')] || "",
             retornoMotorista: f[resolveFieldName(mapping, 'RetornoMotorista')] || f.RetornoMotorista || "",
-            causaRaiz: f[resolveFieldName(mapping, 'CausaRaiz')] || ""
+            causaRaiz: f[resolveFieldName(mapping, 'CausaRaiz')] || "",
+            tempoResposta: f[resolveFieldName(mapping, 'TempoResposta')] || ""
           };
         });
 
@@ -1610,7 +1612,8 @@ export const SharePointService = {
         TempGab: departure.tempo,
         ChecklistMotorista: departure.checklistMotorista || '',
         RetornoMotorista: departure.retornoMotorista || '',
-        CausaRaiz: departure.causaRaiz || ''
+        CausaRaiz: departure.causaRaiz || '',
+        TempoResposta: departure.tempoResposta || ''
     };
 
     const fields: any = {};
@@ -1664,7 +1667,8 @@ export const SharePointService = {
         TempGab: departure.tempo,
         ChecklistMotorista: departure.checklistMotorista || '',
         RetornoMotorista: departure.retornoMotorista || '',
-        CausaRaiz: departure.causaRaiz || ''
+        CausaRaiz: departure.causaRaiz || '',
+        TempoResposta: departure.tempoResposta || ''
     };
 
     const fields: any = {};
@@ -1738,7 +1742,8 @@ export const SharePointService = {
                 TempGab: item.tempo, 
                 ChecklistMotorista: item.checklistMotorista || '',
                 RetornoMotorista: item.retornoMotorista || '',
-                CausaRaiz: item.causaRaiz || '' 
+                CausaRaiz: item.causaRaiz || '',
+                TempoResposta: item.tempoResposta || ''
             };
             const histFields: any = {};
             Object.keys(raw).forEach(k => { const int = resolveFieldName(histMapping, k); if (histInternals.has(int)) histFields[int] = raw[k]; });

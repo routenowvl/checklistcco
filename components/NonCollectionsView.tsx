@@ -1837,14 +1837,8 @@ const NonCollectionsView: React.FC<{
     const lines = value.split(/[\n\r]/).map(l => l.trim()).filter(Boolean);
     if (lines.length === 0) return;
 
-    const operationToUse = String(operationHint || '').trim();
     const availableOperations = userConfigs.map(cfg => String(cfg.operacao || '').trim()).filter(Boolean);
     console.log('[BULK_PASTE] Campo:', field, 'Valores:', lines);
-    if (operationToUse) {
-      console.log('[BULK_PASTE] Colagem em massa com operação reaproveitada:', operationToUse);
-      await applyBulkPasteWithOperation(operationToUse, { field, lines });
-      return;
-    }
 
     if (availableOperations.length === 1) {
       const singleOperation = availableOperations[0];

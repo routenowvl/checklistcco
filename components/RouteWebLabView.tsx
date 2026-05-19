@@ -61,16 +61,18 @@ type RouteWebColumnKey =
   | 'motorista'
   | 'placa'
   | 'horario'
+  | 'operacao'
   | 'status';
 
 const ROUTE_WEB_DEFAULT_COLUMN_WIDTHS: Record<RouteWebColumnKey, number> = {
   rota: 130,
-  codigoProdutor: 200,
-  produtor: 280,
+  codigoProdutor: 150,
+  produtor: 200,
   motivo: 360,
-  motorista: 290,
+  motorista: 200,
   placa: 140,
   horario: 170,
+  operacao: 160,
   status: 240
 };
 
@@ -91,7 +93,7 @@ const ROWS_CACHE_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 const LAUNCH_STATUS_FILTER_OPTIONS = ['todas', 'nao-lancadas'] as const;
 type LaunchStatusFilter = (typeof LAUNCH_STATUS_FILTER_OPTIONS)[number];
 type RowsPerPageOption = number | 'all';
-type ExcelFilterColumn = 'rota' | 'codigoProdutor' | 'produtor' | 'motivo' | 'motorista' | 'placa' | 'horario' | 'status';
+type ExcelFilterColumn = 'rota' | 'codigoProdutor' | 'produtor' | 'motivo' | 'motorista' | 'placa' | 'horario' | 'operacao' | 'status';
 type ExcelFilterValues = Record<ExcelFilterColumn, string[]>;
 type ExcelFilterSearch = Record<ExcelFilterColumn, string>;
 
@@ -103,6 +105,7 @@ const createEmptyExcelFilterValues = (): ExcelFilterValues => ({
   motorista: [],
   placa: [],
   horario: [],
+  operacao: [],
   status: []
 });
 
@@ -114,6 +117,7 @@ const createEmptyExcelFilterSearch = (): ExcelFilterSearch => ({
   motorista: '',
   placa: '',
   horario: '',
+  operacao: '',
   status: ''
 });
 
@@ -125,6 +129,7 @@ const EXCEL_FILTER_COLUMNS: ExcelFilterColumn[] = [
   'motorista',
   'placa',
   'horario',
+  'operacao',
   'status'
 ];
 
@@ -136,6 +141,7 @@ const TABLE_HEADER_COLUMNS: Array<{ key: RouteWebColumnKey; label: string; filte
   { key: 'motorista', label: 'Motorista', filterColumn: 'motorista' },
   { key: 'placa', label: 'Placa', filterColumn: 'placa' },
   { key: 'horario', label: 'Horário', filterColumn: 'horario' },
+  { key: 'operacao', label: 'Operação', filterColumn: 'operacao' },
   { key: 'status', label: 'Status', filterColumn: 'status' }
 ];
 
@@ -370,6 +376,7 @@ const getRowExcelColumnValue = (row: CollectionRow, column: ExcelFilterColumn): 
   if (column === 'motorista') return String(row.motorista || '-');
   if (column === 'placa') return String(row.placa || '-');
   if (column === 'horario') return `Previsto ${row.horarioPrevisto} | Realizado ${row.horarioRealizado}`;
+  if (column === 'operacao') return String(row.operacao || '-');
   return getRowStatusFilterValue(row);
 };
 
@@ -948,6 +955,7 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       motorista: [],
       placa: [],
       horario: [],
+      operacao: [],
       status: []
     };
 
@@ -1023,6 +1031,7 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       motorista: [],
       placa: [],
       horario: [],
+      operacao: [],
       status: []
     };
 
@@ -1426,7 +1435,7 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
                   <tbody>
                     {paginatedRows.length === 0 ? (
                       <tr>
-                        <td colSpan={8} className="px-4 py-8 text-center text-slate-400 font-medium">
+                        <td colSpan={9} className="px-4 py-8 text-center text-slate-400 font-medium">
                           Nenhum registro encontrado com os filtros atuais.
                         </td>
                       </tr>
@@ -1469,9 +1478,14 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
                               {row.statusType === 'coleta-prevista' ? (
                                 <div className="text-amber-300/70">Aguardando coleta</div>
                               ) : (
-                                <div className="text-emerald-300">Realizado: {row.horarioRealizado}</div>
+                                <div className="text-emerald-300">Justificado: {row.horarioRealizado}</div>
                               )}
                             </div>
+                          </td>
+                          <td className="px-4 py-3 text-slate-300" style={{ width: `${columnWidths.operacao}px`, maxWidth: `${columnWidths.operacao}px` }}>
+                            <span className="block w-full overflow-hidden text-ellipsis whitespace-nowrap" title={row.operacao}>
+                              {row.operacao}
+                            </span>
                           </td>
                           <td className="px-4 py-3" style={{ width: `${columnWidths.status}px`, maxWidth: `${columnWidths.status}px` }}>
                             <div className="flex items-center gap-2 flex-wrap">
