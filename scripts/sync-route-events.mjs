@@ -134,7 +134,9 @@ const pickEventsArray = (payload) => pickArray(payload, 'data', 'events', 'items
 
 const getCurrentDayDate = () => {
   const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  // Usa timezone de Brasília para consistência com o frontend (getBrazilDate)
+  const parts = now.toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' }).split('-');
+  return `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
 };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

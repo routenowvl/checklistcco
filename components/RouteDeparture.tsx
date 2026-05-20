@@ -389,6 +389,8 @@ const RouteDepartureView: React.FC<{
 
   // Controla qual célula da coluna SAÍDA está sendo editada (para mostrar valor completo com data)
   const [editingSaidaCell, setEditingSaidaCell] = useState<string | null>(null);
+  const [saidaOriginalValue, setSaidaOriginalValue] = useState<string>('');
+  const [saidaEditingValue, setSaidaEditingValue] = useState<string>('');
 
   // Armazena os últimos checklists de motorista por operação
   const [lastMotoristaChecklist, setLastMotoristaChecklist] = useState<Record<string, { data: string, porcentagem: string }>>({});
@@ -558,6 +560,18 @@ const RouteDepartureView: React.FC<{
   const [isSortByOperacao, setIsSortByOperacao] = useState(false);
 
   const [activeObsId, setActiveObsId] = useState<string | null>(null);
+  const [delayLogPopupId, setDelayLogPopupId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!delayLogPopupId) return;
+    const handleClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('[data-delay-log-popup]')) {
+        setDelayLogPopupId(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [delayLogPopupId]);
   const [activeMotoristaDropdownId, setActiveMotoristaDropdownId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [activeFilterCol, setActiveFilterCol] = useState<string | null>(null);
@@ -2113,6 +2127,9 @@ const RouteDepartureView: React.FC<{
       setRouteMappings(mappings || []);
       setMotoristas(motoristasData || []);
 
+      // Debug: mostra primeiros mappings (Title = nome da rota no checklist)
+      console.log('[LOAD_DATA] RouteOperationMappings (primeiros 10):', (mappings || []).slice(0, 10).map(m => m.Title));
+
       // Filtra rotas APENAS das operações do usuário logado
       const myOps = new Set((configs || []).map(c => c.operacao));
 
@@ -2281,7 +2298,6 @@ const RouteDepartureView: React.FC<{
               }
             }
             setDbRoutesMap(map);
-            console.log('[LOAD_DATA] DB routes carregadas:', Object.keys(map).length);
           }
         }
       } catch (dbErr: any) {
@@ -3008,7 +3024,8 @@ const RouteDepartureView: React.FC<{
     id: string,
     field: keyof RouteDeparture,
     value: string,
-    extraUpdates: Partial<RouteDeparture> = {}
+    extraUpdates: Partial<RouteDeparture> = {},
+    isFinalUpdate: boolean = false
   ) => {
     if (!canEditData) return;
 
@@ -3180,6 +3197,22 @@ const RouteDepartureView: React.FC<{
     // Calcula TempoResposta quando o campo saida for preenchido
     if (field === 'saida' && value && value !== '-') {
       updatedRoute.tempoResposta = calculateTempoResposta(value);
+    }
+
+    // Gera log de alteração do tempoResposta quando houver mudança real no campo saida (somente na finalização)
+    if (field === 'saida' && isFinalUpdate) {
+      const oldValue = saidaOriginalValue.trim();
+      const newValue = (value || '').trim();
+      if (oldValue !== newValue) {
+        try {
+          const nowBR = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+          const ts = `${String(nowBR.getDate()).padStart(2,'0')}/${String(nowBR.getMonth()+1).padStart(2,'0')}/${nowBR.getFullYear()} ${String(nowBR.getHours()).padStart(2,'0')}:${String(nowBR.getMinutes()).padStart(2,'0')}:${String(nowBR.getSeconds()).padStart(2,'0')}`;
+          const logEntry = { hora: ts, usuario: currentUser.email, campo: 'saida', de: oldValue || null, para: newValue || null, tempoResposta: updatedRoute.tempoResposta || '' };
+          const existingLogs = updatedRoute.logTempoResposta ? JSON.parse(updatedRoute.logTempoResposta) : [];
+          existingLogs.push(logEntry);
+          updatedRoute.logTempoResposta = JSON.stringify(existingLogs);
+        } catch { /* ignora erro de parse do log */ }
+      }
     }
 
     // Limpa motivo e observação se o status não for de atraso/adiantamento e não for manutenção
@@ -4027,6 +4060,13 @@ const RouteDepartureView: React.FC<{
               </div>
               <div className="w-2 h-2 bg-purple-500 rounded-full animate-pulse shrink-0"></div>
             </div>
+            <div className={`flex items-center gap-3 px-6 py-3 rounded-2xl min-w-[140px] ${isDarkMode ? 'bg-amber-900/30 border border-amber-700/50' : 'bg-amber-100 border border-amber-300'}`}>
+              <div className="text-center flex-1">
+                <p className={`text-[9px] font-black uppercase tracking-wider mb-1 ${isDarkMode ? 'text-amber-400' : 'text-amber-700'}`}>Delay Verificação</p>
+                <p className={`text-2xl font-black leading-none ${isDarkMode ? 'text-amber-400' : 'text-amber-700'}`}>{filteredRoutes.filter(r => { if (!r.tempoResposta) return false; const h = parseInt(r.tempoResposta.split(':')[0], 10); return h >= 1; }).length}</p>
+              </div>
+              <div className="w-2 h-2 bg-amber-500 rounded-full animate-pulse shrink-0"></div>
+            </div>
           </div>
         </div>
         <div className="flex gap-2 items-center">
@@ -4430,10 +4470,8 @@ const RouteDepartureView: React.FC<{
 
                       // Extrai apenas o horário para exibição se houver data completa, senão mostra o valor completo
                       const displayValue = (() => {
+                        if (isEditing) return saidaEditingValue;
                         if (!route.saida || route.saida === '-') return route.saida || '';
-                        // Se está editando, mostra o valor completo (com data)
-                        if (isEditing) return route.saida;
-                        // Se não está editando e tem data completa, mostra apenas horário
                         const dateTimeMatch = route.saida.match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})$/);
                         if (dateTimeMatch) {
                           return `${dateTimeMatch[4]}:${dateTimeMatch[5]}:${dateTimeMatch[6]}`;
@@ -4456,26 +4494,32 @@ const RouteDepartureView: React.FC<{
                             type="text"
                             value={displayValue}
                             placeholder="--:--:--"
-                            onFocus={() => setEditingSaidaCell(route.id!)}
+                            onFocus={() => {
+                              const raw = route.saida || '';
+                              setEditingSaidaCell(route.id!);
+                              setSaidaOriginalValue(raw.trim());
+                              setSaidaEditingValue(raw);
+                            }}
                             onBlur={(e) => {
                                 setEditingSaidaCell(null);
                                 const val = e.target.value;
+                                // Determina o valor final formatado
+                                let finalVal: string;
                                 if (val === '-') {
-                                    updateCell(route.id!, 'saida', '-');
+                                    finalVal = '-';
                                 } else if (!val.trim()) {
-                                    // Campo vazio - limpa
-                                    updateCell(route.id!, 'saida', '');
+                                    finalVal = '';
                                 } else {
-                                    // Verifica se usuário digitou data completa (DD/MM/AAAA HH:MM:SS)
                                     const fullDateTimeMatch = val.match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})$/);
                                     if (fullDateTimeMatch) {
-                                        // Salva data e hora completas
-                                        updateCell(route.id!, 'saida', val);
+                                        finalVal = val;
                                     } else {
-                                        // Apenas horário - formata como HH:MM:SS
-                                        const formatted = formatTimeInput(val);
-                                        updateCell(route.id!, 'saida', formatted);
+                                        finalVal = formatTimeInput(val);
                                     }
+                                }
+                                // Só atualiza se houve mudança real em relação ao valor original (antes da digitação)
+                                if (finalVal !== saidaOriginalValue) {
+                                    updateCell(route.id!, 'saida', finalVal, {}, true);
                                 }
                             }}
                             onKeyDown={(e) => {
@@ -4484,15 +4528,7 @@ const RouteDepartureView: React.FC<{
                                 }
                             }}
                             onChange={(e) => {
-                                const val = e.target.value;
-                                // Permite digitação livre sem formatação automática
-                                // A formatação só ocorre no onBlur
-                                if (val === '-') {
-                                    updateCell(route.id!, 'saida', '-');
-                                } else {
-                                    // Atualiza diretamente para permitir digitação fluida
-                                    updateCell(route.id!, 'saida', val);
-                                }
+                                setSaidaEditingValue(e.target.value);
                             }}
                             onPaste={(e: any) => {
                                 const pastedText = e.clipboardData.getData('text').trim();
@@ -4502,8 +4538,8 @@ const RouteDepartureView: React.FC<{
                                 if (pastedText.includes('\n')) {
                                     handleMultilinePaste('saida', rowIndex, pastedText);
                                 } else {
-                                    // Paste de valor único - insere diretamente
-                                    updateCell(route.id!, 'saida', pastedText);
+                                    // Paste de valor único - insere no estado local de edição
+                                    setSaidaEditingValue(pastedText);
                                 }
                             }}
                             className={`${inputClass} font-mono text-center`}
@@ -4796,13 +4832,51 @@ const RouteDepartureView: React.FC<{
                     }
 
                     if (col.id === 'tempoResposta') {
+                      const isDelayOver1h = route.tempoResposta && parseInt(route.tempoResposta.split(':')[0], 10) >= 1;
+                      const hasLogs = route.logTempoResposta && route.logTempoResposta !== '[]';
+                      const showPopup = delayLogPopupId === route.id;
+                      let parsedLogs: any[] = [];
+                      if (hasLogs) { try { parsedLogs = JSON.parse(route.logTempoResposta!); } catch {} }
                       return (
-                        <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
-                          <div className="w-full flex items-center justify-center text-[10px] font-bold">
-                            {route.tempoResposta || '---'}
+                        <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px', position: 'relative' }}>
+                          <div className={`w-full flex items-center justify-center gap-1 text-[10px] font-bold ${isDelayOver1h ? 'px-2 py-0.5' : ''}`}>
+                            <span className={isDelayOver1h ? `inline-block px-2 py-0.5 rounded-full text-[10px] font-black ${isDarkMode ? 'bg-red-900/60 text-red-300' : 'bg-red-100 text-red-700'}` : ''}>
+                              {route.tempoResposta || '---'}
+                            </span>
+                            {hasLogs && (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setDelayLogPopupId(showPopup ? null : route.id!); }}
+                                className={`shrink-0 p-0.5 rounded-full transition-colors ${showPopup ? (isDarkMode ? 'text-primary-400 bg-primary-500/20' : 'text-primary-600 bg-primary-100') : (isDarkMode ? 'text-slate-500 hover:text-primary-400' : 'text-slate-400 hover:text-primary-600')}`}
+                              >
+                                <Info size={12} />
+                              </button>
+                            )}
                           </div>
+                          {showPopup && hasLogs && (
+                            <div data-delay-log-popup className={`absolute z-[200] left-1/2 -translate-x-1/2 top-full mt-1 w-[300px] rounded-lg shadow-2xl border ${isDarkMode ? 'bg-slate-800 border-slate-600' : 'bg-white border-slate-300'}`} style={{ overflow: 'hidden' }}>
+                              <div className={`flex items-center justify-between px-3 py-2 border-b ${isDarkMode ? 'border-slate-700 bg-slate-900/50' : 'border-slate-200 bg-slate-50'}`}>
+                                <span className={`text-[9px] font-black uppercase tracking-wider ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Log de Alterações</span>
+                                <button onClick={() => setDelayLogPopupId(null)} className={`p-0.5 rounded ${isDarkMode ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600'}`}><X size={12} /></button>
+                              </div>
+                              <div className="max-h-[200px] overflow-y-auto">
+                                {parsedLogs.map((l: any, idx: number) => (
+                                  <div key={idx} className={`px-3 py-1.5 border-b last:border-b-0 ${isDarkMode ? 'border-slate-700/50' : 'border-slate-100'}`}>
+                                    <p className={`text-[9px] font-mono font-bold ${isDarkMode ? 'text-primary-400' : 'text-primary-600'}`}>Data/Hora: {l.hora || '---'}</p>
+                                    <p className={`text-[9px] ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                                      Alteração: <span className="font-semibold">{l.de || 'vazio'}</span> → <span className="font-semibold">{l.para || 'vazio'}</span>
+                                    </p>
+                                    {l.tempoResposta && <p className={`text-[8px] font-mono mt-0.5 ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>Delay ajustado: {l.tempoResposta}</p>}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
                         </td>
                       );
+                    }
+
+                    if (col.id === 'logTempoResposta') {
+                      return null;
                     }
 
                     return null;
@@ -5067,11 +5141,15 @@ const RouteDepartureView: React.FC<{
                               }}
                               onBlur={(e) => {
                                   const val = e.target.value;
+                                  const originalVal = (route.saida || '').trim();
+                                  let finalVal: string;
                                   if (val === '-') {
-                                      updateCell(route.id!, 'saida', '-');
+                                      finalVal = '-';
                                   } else {
-                                      const formatted = formatTimeInput(val);
-                                      updateCell(route.id!, 'saida', formatted);
+                                      finalVal = formatTimeInput(val);
+                                  }
+                                  if (finalVal !== originalVal) {
+                                      updateCell(route.id!, 'saida', finalVal, {}, true);
                                   }
                               }}
                               className={`${inputClass} font-mono text-center`}
@@ -5138,13 +5216,51 @@ const RouteDepartureView: React.FC<{
                     }
 
                     if (col.id === 'tempoResposta') {
+                      const isDelayOver1h = route.tempoResposta && parseInt(route.tempoResposta.split(':')[0], 10) >= 1;
+                      const hasLogs = route.logTempoResposta && route.logTempoResposta !== '[]';
+                      const showPopup = delayLogPopupId === route.id;
+                      let parsedLogs: any[] = [];
+                      if (hasLogs) { try { parsedLogs = JSON.parse(route.logTempoResposta!); } catch {} }
                       return (
-                        <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
-                          <div className="w-full flex items-center justify-center text-[10px] font-bold">
-                            {route.tempoResposta || '---'}
+                        <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px', position: 'relative' }}>
+                          <div className={`w-full flex items-center justify-center gap-1 text-[10px] font-bold ${isDelayOver1h ? 'px-2 py-0.5' : ''}`}>
+                            <span className={isDelayOver1h ? `inline-block px-2 py-0.5 rounded-full text-[10px] font-black ${isDarkMode ? 'bg-red-900/60 text-red-300' : 'bg-red-100 text-red-700'}` : ''}>
+                              {route.tempoResposta || '---'}
+                            </span>
+                            {hasLogs && (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setDelayLogPopupId(showPopup ? null : route.id!); }}
+                                className={`shrink-0 p-0.5 rounded-full transition-colors ${showPopup ? (isDarkMode ? 'text-primary-400 bg-primary-500/20' : 'text-primary-600 bg-primary-100') : (isDarkMode ? 'text-slate-500 hover:text-primary-400' : 'text-slate-400 hover:text-primary-600')}`}
+                              >
+                                <Info size={12} />
+                              </button>
+                            )}
                           </div>
+                          {showPopup && hasLogs && (
+                            <div data-delay-log-popup className={`absolute z-[200] left-1/2 -translate-x-1/2 top-full mt-1 w-[300px] rounded-lg shadow-2xl border ${isDarkMode ? 'bg-slate-800 border-slate-600' : 'bg-white border-slate-300'}`} style={{ overflow: 'hidden' }}>
+                              <div className={`flex items-center justify-between px-3 py-2 border-b ${isDarkMode ? 'border-slate-700 bg-slate-900/50' : 'border-slate-200 bg-slate-50'}`}>
+                                <span className={`text-[9px] font-black uppercase tracking-wider ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Log de Alterações</span>
+                                <button onClick={() => setDelayLogPopupId(null)} className={`p-0.5 rounded ${isDarkMode ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600'}`}><X size={12} /></button>
+                              </div>
+                              <div className="max-h-[200px] overflow-y-auto">
+                                {parsedLogs.map((l: any, idx: number) => (
+                                  <div key={idx} className={`px-3 py-1.5 border-b last:border-b-0 ${isDarkMode ? 'border-slate-700/50' : 'border-slate-100'}`}>
+                                    <p className={`text-[9px] font-mono font-bold ${isDarkMode ? 'text-primary-400' : 'text-primary-600'}`}>Data/Hora: {l.hora || '---'}</p>
+                                    <p className={`text-[9px] ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                                      Alteração: <span className="font-semibold">{l.de || 'vazio'}</span> → <span className="font-semibold">{l.para || 'vazio'}</span>
+                                    </p>
+                                    {l.tempoResposta && <p className={`text-[8px] font-mono mt-0.5 ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>Delay ajustado: {l.tempoResposta}</p>}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
                         </td>
                       );
+                    }
+
+                    if (col.id === 'logTempoResposta') {
+                      return null;
                     }
 
                     return null;
@@ -6086,7 +6202,9 @@ const RouteDepartureView: React.FC<{
                                                   {r.tempo}
                                               </td>
                                               <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center font-mono font-bold">
-                                                  {r.tempoResposta || '---'}
+                                                  <span className={r.tempoResposta && parseInt(r.tempoResposta.split(':')[0], 10) >= 1 ? `inline-block px-2 py-0.5 rounded-full ${isDarkMode ? 'bg-red-900/60 text-red-300' : 'bg-red-100 text-red-700'}` : ''}>
+                                                      {r.tempoResposta || '---'}
+                                                  </span>
                                               </td>
                                           </tr>
                                           );

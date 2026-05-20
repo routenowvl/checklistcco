@@ -19,7 +19,10 @@
       "Bash(git:*)",
       "Bash(find /c/Projetos/checklistcco/components -type f -name *.ts -o -name *.tsx)",
       "Bash(find /c/Projetos/checklistcco -type f -not -path */node_modules/* -not -path */.git/* -not -path */dist/* -not -path */lib/* -not -path */temp/*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(find /c/Projetos/checklistcco/src -type f -name *.tsx -o -name *.ts)",
+      "Bash(find /c/Projetos/checklistcco -maxdepth 1 -type f -name *.tsx -o -name *.ts -o -name *.json)",
+      "Bash(find /c/Projetos/checklistcco -type f \\\\\\(-name *.tsx -o -name *.ts \\\\\\) ! -path */node_modules/*)"
     ]
   }
 }

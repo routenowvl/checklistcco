@@ -447,6 +447,14 @@ const AppContent = () => {
                    <Settings2 size={20} />
                  </button>
                )}
+               <button
+                 onClick={handleLogout}
+                 className="p-2 w-full flex items-center justify-center gap-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors"
+                 title="Sair"
+               >
+                 <LogOut size={20} />
+                 {!collapsed && <span className="text-sm font-medium">Sair</span>}
+               </button>
                <button onClick={() => setCollapsed(!collapsed)} className="p-2 w-full flex justify-center text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg">
                  {collapsed ? <ChevronRight size={20}/> : <ChevronLeft size={20}/>}
                </button>

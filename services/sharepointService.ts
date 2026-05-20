@@ -1478,7 +1478,8 @@ export const SharePointService = {
           checklistMotorista: f[resolveFieldName(mapping, 'ChecklistMotorista')] || "",
           retornoMotorista: f[resolveFieldName(mapping, 'RetornoMotorista')] || f.RetornoMotorista || "",
           causaRaiz: f[resolveFieldName(mapping, 'CausaRaiz')] || "",
-          tempoResposta: f[resolveFieldName(mapping, 'TempoResposta')] || ""
+          tempoResposta: f[resolveFieldName(mapping, 'TempoResposta')] || "",
+          logTempoResposta: f[resolveFieldName(mapping, 'LogTempoResposta')] || ""
         };
       });
 
@@ -1560,7 +1561,8 @@ export const SharePointService = {
             checklistMotorista: f[resolveFieldName(mapping, 'ChecklistMotorista')] || "",
             retornoMotorista: f[resolveFieldName(mapping, 'RetornoMotorista')] || f.RetornoMotorista || "",
             causaRaiz: f[resolveFieldName(mapping, 'CausaRaiz')] || "",
-            tempoResposta: f[resolveFieldName(mapping, 'TempoResposta')] || ""
+            tempoResposta: f[resolveFieldName(mapping, 'TempoResposta')] || "",
+            logTempoResposta: f[resolveFieldName(mapping, 'LogTempoResposta')] || ""
           };
         });
 
@@ -1613,7 +1615,8 @@ export const SharePointService = {
         ChecklistMotorista: departure.checklistMotorista || '',
         RetornoMotorista: departure.retornoMotorista || '',
         CausaRaiz: departure.causaRaiz || '',
-        TempoResposta: departure.tempoResposta || ''
+        TempoResposta: departure.tempoResposta || '',
+        LogTempoResposta: departure.logTempoResposta || ''
     };
 
     const fields: any = {};
@@ -1668,7 +1671,8 @@ export const SharePointService = {
         ChecklistMotorista: departure.checklistMotorista || '',
         RetornoMotorista: departure.retornoMotorista || '',
         CausaRaiz: departure.causaRaiz || '',
-        TempoResposta: departure.tempoResposta || ''
+        TempoResposta: departure.tempoResposta || '',
+        LogTempoResposta: departure.logTempoResposta || ''
     };
 
     const fields: any = {};

@@ -61,6 +61,7 @@ export interface RouteDeparture {
   retornoMotorista?: string; // Histórico de conversa entre bot e motorista
   causaRaiz?: string; // Causa raiz para rotas de Manutenção
   tempoResposta?: string; // Tempo entre horário real e horário inserido pelo usuário (HH:MM:SS)
+  logTempoResposta?: string; // Log JSON de alterações no tempoResposta: [{hora, campo, de, para}]
   editingUser?: string; // E-mail do usuário editando esta linha (lock temporário)
   lockExpiresAt?: number; // Timestamp em ms quando o lock expira
 }
