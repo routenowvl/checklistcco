@@ -902,13 +902,22 @@ export const SharePointService = {
 
       // Modo visualização: acesso concedido pela lista de cadastro (Title=email, OPERACAO)
       const viewerEntries = await this.getViewerAccessEntries(token, forceRefresh);
-      const allowedOps = new Set(
-        viewerEntries
-          .filter((entry) => entry.email === normalizedEmail)
-          .map((entry) => String(entry.operacao || '').trim().toUpperCase())
-          .filter(Boolean)
-      );
+      const userViewerOps = viewerEntries
+        .filter((entry) => entry.email === normalizedEmail)
+        .map((entry) => String(entry.operacao || '').trim().toUpperCase())
+        .filter(Boolean);
 
+      // Se o usuário tem "ALL" na OPERACAO, retorna todas as configs como read-only
+      if (userViewerOps.includes('ALL')) {
+        console.log('[DEBUG_SHAREPOINT_ACCESS] Modo visualização (ALL):', {
+          userEmail: normalizedEmail,
+          totalAllConfigs: allConfigs.length,
+          allOperations: allConfigs.map((cfg) => cfg.operacao)
+        });
+        return { configs: allConfigs, canEdit: false };
+      }
+
+      const allowedOps = new Set(userViewerOps);
       const readableConfigs = allConfigs.filter((config) =>
         allowedOps.has(String(config.operacao || '').trim().toUpperCase())
       );
