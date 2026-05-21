@@ -233,15 +233,13 @@ const buildTokenAttempts = (
   clientId: string,
   clientSecret: string,
   username: string,
-  password: string,
-  scope: string
+  password: string
 ) => {
   const jsonBody = JSON.stringify({
     client_id: clientId,
     client_secret: clientSecret,
     username,
     password,
-    scope,
     grant_type: 'password'
   });
 
@@ -250,7 +248,6 @@ const buildTokenAttempts = (
     client_secret: clientSecret,
     username,
     password,
-    scope,
     grant_type: 'password'
   }).toString();
 
@@ -287,11 +284,10 @@ export async function requestRouteWebToken(): Promise<RouteWebTokenResult> {
   const clientSecret = readRequiredEnv('ROUTE_WEB_CLIENT_SECRET');
   const username = readRequiredEnv('ROUTE_WEB_USERNAME');
   const password = readRequiredEnv('ROUTE_WEB_PASSWORD');
-  const scope = readRequiredEnv('ROUTE_WEB_SCOPE');
 
   let lastErrorMessage = 'Falha desconhecida ao obter token';
 
-  for (const attempt of buildTokenAttempts(clientId, clientSecret, username, password, scope)) {
+  for (const attempt of buildTokenAttempts(clientId, clientSecret, username, password)) {
     const response = await fetch(url, {
       method: 'POST',
       headers: attempt.headers,
