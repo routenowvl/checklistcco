@@ -598,7 +598,7 @@ export const SharePointService = {
     await graphFetch(`/sites/${siteId}/lists/${list.id}/items`, token, { method: 'POST', body: JSON.stringify({ fields }) });
   },
 
-  async getHistory(token: string, userEmail: string): Promise<HistoryRecord[]> {
+  async getHistory(token: string, userEmail: string, fetchAll?: boolean): Promise<HistoryRecord[]> {
     try {
       const siteId = await getResolvedSiteId(token);
       const list = await findListByIdOrName(siteId, 'Historico_checklist_web', token);
@@ -626,7 +626,7 @@ export const SharePointService = {
         resetBy: item.fields.Title, 
         email: (item.fields[celulaField] || "").toString().trim(), 
         tasks: JSON.parse(item.fields.DadosJSON || '[]') 
-      })).filter((record: HistoryRecord) => record.email?.toLowerCase() === userEmail.toLowerCase().trim())
+      })).filter((record: HistoryRecord) => fetchAll ? true : record.email?.toLowerCase() === userEmail.toLowerCase().trim())
         .sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
       
       console.log(`[HISTORY_QUERY] ✅ ${result.length} registros filtrados`);
@@ -881,7 +881,7 @@ export const SharePointService = {
     }
   },
 
-  async getRouteConfigsByAccess(token: string, userEmail: string, forceRefresh: boolean = false): Promise<{ configs: RouteConfig[]; canEdit: boolean }> {
+  async getRouteConfigsByAccess(token: string, userEmail: string, forceRefresh: boolean = false): Promise<{ configs: RouteConfig[]; canEdit: boolean; isAllViewer: boolean }> {
     try {
       const normalizedEmail = String(userEmail || '').trim().toLowerCase();
       const allConfigs = await this.getAllRouteConfigs(token, forceRefresh);
@@ -897,7 +897,7 @@ export const SharePointService = {
             plantId: cfg.plantId
           }))
         });
-        return { configs: editableConfigs, canEdit: true };
+        return { configs: editableConfigs, canEdit: true, isAllViewer: false };
       }
 
       // Modo visualização: acesso concedido pela lista de cadastro (Title=email, OPERACAO)
@@ -914,7 +914,7 @@ export const SharePointService = {
           totalAllConfigs: allConfigs.length,
           allOperations: allConfigs.map((cfg) => cfg.operacao)
         });
-        return { configs: allConfigs, canEdit: false };
+        return { configs: allConfigs, canEdit: false, isAllViewer: true };
       }
 
       const allowedOps = new Set(userViewerOps);
@@ -936,10 +936,10 @@ export const SharePointService = {
         }))
       });
 
-      return { configs: readableConfigs, canEdit: false };
+      return { configs: readableConfigs, canEdit: false, isAllViewer: false };
     } catch (e: any) {
       console.error('[SHAREPOINT] Erro ao buscar configs por acesso:', e.message);
-      return { configs: [], canEdit: false };
+      return { configs: [], canEdit: false, isAllViewer: false };
     }
   },
 

@@ -17,6 +17,7 @@ const STATUS_CONFIG: Record<string, { label: string, color: string }> = {
 
 interface HistoryViewerProps {
     currentUser: AppUser;
+    viewerMode?: 'saidas';
 }
 
 type EnhancedHistoryRecord = HistoryRecord & {
@@ -24,13 +25,14 @@ type EnhancedHistoryRecord = HistoryRecord & {
     partialRecord?: HistoryRecord;
 };
 
-const HistoryViewer: React.FC<HistoryViewerProps> = ({ currentUser }) => {
+const HistoryViewer: React.FC<HistoryViewerProps> = ({ currentUser, viewerMode }) => {
   const [history, setHistory] = useState<HistoryRecord[]>([]);
   const [userConfigs, setUserConfigs] = useState<RouteConfig[]>([]);
   const [selectedRecord, setSelectedRecord] = useState<EnhancedHistoryRecord | null>(null);
   const [viewingPartial, setViewingPartial] = useState(false);
   const [collapsedCategories, setCollapsedCategories] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [celulaFilter, setCelulaFilter] = useState<string>('todas');
   
   // Filtro para mostrar/ocultar salvamentos automáticos (padrão: OCULTAR)
   const [showAutoSaves, setShowAutoSaves] = useState(false);
@@ -58,11 +60,11 @@ const HistoryViewer: React.FC<HistoryViewerProps> = ({ currentUser }) => {
     setIsLoading(true);
     try {
         // Carrega configurações de permissão do usuário
-        const configs = await SharePointService.getRouteConfigs(token, currentUser.email);
-        setUserConfigs(configs);
+        const routeAccess = await SharePointService.getRouteConfigsByAccess(token, currentUser.email);
+        setUserConfigs(routeAccess.configs);
 
-        // Busca registros históricos
-        const data = await SharePointService.getHistory(token, currentUser.email);
+        // Busca registros históricos (fetchAll para ALL viewers)
+        const data = await SharePointService.getHistory(token, currentUser.email, viewerMode === 'saidas');
         setHistory(data);
     } catch (e) {
         console.error("Erro ao carregar histórico:", e);
@@ -230,8 +232,12 @@ const HistoryViewer: React.FC<HistoryViewerProps> = ({ currentUser }) => {
     const recordTasks = viewingPartial && selectedRecord?.partialRecord ? selectedRecord.partialRecord.tasks : selectedRecord?.tasks || [];
     const allLocsInRecord = Array.from(new Set(recordTasks.flatMap(t => Object.keys(t.operations))));
     const myAllowedOps = new Set(userConfigs.map(c => c.operacao));
-    return allLocsInRecord.filter(loc => myAllowedOps.has(loc));
-  }, [selectedRecord, viewingPartial, userConfigs]);
+    let filtered = allLocsInRecord.filter(loc => myAllowedOps.has(loc));
+    if (celulaFilter !== 'todas') {
+      filtered = filtered.filter(loc => loc === celulaFilter);
+    }
+    return filtered;
+  }, [selectedRecord, viewingPartial, userConfigs, celulaFilter]);
 
   const currentTasksToDisplay = filteredTasksToDisplay;
 
@@ -341,6 +347,19 @@ const HistoryViewer: React.FC<HistoryViewerProps> = ({ currentUser }) => {
                </div>
 
                <div className="flex items-center gap-2">
+                  {/* Filtro de Célula */}
+                  {userConfigs.length > 1 && (
+                    <select
+                      value={celulaFilter}
+                      onChange={(e) => setCelulaFilter(e.target.value)}
+                      className="px-3 py-2 rounded-xl text-[10px] font-bold uppercase outline-none cursor-pointer bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-300 dark:border-slate-700"
+                    >
+                      <option value="todas">Todas as Células</option>
+                      {Array.from(new Set(userConfigs.map(c => c.operacao).filter(Boolean))).sort().map(op => (
+                        <option key={op} value={op}>{op}</option>
+                      ))}
+                    </select>
+                  )}
                   {hasActiveColFilters && (
                     <button onClick={clearColFilters} className="px-3 py-2 text-[9px] font-bold text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-xl uppercase flex items-center gap-1">
                       <X size={12} /> Limpar Filtros

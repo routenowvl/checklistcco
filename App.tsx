@@ -83,6 +83,7 @@ const AppContent = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [isViewerOnly, setIsViewerOnly] = useState(false);
+  const [isAllViewer, setIsAllViewer] = useState(false);
   const [collapsed, setCollapsed] = useState(true);
   const [collapsedCategories, setCollapsedCategories] = useState<string[]>([]);
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
@@ -254,6 +255,7 @@ const AppContent = () => {
       }
 
       setIsViewerOnly(viewerOnly);
+      setIsAllViewer(routeAccess.isAllViewer);
 
       if (viewerOnly) {
         console.log('[APP] Perfil de visualização detectado. Checklist/Resumo/Histórico geral ocultos.');
@@ -421,6 +423,9 @@ const AppContent = () => {
             <>
               <SidebarLink to="/departures" icon={Truck} label="Saídas" active={window.location.hash === '#/departures'} collapsed={collapsed} />
               <SidebarLink to="/nao-coletas" icon={Milk} label="Não Coletas" active={window.location.hash === '#/nao-coletas'} collapsed={collapsed} />
+              {isAllViewer && (
+                <SidebarLink to="/history" icon={History} label="Histórico" active={window.location.hash === '#/history'} collapsed={collapsed} />
+              )}
               {!isViewerOnly && (
                 <>
                   <SidebarLink to="/" icon={CheckSquare} label="Checklist" active={window.location.hash === '#/'} collapsed={collapsed} />
@@ -473,9 +478,12 @@ const AppContent = () => {
                 <Route path="/" element={<Navigate to="/departures" replace />} />
                 <Route
                   path="/departures"
-                  element={<RouteDepartureView currentUser={currentUser} onLogout={handleLogout} />}
+                  element={<RouteDepartureView currentUser={currentUser} onLogout={handleLogout} isAllViewer={isAllViewer} />}
                 />
                 <Route path="/nao-coletas" element={<NonCollectionsView currentUser={currentUser} />} />
+                {isAllViewer && (
+                  <Route path="/history" element={<HistoryViewer currentUser={currentUser} viewerMode="saidas" />} />
+                )}
                 <Route path="*" element={<Navigate to="/departures" replace />} />
               </>
             ) : (
@@ -500,6 +508,7 @@ const AppContent = () => {
                     isConfigModalOpen={isConfigModalOpen}
                     setIsConfigModalOpen={setIsConfigModalOpen}
                     onLogout={handleLogout}
+                    isAllViewer={isAllViewer}
                   />
                 } />
                 <Route path="/nao-coletas" element={<NonCollectionsView currentUser={currentUser} />} />

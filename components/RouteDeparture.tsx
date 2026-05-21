@@ -358,12 +358,19 @@ const EmailInput: React.FC<EmailInputProps> = ({
   );
 };
 
+const CELULA_EMAIL_MAP: Record<string, string> = {
+  'cco.logistica@viagroup.com.br': 'Célula 1',
+  'cco.logistica2@viagroup.com.br': 'Célula 2',
+  'cco.logistica3@viagroup.com.br': 'Célula 3',
+};
+
 const RouteDepartureView: React.FC<{
   currentUser: User;
   isConfigModalOpen?: boolean;
   setIsConfigModalOpen?: (open: boolean) => void;
   onLogout?: () => void;
-}> = ({ currentUser, isConfigModalOpen = false, setIsConfigModalOpen = () => {}, onLogout }) => {
+  isAllViewer?: boolean;
+}> = ({ currentUser, isConfigModalOpen = false, setIsConfigModalOpen = () => {}, onLogout, isAllViewer = false }) => {
   const [routes, setRoutes] = useState<RouteDeparture[]>([]);
   const [userConfigs, setUserConfigs] = useState<RouteConfig[]>([]);
   const [canEditData, setCanEditData] = useState(true);
@@ -511,6 +518,7 @@ const RouteDepartureView: React.FC<{
   const [archivedResults, setArchivedResults] = useState<RouteDeparture[]>([]);
   const [isSearchingArchive, setIsSearchingArchive] = useState(false);
   const [isHistoryFullscreen, setIsHistoryFullscreen] = useState(false);
+  const [historyCelulaFilter, setHistoryCelulaFilter] = useState<string>('todas');
   const archiveAbortRef = useRef<AbortController | null>(null);
   
   // Estado para edição em lote - armazena alterações pendentes
@@ -619,10 +627,38 @@ const RouteDepartureView: React.FC<{
   const [checklistTooltip, setChecklistTooltip] = useState<{ routeId: string; content: string } | null>(null);
   const [copiedGeralStatus, setCopiedGeralStatus] = useState<string | null>(null);
   const [hoveredGeralCell, setHoveredGeralCell] = useState<string | null>(null);
+  const [celulaFilter, setCelulaFilter] = useState<string>('todas');
 
   const editableOperationKeys = useMemo(() => (
     new Set(userConfigs.map((cfg) => normalizeOperationKey(cfg.operacao)))
   ), [userConfigs]);
+
+  const celulaOptions = useMemo(() => {
+    if (!isAllViewer) return ['todas'];
+    // Mapeia cada config para sua célula pelo email
+    const celulas = new Set<string>();
+    userConfigs.forEach(c => {
+      const emailKey = (c.email || '').toLowerCase().trim();
+      if (CELULA_EMAIL_MAP[emailKey]) {
+        celulas.add(CELULA_EMAIL_MAP[emailKey]);
+      }
+    });
+    return ['todas', ...Array.from(celulas).sort()];
+  }, [userConfigs, isAllViewer]);
+
+  // Mapeia nome de célula -> set de operações que pertencem àquela célula
+  const celulaToOps = useMemo(() => {
+    const map = new Map<string, Set<string>>();
+    userConfigs.forEach(c => {
+      const emailKey = (c.email || '').toLowerCase().trim();
+      const celula = CELULA_EMAIL_MAP[emailKey];
+      if (celula && c.operacao) {
+        if (!map.has(celula)) map.set(celula, new Set());
+        map.get(celula)!.add(c.operacao);
+      }
+    });
+    return map;
+  }, [userConfigs]);
 
   const canEditOperation = (operacao: string): boolean => {
     if (!canEditData) return false;
@@ -2305,8 +2341,11 @@ const RouteDepartureView: React.FC<{
       }
 
       // Atualiza snapshot de visualização por operação (somente se houver mudança no Conteudo)
-      void syncViewerContentForDepartures(token, configs || [], recalculatedRoutes)
-        .catch((err) => console.error('[VIEWER_CACHE][SAIDAS] Falha ao sincronizar Conteudo:', err?.message || err));
+      try {
+        await syncViewerContentForDepartures(token, configs || [], recalculatedRoutes);
+      } catch (err) {
+        console.error('[VIEWER_CACHE][SAIDAS] Falha ao sincronizar Conteudo:', (err as any)?.message || err);
+      }
     } catch (e: any) {
       console.error('[RouteDeparture] Erro ao carregar dados:', e.message);
       if (!isBackgroundRefresh && (e.message.includes('expired') || e.message.includes('401'))) {
@@ -2348,6 +2387,7 @@ const RouteDepartureView: React.FC<{
 
     setIsSearchingArchive(true);
     setHistoryEditWarning(null);
+    setHistoryCelulaFilter('todas');
     try {
         console.log('[SEARCH_ARCHIVE] Requesting history from SharePoint list {856bf9d5-6081-4360-bcad-e771cbabfda8}...');
         const results = await SharePointService.getArchivedDepartures(await getAccessToken(), null, histStart, histEnd, controller.signal);
@@ -3515,6 +3555,14 @@ const RouteDepartureView: React.FC<{
   const filteredArchivedResults = useMemo(() => {
     let result = archivedResults;
 
+    // Filtro de célula
+    if (historyCelulaFilter !== 'todas') {
+      const opsDaCelula = celulaToOps.get(historyCelulaFilter);
+      if (opsDaCelula) {
+        result = result.filter(r => opsDaCelula.has(r.operacao));
+      }
+    }
+
     // Aplica os filtros selecionados
     if (hasHistoryActiveColFilters) {
       result = result.filter(r => {
@@ -3624,7 +3672,7 @@ const RouteDepartureView: React.FC<{
     }
 
     return sorted;
-  }, [archivedResults, historySelectedFilters, hasHistoryActiveColFilters, historySortByOperacao]);
+  }, [archivedResults, historySelectedFilters, hasHistoryActiveColFilters, historySortByOperacao, historyCelulaFilter, celulaToOps]);
 
   // Converte data YYYY-MM-DD para DD/MM/AAAA (parse manual para evitar fuso)
   const formatDateToBR = (dateString: string) => {
@@ -3920,6 +3968,10 @@ const RouteDepartureView: React.FC<{
     const myOps = new Set(userConfigs.map(c => c.operacao));
     let result = routes.filter(r => {
         if (myOps.size === 0) return false;
+        if (celulaFilter !== 'todas') {
+          const opsDaCelula = celulaToOps.get(celulaFilter);
+          if (!opsDaCelula || !opsDaCelula.has(r.operacao)) return false;
+        }
         return myOps.has(r.operacao);
     });
 
@@ -3961,7 +4013,7 @@ const RouteDepartureView: React.FC<{
     }
 
     return result;
-  }, [routes, colFilters, selectedFilters, isSortByTimeEnabled, isSortByOperacao, userConfigs]);
+  }, [routes, colFilters, selectedFilters, isSortByTimeEnabled, isSortByOperacao, userConfigs, celulaFilter, celulaToOps]);
 
   // Cálculo dos indicadores GERAL e INTERNO - memoizado para evitar re-renderização desnecessária
   const [performanceIndicators, setPerformanceIndicators] = useState({ geral: '0.00', interno: '0.00' });
@@ -3971,6 +4023,10 @@ const RouteDepartureView: React.FC<{
     const myOps = new Set(userConfigs.map(c => c.operacao));
     const allUserRoutes = routes.filter(r => {
       if (myOps.size === 0) return false;
+      if (celulaFilter !== 'todas') {
+        const opsDaCelula = celulaToOps.get(celulaFilter);
+        if (!opsDaCelula || !opsDaCelula.has(r.operacao)) return false;
+      }
       return myOps.has(r.operacao);
     });
 
@@ -4002,7 +4058,7 @@ const RouteDepartureView: React.FC<{
       }
       return { geral, interno };
     });
-  }, [routes.length, userConfigs.length]); // Apenas quantidade importa para estabilidade
+  }, [routes.length, userConfigs.length, celulaFilter, celulaToOps]); // Apenas quantidade importa para estabilidade
 
   const tableColumns = [
     { id: 'rota', label: 'ROTA' }, { id: 'data', label: 'DATA' }, { id: 'inicio', label: 'INÍCIO' },
@@ -4011,7 +4067,55 @@ const RouteDepartureView: React.FC<{
     { id: 'operacao', label: 'OPERAÇÃO' }, { id: 'status', label: 'STATUS' }, { id: 'tempo', label: 'TEMPO' }, { id: 'tempoResposta', label: 'DELAY DE MAPEAMENTO' }
   ];
 
-  if (isLoading) return <div className="h-full flex flex-col items-center justify-center text-primary-500"><Loader2 size={48} className="animate-spin" /></div>;
+  if (isLoading) return (
+    <div className="splash-loading">
+      <div className="splash-bg-glow" />
+      <div className="splash-inner">
+        <img src="/logo.png" alt="VIA" className="splash-logo-anim" />
+        <div className="splash-dots-anim">
+          <span></span><span></span><span></span>
+        </div>
+      </div>
+      <style>{`
+        .splash-loading {
+          position: fixed; inset: 0; z-index: 99999;
+          display: flex; align-items: center; justify-content: center;
+          background: #05080f;
+        }
+        .splash-bg-glow {
+          position: absolute; inset: 0;
+          background: radial-gradient(ellipse at 50% 50%, rgba(0,212,255,0.08) 0%, transparent 70%);
+        }
+        .splash-inner {
+          position: relative; z-index: 1;
+          display: flex; flex-direction: column; align-items: center; gap: 32px;
+        }
+        .splash-logo-anim {
+          width: 220px; height: auto;
+          animation: splashFloat 3s ease-in-out infinite;
+          filter: drop-shadow(0 0 40px rgba(0,212,255,0.25));
+        }
+        @keyframes splashFloat {
+          0%, 100% { transform: translateY(0px); }
+          50% { transform: translateY(-18px); }
+        }
+        .splash-dots-anim {
+          display: flex; gap: 10px;
+        }
+        .splash-dots-anim span {
+          width: 8px; height: 8px; border-radius: 50%;
+          background: rgba(0,212,255,0.4);
+          animation: splashPulse 1.4s ease-in-out infinite;
+        }
+        .splash-dots-anim span:nth-child(2) { animation-delay: 0.2s; }
+        .splash-dots-anim span:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes splashPulse {
+          0%, 80%, 100% { transform: scale(0.6); opacity: 0.3; background: rgba(0,212,255,0.3); }
+          40% { transform: scale(1.2); opacity: 1; background: rgba(0,212,255,0.9); }
+        }
+      `}</style>
+    </div>
+  );
 
   return (
     <div className={`flex flex-col h-full p-4 overflow-hidden select-none font-sans animate-fade-in relative ${isDarkMode ? 'bg-[#020617]' : 'bg-gradient-to-br from-white via-slate-50/50 to-slate-50'}`}>
@@ -4067,6 +4171,20 @@ const RouteDepartureView: React.FC<{
               </div>
               <div className="w-2 h-2 bg-amber-500 rounded-full animate-pulse shrink-0"></div>
             </div>
+            {/* Filtro de Célula */}
+            {isAllViewer && celulaOptions.length > 1 && (
+              <select
+                value={celulaFilter}
+                onChange={(e) => setCelulaFilter(e.target.value)}
+                className={`ml-3 px-3 py-2 rounded-xl text-[10px] font-bold uppercase outline-none cursor-pointer ${isDarkMode ? 'bg-slate-800 text-slate-200 border border-slate-700' : 'bg-white text-slate-700 border border-slate-300'}`}
+              >
+                {celulaOptions.map(op => (
+                  <option key={op} value={op}>
+                    {op === 'todas' ? 'Todas as Células' : op}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
         </div>
         <div className="flex gap-2 items-center">
@@ -5669,6 +5787,20 @@ const RouteDepartureView: React.FC<{
                                   <span className="text-[8px] font-bold text-amber-600 dark:text-amber-400 bg-amber-100 dark:bg-amber-900/30 px-2 py-0.5 rounded-full border border-amber-300 dark:border-amber-700">
                                       FILTRADO ({filteredArchivedResults.length} de {archivedResults.length})
                                   </span>
+                              )}
+                              {/* Filtro de Célula no Histórico */}
+                              {isAllViewer && celulaOptions.length > 1 && (
+                                <select
+                                  value={historyCelulaFilter}
+                                  onChange={(e) => setHistoryCelulaFilter(e.target.value)}
+                                  className={`px-2 py-1 rounded-lg text-[9px] font-bold uppercase outline-none cursor-pointer ${isDarkMode ? 'bg-slate-900 text-slate-200 border border-slate-700' : 'bg-white text-slate-700 border border-slate-300'}`}
+                                >
+                                  {celulaOptions.map(op => (
+                                    <option key={op} value={op}>
+                                      {op === 'todas' ? 'Todas as Células' : op}
+                                    </option>
+                                  ))}
+                                </select>
                               )}
                           </div>
                           <div className="flex items-center gap-2 ml-auto">
