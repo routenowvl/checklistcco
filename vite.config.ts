@@ -11,12 +11,21 @@ import {
   getTokenPreview,
   requestRouteWebToken
 } from './utils/routeWebServer';
+import { getGraphAppToken } from './utils/graphAppAuth';
 import {
   getRouteWebEventsByDateAndPlants,
   getRouteWebRoutesByDateAndPlants,
   type RouteWebEventDbRow,
   type RouteWebRouteDbRow
 } from './utils/rweDb';
+import {
+  getAllConfigs, getConfigByOperacao, updateConfigField, updateConfigFields,
+  updateConteudoIfChanged, updateConteudoNcoletasIfChanged,
+  getLockStatus, acquireLock, releaseLock,
+  getDepartures, upsertDeparture, deleteDeparture,
+  getNonCollections, insertNonCollection, updateNonCollection, deleteNonCollection,
+  insertConfig
+} from './utils/checklistDb';
 
 const parseUpstreamResponse = async (response: Response): Promise<{ contentType: string; raw: string; data: any }> => {
   const contentType = String(response.headers.get('content-type') || '');
@@ -854,6 +863,379 @@ const routeWebDevPlugin = (mode: string) => ({
             success: false,
             error: error?.message || 'Erro ao consultar rotas'
           });
+        }
+      }
+
+      // Checklist API — operacao_config
+      if (req.method === 'POST' && pathname === '/api/checklist-config') {
+        try {
+          const body = await readJsonBody(req);
+          const { action } = body;
+
+          switch (action) {
+            case 'getAll': {
+              const configs = await getAllConfigs();
+              return writeJson(res, 200, { success: true, configs });
+            }
+            case 'getByOperacao': {
+              const config = await getConfigByOperacao(String(body.operacao || ''));
+              return writeJson(res, 200, { success: true, config });
+            }
+            case 'updateField': {
+              await updateConfigField(String(body.operacao || ''), String(body.field || ''), body.value);
+              return writeJson(res, 200, { success: true });
+            }
+            case 'updateFields': {
+              await updateConfigFields(String(body.operacao || ''), body.fields || {});
+              return writeJson(res, 200, { success: true });
+            }
+            case 'updateConteudoIfChanged': {
+              const changed = await updateConteudoIfChanged(String(body.operacao || ''), String(body.conteudo || ''));
+              return writeJson(res, 200, { success: true, changed });
+            }
+            case 'updateConteudoNcoletasIfChanged': {
+              const changed = await updateConteudoNcoletasIfChanged(String(body.operacao || ''), String(body.conteudoNcoletas || ''));
+              return writeJson(res, 200, { success: true, changed });
+            }
+            case 'getLockStatus': {
+              const lockStatus = await getLockStatus(String(body.operacao || ''));
+              return writeJson(res, 200, { success: true, lock: lockStatus });
+            }
+            case 'acquireLock': {
+              await acquireLock(String(body.operacao || ''), String(body.userEmail || ''), String(body.timestamp || ''));
+              return writeJson(res, 200, { success: true });
+            }
+            case 'releaseLock': {
+              await releaseLock(String(body.operacao || ''));
+              return writeJson(res, 200, { success: true });
+            }
+            default:
+              return writeJson(res, 400, { success: false, error: `Ação desconhecida: ${action}` });
+          }
+        } catch (error: any) {
+          console.error('[CHECKLIST_CONFIG][DEV] Erro:', error?.message || error);
+          return writeJson(res, 500, { success: false, error: 'Erro ao processar config' });
+        }
+      }
+
+      // Checklist API — departures
+      if (req.method === 'POST' && pathname === '/api/checklist-departures') {
+        try {
+          const body = await readJsonBody(req);
+          const { action } = body;
+
+          switch (action) {
+            case 'getAll': {
+              const departures = await getDepartures();
+              return writeJson(res, 200, { success: true, departures });
+            }
+            case 'upsert': {
+              const id = await upsertDeparture(body.departure || {});
+              return writeJson(res, 200, { success: true, id });
+            }
+            case 'delete': {
+              await deleteDeparture(Number(body.id));
+              return writeJson(res, 200, { success: true });
+            }
+            default:
+              return writeJson(res, 400, { success: false, error: `Ação desconhecida: ${action}` });
+          }
+        } catch (error: any) {
+          const detail = error?.detail || '';
+          const hint = error?.hint || '';
+          const code = error?.code || '';
+          const schema = error?.schema || '';
+          const table = error?.table || '';
+          const column = error?.column || '';
+          console.error('[CHECKLIST_DEPARTURES][DEV] Erro:', error?.message || error, { detail, hint, code, schema, table, column });
+          return writeJson(res, 500, {
+            success: false,
+            error: error?.message || 'Erro ao processar departures',
+            detail,
+            hint,
+            code,
+            schema,
+            table,
+            column
+          });
+        }
+      }
+
+      // Checklist API — non-collections
+      if (req.method === 'POST' && pathname === '/api/checklist-non-collections') {
+        try {
+          const body = await readJsonBody(req);
+          const { action } = body;
+
+          switch (action) {
+            case 'getAll': {
+              const nonCollections = await getNonCollections();
+              return writeJson(res, 200, { success: true, nonCollections });
+            }
+            case 'insert': {
+              const id = await insertNonCollection(body.nonCollection || {});
+              return writeJson(res, 200, { success: true, id });
+            }
+            case 'update': {
+              await updateNonCollection(body.nonCollection || {});
+              return writeJson(res, 200, { success: true });
+            }
+            case 'delete': {
+              await deleteNonCollection(Number(body.id));
+              return writeJson(res, 200, { success: true });
+            }
+            default:
+              return writeJson(res, 400, { success: false, error: `Ação desconhecida: ${action}` });
+          }
+        } catch (error: any) {
+          console.error('[CHECKLIST_NON_COLLECTIONS][DEV] Erro:', error?.message || error, error?.detail || '', error?.hint || '');
+          return writeJson(res, 500, { success: false, error: `Erro ao processar non-collections: ${error?.message || error}` });
+        }
+      }
+
+      // Migrate config from SharePoint to PG (TEMPORÁRIO — remover após migração)
+      if (req.method === 'POST' && pathname === '/api/migrate-config-from-sharepoint') {
+        try {
+          const SITE_PATH = process.env.VITE_SHAREPOINT_SITE_PATH || '';
+          const appToken = await getGraphAppToken();
+
+          const graphFetchDev = async (endpoint: string, token: string): Promise<any> => {
+            const url = endpoint.startsWith('https://') ? endpoint : `https://graph.microsoft.com/v1.0${endpoint}`;
+            const r = await fetch(url, { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } });
+            if (!r.ok) { const t = await r.text(); throw new Error(`Graph ${r.status}: ${t.slice(0, 300)}`); }
+            return r.status === 204 ? null : r.json();
+          };
+          const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '').trim();
+          const resolve = (m: Record<string, string>, t: string) => m[norm(t)] || t;
+          const parseNum = (v: unknown): number | null => {
+            if (v == null) return null;
+            if (typeof v === 'number' && Number.isFinite(v)) return Math.trunc(v);
+            const raw = String(v).trim(); if (!raw) return null;
+            const match = raw.match(/-?\d+(?:[.,]\d+)?/); if (!match) return null;
+            const p = Number(match[0].replace(',', '.')); return Number.isFinite(p) ? Math.trunc(p) : null;
+          };
+          const extractPlant = (fields: any, mapping: Record<string, string>): any => {
+            for (const c of ['Plant_id','Plant Id','PlantId','plant_id','IdPlant','ID_PLANT'].map(c => resolve(mapping, c))) {
+              if (c) { const v = fields?.[c]; if (v != null && String(v).trim() !== '') return v; }
+            }
+            for (const [k, v] of Object.entries(fields || {})) {
+              const nk = norm(k); if (nk.includes('plantid') || nk.includes('idplant')) { if (v != null && String(v).trim() !== '') return v; }
+            }
+            return null;
+          };
+
+          const siteData = await graphFetchDev(`/sites/${SITE_PATH}`, appToken);
+          const siteId = siteData.id;
+          let list: any;
+          try { list = await graphFetchDev(`/sites/${siteId}/lists/CONFIG_OPERACAO_SAIDA_DE_ROTAS`, appToken); }
+          catch { const ld = await graphFetchDev(`/sites/${siteId}/lists`, appToken); list = (ld.value || []).find((l: any) => l.name?.toLowerCase() === 'config_operacao_saida_de_rotas'); if (!list) throw new Error('Lista não encontrada'); }
+
+          const cols = await graphFetchDev(`/sites/${siteId}/lists/${list.id}/columns`, appToken);
+          const mapping: Record<string, string> = {};
+          for (const col of cols.value || []) { mapping[norm(col.name)] = col.name; mapping[norm(col.displayName)] = col.name; }
+
+          let allItems: any[] = [];
+          let nextUrl: string | null = `/sites/${siteId}/lists/${list.id}/items?expand=fields&$top=100`;
+          while (nextUrl) { const d = await graphFetchDev(nextUrl, appToken); allItems = allItems.concat(d.value || []); nextUrl = d['@odata.nextLink'] || null; }
+
+          let inserted = 0, skipped = 0, alreadyExists = 0;
+          const errors: string[] = [];
+          const parseNcoleta = (v: any): { dt: string | null; qtd: number } => { if (!v) return { dt: null, qtd: 0 }; const s = String(v).trim(); const m = s.match(/^(.+?\d{2}:\d{2}:\d{2})\s+(\d+)$/); if (m) return { dt: m[1].trim(), qtd: parseInt(m[2], 10) || 0 }; return { dt: s, qtd: 0 }; };
+          const toISO = (v: any): string | null => {
+            if (!v) return null;
+            const s = String(v).trim();
+            const m = s.match(/(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})/);
+            if (m) return `${m[3]}-${m[2]}-${m[1]}T${m[4]}:${m[5]}:${m[6]}`;
+            return s || null;
+          };
+          for (const item of allItems) {
+            const f = item.fields || {};
+            const operacaoField = resolve(mapping, 'OPERACAO');
+            const operacao = String(f[operacaoField] || f.Title || '').trim();
+            if (!operacao) { errors.push(`Item ${item.id}: sem operacao (Title="${f.Title || ''}", field="${operacaoField}")`); skipped++; continue; }
+            try {
+              const plantId = parseNum(extractPlant(f, mapping));
+              const id = await insertConfig({
+                operacao,
+                email: String(f[resolve(mapping, 'EMAIL')] || '').toLowerCase().trim(),
+                tolerancia: String(f[resolve(mapping, 'TOLERANCIA')] || '00:00:00'),
+                nome_exibicao: String(f[resolve(mapping, 'NomeExibicao')] || operacao),
+                plant_id: plantId,
+                ultimo_envio_saida: toISO(f[resolve(mapping, 'UltimoEnvioSaida')]),
+                status: String(f[resolve(mapping, 'Status')] || ''),
+                envio: String(f[resolve(mapping, 'Envio')] || ''),
+                copia: String(f[resolve(mapping, 'Copia')] || ''),
+                ultimo_envio_resumo_saida: toISO(f[resolve(mapping, 'UltimoEnvioResumoSaida')]),
+                status_resumo_saida: String(f[resolve(mapping, 'StatusResumoSaida')] || ''),
+                ultimo_envio_ncoleta: parseNcoleta(f[resolve(mapping, 'UltimoEnvioNcoleta')]).dt,
+                quantidade_ncoletas_registrada: parseNcoleta(f[resolve(mapping, 'UltimoEnvioNcoleta')]).qtd,
+                conteudo: String(f[resolve(mapping, 'Conteudo')] || ''),
+                conteudo_ncoletas: String(f[resolve(mapping, 'ConteudoNcoletas')] || ''),
+                lock_envio: f[resolve(mapping, 'LockEnvio')] || null,
+                lock_user: String(f[resolve(mapping, 'LockUser')] || ''),
+                lock_timestamp: toISO(f[resolve(mapping, 'LockTimestamp')]),
+              });
+              if (id > 0) inserted++;
+              else alreadyExists++;
+            } catch (e: any) { errors.push(`${operacao}: ${e.message}`); skipped++; }
+          }
+          return writeJson(res, 200, { success: true, total: allItems.length, inserted, alreadyExists, skipped, errors: errors.length > 0 ? errors.slice(0, 30) : undefined });
+        } catch (error: any) {
+          console.error('[MIGRATE_CONFIG][DEV] Erro:', error?.message || error);
+          return writeJson(res, 500, { success: false, error: error?.message || 'Erro na migração' });
+        }
+      }
+
+      // Migrate departures from Dados_Saida_de_rotas to PG (TEMPORÁRIO — remover após migração)
+      if (req.method === 'POST' && pathname === '/api/migrate-departures-from-sharepoint') {
+        try {
+          const SITE_PATH = process.env.VITE_SHAREPOINT_SITE_PATH || '';
+          const LIST_NAME = 'Dados_Saida_de_rotas';
+          const appToken = await getGraphAppToken();
+
+          const graphFetchDev = async (endpoint: string, token: string): Promise<any> => {
+            const url = endpoint.startsWith('https://') ? endpoint : `https://graph.microsoft.com/v1.0${endpoint}`;
+            const r = await fetch(url, { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } });
+            if (!r.ok) { const t = await r.text(); throw new Error(`Graph ${r.status}: ${t.slice(0, 300)}`); }
+            return r.status === 204 ? null : r.json();
+          };
+          const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '').trim();
+          const resolve = (m: Record<string, string>, t: string) => m[norm(t)] || t;
+          const fmtISOtoBR = (iso: any): string => { if (!iso) return ''; const s = String(iso).trim(); const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]}/${m[2]}/${m[1]}` : s; };
+          const fmtTime = (v: any): string => { if (!v) return ''; const s = String(v).trim(); const dt = s.match(/T(\d{2}:\d{2})/); if (dt) return dt[1] + ':00'; const t = s.match(/^(\d{2}:\d{2})/); return t ? t[1] + ':00' : s; };
+          const findList = async (siteId: string, name: string, token: string): Promise<any> => {
+            try { return await graphFetchDev(`/sites/${siteId}/lists/${name}`, token); }
+            catch { const ld = await graphFetchDev(`/sites/${siteId}/lists`, token); const found = (ld.value || []).find((l: any) => l.name?.toLowerCase() === name.toLowerCase() || l.displayName?.toLowerCase() === name.toLowerCase()); if (!found) throw new Error(`Lista ${name} não encontrada`); return found; }
+          };
+
+          const siteData = await graphFetchDev(`/sites/${SITE_PATH}`, appToken);
+          const siteId = siteData.id;
+          const list = await findList(siteId, LIST_NAME, appToken);
+
+          const cols = await graphFetchDev(`/sites/${siteId}/lists/${list.id}/columns`, appToken);
+          const mapping: Record<string, string> = {};
+          for (const col of cols.value || []) { mapping[norm(col.name)] = col.name; mapping[norm(col.displayName)] = col.name; }
+
+          const body = req.body || {};
+          const mode = body.mode || 'all';
+          let baseUrl = `/sites/${siteId}/lists/${list.id}/items?expand=fields&$top=100`;
+          if (mode === 'range' && body.startDate && body.endDate) {
+            const colData = resolve(mapping, 'DataOperacao');
+            baseUrl += `&$filter=fields/${colData} ge '${body.startDate}T00:00:00Z' and fields/${colData} le '${body.endDate}T23:59:59Z'`;
+          }
+
+          let allItems: any[] = [];
+          let nextUrl: string | null = baseUrl;
+          while (nextUrl) { const d = await graphFetchDev(nextUrl, appToken); allItems = allItems.concat(d.value || []); nextUrl = d['@odata.nextLink'] || null; }
+
+          let inserted = 0;
+          const errors: string[] = [];
+          for (const item of allItems) {
+            const f = item.fields || {};
+            try {
+              const colData = resolve(mapping, 'DataOperacao');
+              const colOp = resolve(mapping, 'Operacao');
+              const dataBR = fmtISOtoBR(f[colData]);
+              if (!dataBR) { errors.push(`Item ${item.id}: sem data`); continue; }
+
+              await upsertDeparture({
+                operacao: String(f[colOp] || '').trim(),
+                rota: String(f.Title || '').trim(),
+                motorista: String(f[resolve(mapping, 'Motorista')] || '').trim(),
+                placa: String(f[resolve(mapping, 'Placa')] || '').trim(),
+                contato: String(f[resolve(mapping, 'Contato')] || '').replace(/\D/g, ''),
+                inicio: fmtTime(f[resolve(mapping, 'HorarioInicio')]),
+                saida: fmtTime(f[resolve(mapping, 'HorarioSaida')]),
+                statusGeral: String(f[resolve(mapping, 'StatusGeral')] || '').trim(),
+                motivo: String(f[resolve(mapping, 'MotivoAtraso')] || '').trim(),
+                observacao: String(f[resolve(mapping, 'Observacao')] || '').trim(),
+                data: dataBR,
+                statusOp: String(f[resolve(mapping, 'StatusOp')] || 'Previsto').trim(),
+                checklistMotorista: String(f[resolve(mapping, 'ChecklistMotorista')] || '').trim(),
+                retornoMotorista: String(f[resolve(mapping, 'RetornoMotorista')] || '').trim(),
+                causaRaiz: String(f[resolve(mapping, 'CausaRaiz')] || '').trim(),
+                tempoResposta: String(f[resolve(mapping, 'TempoResposta')] || '').trim(),
+                logTempoResposta: String(f[resolve(mapping, 'LogTempoResposta')] || '').trim(),
+              });
+              inserted++;
+            } catch (e: any) { errors.push(`Item ${item.id}: ${e.message}`); }
+          }
+          return writeJson(res, 200, { success: true, total: allItems.length, inserted, errors: errors.length > 0 ? errors.slice(0, 30) : undefined });
+        } catch (error: any) {
+          console.error('[MIGRATE_DEPARTURES][DEV] Erro:', error?.message || error);
+          return writeJson(res, 500, { success: false, error: error?.message || 'Erro na migração' });
+        }
+      }
+
+      // Migrate non-collections from Dados_Nao_Coletas to PG (TEMPORÁRIO — remover após migração)
+      if (req.method === 'POST' && pathname === '/api/migrate-non-collections-from-sharepoint') {
+        try {
+          const SITE_PATH = process.env.VITE_SHAREPOINT_SITE_PATH || '';
+          const LIST_ID = '83e8cfb9-1982-47ae-b515-3fec112da457';
+          const appToken = await getGraphAppToken();
+
+          const graphFetchDev = async (endpoint: string, token: string): Promise<any> => {
+            const url = endpoint.startsWith('https://') ? endpoint : `https://graph.microsoft.com/v1.0${endpoint}`;
+            const r = await fetch(url, { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } });
+            if (!r.ok) { const t = await r.text(); throw new Error(`Graph ${r.status}: ${t.slice(0, 300)}`); }
+            return r.status === 204 ? null : r.json();
+          };
+          const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '').trim();
+          const resolve = (m: Record<string, string>, t: string) => m[norm(t)] || t;
+          const fmtISOtoBR = (iso: any): string => { if (!iso) return ''; const s = String(iso).trim(); const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]}/${m[2]}/${m[1]}` : s; };
+
+          const siteData = await graphFetchDev(`/sites/${SITE_PATH}`, appToken);
+          const siteId = siteData.id;
+
+          const cols = await graphFetchDev(`/sites/${siteId}/lists/${LIST_ID}/columns`, appToken);
+          const mapping: Record<string, string> = {};
+          for (const col of cols.value || []) { mapping[norm(col.name)] = col.name; mapping[norm(col.displayName)] = col.name; }
+
+          const body = req.body || {};
+          const mode = body.mode || 'all';
+          let baseUrl = `/sites/${siteId}/lists/${LIST_ID}/items?expand=fields&$top=100`;
+          if (mode === 'range' && body.startDate && body.endDate) {
+            const colData = resolve(mapping, 'Data');
+            baseUrl += `&$filter=fields/${colData} ge '${body.startDate}T00:00:00Z' and fields/${colData} le '${body.endDate}T23:59:59Z'`;
+          }
+
+          let allItems: any[] = [];
+          let nextUrl: string | null = baseUrl;
+          while (nextUrl) { const d = await graphFetchDev(nextUrl, appToken); allItems = allItems.concat(d.value || []); nextUrl = d['@odata.nextLink'] || null; }
+
+          let inserted = 0;
+          const errors: string[] = [];
+          for (const item of allItems) {
+            const f = item.fields || {};
+            try {
+              const colOp = resolve(mapping, 'Operacao');
+              const colData = resolve(mapping, 'Data');
+              const colObs = resolve(mapping, 'Observacao');
+              const dataBR = fmtISOtoBR(f[colData]);
+              if (!dataBR) { errors.push(`Item ${item.id}: sem data`); continue; }
+
+              await insertNonCollection({
+                operacao: String(f[colOp] || f['Opera_x00e7__x00e3_o'] || '').trim(),
+                rota: String(f.Title || '').trim(),
+                data: dataBR,
+                semana: String(f[resolve(mapping, 'Semana')] || f.Title || '').trim(),
+                codigo: String(f[resolve(mapping, 'Codigo')] || f['C_x00f3_digo'] || '').trim(),
+                produtor: String(f[resolve(mapping, 'Produtor')] || '').trim(),
+                motivo: String(f[resolve(mapping, 'Motivo')] || '').trim(),
+                observacao: String(f[colObs] || f['Observa_x00e7__x00e3_o'] || '').trim(),
+                acao: String(f[resolve(mapping, 'Acao')] || f['A_x00e7__x00e3_o'] || '').trim(),
+                dataAcao: fmtISOtoBR(f[resolve(mapping, 'DataAcao')] || f['DataA_x00e7__x00e3_o']),
+                ultimaColeta: fmtISOtoBR(f[resolve(mapping, 'UltimaColeta')] || f['_x00da_ltimaColeta']),
+                Culpabilidade: String(f[resolve(mapping, 'Culpabilidade')] || '').trim(),
+                causaRaiz: String(f[resolve(mapping, 'CausaRaiz')] || '').trim(),
+              });
+              inserted++;
+            } catch (e: any) { errors.push(`Item ${item.id}: ${e.message}`); }
+          }
+          return writeJson(res, 200, { success: true, total: allItems.length, inserted, errors: errors.length > 0 ? errors.slice(0, 30) : undefined });
+        } catch (error: any) {
+          console.error('[MIGRATE_NC][DEV] Erro:', error?.message || error);
+          return writeJson(res, 500, { success: false, error: error?.message || 'Erro na migração' });
         }
       }
 

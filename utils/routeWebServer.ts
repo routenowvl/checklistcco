@@ -135,12 +135,6 @@ export const getRouteWebRoutesEndpointUrl = (): string => {
   const resolved = resolveRouteWebRoutesUrl();
   const url = resolved.parsed.toString();
 
-  console.log('[ROUTE_WEB_SERVER] ROUTE_WEB_ROUTES_URL resolvida:', {
-    source: resolved.source,
-    raw: resolved.raw,
-    resolved: url
-  });
-
   return url;
 };
 
@@ -155,13 +149,6 @@ export const getRouteWebRouteEventsEndpointUrl = (routeId: number | string): str
   resolved.parsed.pathname = `${routePath}/${routeIdText}/events`;
 
   const url = resolved.parsed.toString();
-  console.log('[ROUTE_WEB_SERVER] ROUTE_WEB_EVENTS_URL resolvida:', {
-    routeId: routeIdText,
-    source: resolved.source,
-    raw: resolved.raw,
-    resolved: url
-  });
-
   return url;
 };
 

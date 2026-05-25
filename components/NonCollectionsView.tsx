@@ -749,13 +749,6 @@ const NonCollectionsView: React.FC<{
         }
 
         setNonCollections([...updatedRecords, ...appendedRecords]);
-        console.log(
-          '[BULK_PASTE] ROTA processada:',
-          updatedIndices.length,
-          'linha(s) preenchida(s),',
-          appendedRecords.length,
-          'nova(s) linha(s) criada(s)'
-        );
 
         if (remainingLines.length > 0) {
           await fetchColetasPrevistas(dataFormatada);
@@ -774,9 +767,6 @@ const NonCollectionsView: React.FC<{
           emptyIndices.push(idx);
         }
       });
-
-      console.log('[BULK_PASTE] Campo:', field, 'Valores:', lines);
-      console.log('[BULK_PASTE] Linhas vazias detectadas:', emptyIndices.length);
 
       const updatedRecords: NonCollection[] = [...nonCollections];
       let lineIndex = 0;
@@ -886,15 +876,12 @@ const NonCollectionsView: React.FC<{
         const recordsToSave = updatedRecords.filter(r => isPersistedNonCollectionId(r.id));
 
         if (recordsToSave.length === 0) {
-          console.log('[BULK_PASTE] Nenhum registro para salvar no SharePoint (todos são locais)');
           return;
         }
 
-        console.log('[BULK_PASTE] Salvando', recordsToSave.length, 'registros no SharePoint...');
         const savePromises = recordsToSave.map(async (record) => {
           try {
             await SharePointService.updateNonCollection(token, record);
-            console.log('[BULK_PASTE] Salvo:', record.rota, '-', record.codigo);
           } catch (e: any) {
             console.error('[BULK_PASTE] Erro ao salvar registro:', record.rota, e.message);
           }
@@ -1020,18 +1007,12 @@ const NonCollectionsView: React.FC<{
 
           if (Array.isArray(cached?.data) && cacheAgeMs >= 0 && cacheAgeMs <= COLETAS_PREVISTAS_CACHE_TTL_MS) {
             setColetasPrevistas(cached.data);
-            console.log('[COLETAS_PREVISTAS][CACHE_HIT] Usando cache (idade em ms):', cacheAgeMs);
-            console.log('[COLETAS_PREVISTAS][CACHE_HIT] Total retornado:', cached.data.length);
             return true;
           }
         }
       } catch (cacheErr) {
         console.warn('[COLETAS_PREVISTAS][CACHE] Falha ao ler cache local:', cacheErr);
       }
-
-      console.log('[COLETAS_PREVISTAS] Buscando para data:', dataISO);
-      console.log('[COLETAS_PREVISTAS] Email do usuário:', currentUser.email);
-      console.log('[COLETAS_PREVISTAS] Operações do usuário (userConfigs):', userOperations);
 
       const coletas = await SharePointService.getColetasPrevistas(token, dataISO, currentUser.email, userOperations);
       setColetasPrevistas(coletas);
@@ -1045,9 +1026,6 @@ const NonCollectionsView: React.FC<{
         console.warn('[COLETAS_PREVISTAS][CACHE] Falha ao salvar cache local:', cacheErr);
       }
 
-      console.log('[COLETAS_PREVISTAS] Total retornado:', coletas.length);
-      console.log('[COLETAS_PREVISTAS] Detalhes:', coletas.map(c => `${c.Title}=${c.QntColeta}`));
-      console.log('[COLETAS_PREVISTAS] Soma QntColeta:', coletas.reduce((sum, c) => sum + c.QntColeta, 0));
       return true;
     } catch (e: any) {
       console.error('[COLETAS_PREVISTAS] Erro ao buscar:', e.message);
@@ -1063,21 +1041,15 @@ const NonCollectionsView: React.FC<{
         return;
       }
 
-      console.log('[NonCollections] Carregando dados...', currentUser.email);
-
       // Carrega configurações do usuário (edição por EMAIL; visualização por Cópia)
       const routeAccess = await SharePointService.getRouteConfigsByAccess(token, currentUser.email, forceRefresh);
       const configs = routeAccess.configs || [];
       setCanEditData(Boolean(routeAccess.canEdit));
       setUserConfigs(configs || []);
-      console.log('[NonCollections] operações do usuário:', configs?.map(c => c.operacao));
-      console.log('[NonCollections] Perfil de edição habilitado?', Boolean(routeAccess.canEdit));
 
       const myOps = new Set((configs || []).map(c => c.operacao));
 
       if (!routeAccess.canEdit) {
-        console.log('[NonCollections] Modo visualização: carregando dados via coluna ConteudoNcoletas.');
-
         const rowsFromSnapshots = (configs || []).flatMap((cfg) =>
           parseViewerSnapshotNonCollections(cfg.ConteudoNcoletas || '').map((row) => ({
             ...row,
@@ -1098,22 +1070,17 @@ const NonCollectionsView: React.FC<{
           setColetasPrevistas([]);
         }
 
-        console.log('[NonCollections] ✅ Dados carregados via snapshot para visualização');
         return;
       }
 
       // Carrega Não coletas do SharePoint
       const spNonCollections = await SharePointService.getNonCollections(token, currentUser.email);
-      console.log('[NonCollections] Total bruto do SharePoint:', spNonCollections.length);
 
       // Filtra APENAS Não coletas das operações do usuário logado
       const filtered = (spNonCollections || []).filter(nc => {
         if (myOps.size === 0) return false;
         return myOps.has(nc.operacao);
       });
-
-      console.log('[NonCollections] Não coletas filtradas por usuário:', filtered.length);
-      console.log('[NonCollections] operações nos dados filtrados:', Array.from(new Set(filtered.map(r => r.operacao))));
 
       setNonCollections(filtered);
 
@@ -1130,7 +1097,6 @@ const NonCollectionsView: React.FC<{
       void syncViewerContentForNonCollections(token, configs || [], filtered)
         .catch((err) => console.error('[VIEWER_CACHE][NC] Falha ao sincronizar ConteudoNcoletas:', err?.message || err));
 
-      console.log('[NonCollections] ? Dados carregados com sucesso');
     } catch (e: any) {
       console.error('[NonCollections] Erro ao carregar dados:', e.message);
     } finally {
@@ -1153,12 +1119,10 @@ const NonCollectionsView: React.FC<{
 
       if (isPersistedNonCollectionId(rowId)) {
         await SharePointService.updateNonCollection(token, currentRow);
-        console.log(`[NC_SAVE] ${fieldLabel} salvo:`, currentRow.rota);
         return;
       }
 
       if (!canPersistNonCollection(currentRow)) {
-        console.log(`[NC_SAVE] Linha local ainda incompleta, aguardando dados obrigatórios (${fieldLabel})`);
         return;
       }
 
@@ -1166,7 +1130,6 @@ const NonCollectionsView: React.FC<{
       setNonCollections(prev =>
         prev.map(r => (r.id === rowId ? { ...r, ...currentRow, id: spId } : r))
       );
-      console.log(`[NC_SAVE] ${fieldLabel} salvo criando novo item:`, currentRow.rota, 'ID:', spId);
     } catch (e: any) {
       console.error(`[NC_SAVE] Erro ao salvar ${fieldLabel.toLowerCase()}:`, e?.message || e);
     } finally {
@@ -1442,19 +1405,16 @@ const NonCollectionsView: React.FC<{
     setIsArchiving(true);
 
     try {
-      console.log(`[NC_ARCHIVE] Movendo ${validNonCollections.length} itens para o histórico...`);
       const archiveResult = await SharePointService.moveNonCollectionsToHistory(token, validNonCollections);
-      console.log(`[NC_ARCHIVE] Sucesso: ${archiveResult.success}, Falhas: ${archiveResult.failed}`);
 
-      // Limpa o campo UltimoEnvioNcoletas de cada operação do usuário
-      console.log('[NC_ARCHIVE] Limpando UltimoEnvioNcoletas das operações do usuário...');
+      // Limpa o campo UltimoEnvioNcoletas e quantidade_ncoletas_registrada de cada operação do usuário
       const operacoes = userConfigs.map(c => c.operacao);
       for (const operacao of operacoes) {
         try {
           await SharePointService.updateUltimoEnvioNaoColetas(token, operacao, '');
-          console.log(`[NC_ARCHIVE] ?o. UltimoEnvioNcoletas limpo para ${operacao}`);
+          await SharePointService.updateQuantidadeNcoletasRegistrada(token, operacao, 0);
         } catch (e: any) {
-          console.error(`[NC_ARCHIVE] Erro ao limpar UltimoEnvioNcoletas para ${operacao}:`, e.message);
+          console.error(`[NC_ARCHIVE] Erro ao limpar campos para ${operacao}:`, e.message);
         }
       }
 
@@ -1498,9 +1458,7 @@ const NonCollectionsView: React.FC<{
     setIsSearchingArchive(true);
     setHistoryEditWarning(null);
     try {
-      console.log('[NC_SEARCH_ARCHIVE] Requesting history from SharePoint list nao_coletas_web_hist...');
       const results = await SharePointService.getArchivedNonCollections(await getAccessToken(), currentUser.email, histStart, histEnd, controller.signal);
-      console.log('[NC_SEARCH_ARCHIVE] Results received:', results.length);
 
       // Só atualiza state se esta requisição não foi cancelada
       if (!controller.signal.aborted) {
@@ -1517,7 +1475,6 @@ const NonCollectionsView: React.FC<{
       }
     } catch (err: any) {
       if (err.name === 'AbortError') {
-        console.log('[NC_SEARCH_ARCHIVE] Requisição cancelada.');
         return;
       }
       console.error('[NC_SEARCH_ARCHIVE] Error during search:', err);
@@ -1838,16 +1795,19 @@ const NonCollectionsView: React.FC<{
     if (lines.length === 0) return;
 
     const availableOperations = userConfigs.map(cfg => String(cfg.operacao || '').trim()).filter(Boolean);
-    console.log('[BULK_PASTE] Campo:', field, 'Valores:', lines);
+
+    // Se já tem operação definida (ghost row ou linha existente), usa ela
+    if (operationHint && availableOperations.includes(operationHint)) {
+      await applyBulkPasteWithOperation(operationHint, { field, lines });
+      return;
+    }
 
     if (availableOperations.length === 1) {
       const singleOperation = availableOperations[0];
-      console.log('[BULK_PASTE] Única operação disponível, aplicando automaticamente:', singleOperation);
       await applyBulkPasteWithOperation(singleOperation, { field, lines });
       return;
     }
 
-    console.log('[BULK_PASTE] Colagem em massa detectada, aguardando seleção de operação');
     setPendingBulkPaste({ field, lines });
     setIsOperationModalOpen(true);
     setIsCreatingRecords(false);
@@ -2381,8 +2341,7 @@ const NonCollectionsView: React.FC<{
                             }}
                             onPaste={(e) => {
                               const val = e.clipboardData.getData('text');
-                              console.log('[PASTE PRODUTOR]', val);
-                              
+
                               // Múltiplas linhas: bulk paste
                               if (val.includes('\n')) {
                                 e.preventDefault();
@@ -2396,7 +2355,6 @@ const NonCollectionsView: React.FC<{
                                 e.preventDefault();
                                 const updated = { ...row, codigo: parsed.codigo, produtor: parsed.produtor };
                                 setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
-                                console.log('[PASTE PRODUTOR] ? Código e produtor separados:', parsed);
                                 return;
                               }
                               
@@ -2427,8 +2385,7 @@ const NonCollectionsView: React.FC<{
                             }}
                             onPaste={(e) => {
                               const val = e.clipboardData.getData('text');
-                              console.log('[PASTE CODIGO ROW]', val);
-                              
+
                               // Múltiplas linhas: bulk paste
                               if (val.includes('\n')) {
                                 e.preventDefault();
@@ -2442,7 +2399,6 @@ const NonCollectionsView: React.FC<{
                                 e.preventDefault();
                                 const updated = { ...row, codigo: parsed.codigo, produtor: parsed.produtor };
                                 setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
-                                console.log('[PASTE CODIGO] ? Código e produtor separados:', parsed);
                                 return;
                               }
                               
@@ -2804,7 +2760,6 @@ const NonCollectionsView: React.FC<{
                             const token = await getValidToken() || currentUser.accessToken;
                             if (token) {
                               await SharePointService.deleteNonCollection(token, rowId);
-                              console.log('[NC_DELETE] Não coleta excluída do SharePoint:', row.rota);
                             }
                           } catch (e: any) {
                             console.error('[NC_DELETE] Erro ao excluir do SharePoint:', e.message);

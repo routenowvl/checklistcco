@@ -878,12 +878,6 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
         failedRouteIds: []
       });
 
-      console.log('[ROUTE_WEB_DB] Eventos carregados do banco:', {
-        dataReferencia: referenceDateMeta.dayRef,
-        plantIds: allowedPlantIds,
-        totalEvents: dbEvents.length,
-        totalRows: rows.length
-      });
     } catch (error: any) {
       if (runId !== fetchRunIdRef.current) return;
       setIsHydratingEvents(false);
@@ -1177,7 +1171,6 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
   useEffect(() => {
     if (!result) return;
     if (isHydratingEvents) return;
-    console.log('[ROUTE_WEB_FILTER_DEBUG] Etapas de filtro:', JSON.stringify(filterDebug));
   }, [filterDebug, isHydratingEvents, result]);
 
   return (

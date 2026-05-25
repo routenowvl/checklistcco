@@ -94,7 +94,6 @@ export const getGraphAppToken = async (): Promise<string> => {
   const expiresIn = Number(data.expires_in || 3600);
   cachedToken = { token, expiresAt: Date.now() + expiresIn * 1000 - TOKEN_BUFFER_MS };
 
-  console.log('[GRAPH_APP_AUTH] Token obtido, expira em', expiresIn, 's');
   return token;
 };
 
@@ -186,60 +185,26 @@ export type PlantConfig = {
 };
 
 /**
- * Reads plant configs from SharePoint list CONFIG_OPERACAO_SAIDA_DE_ROTAS.
+ * Reads plant configs from PostgreSQL operacao_config table.
  * Returns only items that have a valid plantId and operacao.
  */
 export const getPlantConfigsFromSharePoint = async (): Promise<PlantConfig[]> => {
-  const sitePath = readEnv('VITE_SHAREPOINT_SITE_PATH');
-  if (!sitePath) throw new Error('VITE_SHAREPOINT_SITE_PATH não configurada');
-
-  const token = await getGraphAppToken();
-
-  // Resolve site ID
-  const siteData = await graphAppFetch(`/sites/${sitePath}`, token);
-  const siteId = siteData.id;
-
-  // Find list
-  let list: any;
-  try {
-    list = await graphAppFetch(`/sites/${siteId}/lists/CONFIG_OPERACAO_SAIDA_DE_ROTAS`, token);
-  } catch {
-    const listsData = await graphAppFetch(`/sites/${siteId}/lists`, token);
-    list = (listsData.value || []).find(
-      (l: any) =>
-        l.name?.toLowerCase() === 'config_operacao_saida_de_rotas' ||
-        l.displayName?.toLowerCase() === 'config_operacao_saida_de_rotas'
-    );
-    if (!list) throw new Error('Lista CONFIG_OPERACAO_SAIDA_DE_ROTAS não encontrada');
-  }
-
-  // Get column mapping
-  const mapping = await getListColumnMapping(siteId, list.id, token);
-
-  // Fetch items
-  const data = await graphAppFetch(
-    `/sites/${siteId}/lists/${list.id}/items?expand=fields`,
-    token
-  );
+  const { getAllConfigs } = await import('./checklistDb.js');
+  const rows = await getAllConfigs();
 
   const configs: PlantConfig[] = [];
 
-  for (const item of data.value || []) {
-    const f = item.fields || {};
-    const operacao = String(f[resolveFieldName(mapping, 'OPERACAO')] || '').trim();
+  for (const row of rows) {
+    const operacao = String(row.operacao || '').trim();
     if (!operacao) continue;
 
-    const plantRaw = extractPlantFieldValue(f, mapping);
-    const plantId = parseNumericId(plantRaw);
+    const plantId = row.plant_id;
     if (plantId == null) continue;
 
-    const filial = String(
-      f[resolveFieldName(mapping, 'NomeExibicao')] || operacao
-    ).trim();
+    const filial = String(row.nome_exibicao || operacao).trim();
 
     configs.push({ plantId, operacao, filial });
   }
 
-  console.log(`[SHAREPOINT_CONFIG] ${configs.length} plant configs obtidas:`, configs.map((c) => `${c.filial}(plantId=${c.plantId})`));
   return configs;
 };

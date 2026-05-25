@@ -91,6 +91,7 @@ export interface RouteConfig {
   UltimoEnvioResumoSaida?: string; // Último envio de resumo
   StatusResumoSaida?: string; // Status do resumo: "OK", "Atualizar" ou vazio
   UltimoEnvioNcoletas?: string; // Último envio de não coletas
+  quantidadeNcoletasRegistrada?: number; // Quantidade de não coletas registrada (coluna separada)
   CodigoKmm?: string; // Código KMM da operação para busca de coletas previstas
 }
 

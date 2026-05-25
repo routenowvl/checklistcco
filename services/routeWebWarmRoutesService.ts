@@ -374,14 +374,6 @@ export const primeRouteWebWarmRoutes = async (currentUser: User): Promise<RouteW
         finishedAt: Date.now()
       };
 
-      console.log('[ROUTE_WEB_WARMUP] Rotas pré-carregadas:', JSON.stringify({
-        userEmail,
-        allowedPlantIds,
-        totalRoutes: routes.length,
-        totalRouteIds: routeIds.length,
-        failedPlantIds: failedPlantIds.length
-      }));
-
       return warmSnapshot;
     } catch (error: any) {
       warmSnapshot = {
@@ -489,11 +481,6 @@ export const primeRouteWebWarmEvents = async (currentUser: User): Promise<void> 
       }
     }
 
-    console.log('[ROUTE_WEB_WARMUP] Eventos pré-carregados:', JSON.stringify({
-      userEmail,
-      warmedCount,
-      candidateRoutes: candidateIds.length
-    }));
   })().finally(() => {
     warmEventsPromiseByKey.delete(key);
   });

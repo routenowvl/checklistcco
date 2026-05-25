@@ -194,7 +194,6 @@ const Login: React.FC<{ onLogin: (user: User) => void }> = ({ onLogin }) => {
         language: 'pt-br',
         size: 'flexible',
         callback: (token: string) => {
-          console.log('[TURNSTILE] Token recebido');
           setTurnstileToken(token);
           setTurnstileVerified(true);
         },
@@ -212,7 +211,6 @@ const Login: React.FC<{ onLogin: (user: User) => void }> = ({ onLogin }) => {
 
       turnstileWidgetId.current = widgetId;
       setTurnstileReady(true);
-      console.log('[TURNSTILE] Widget renderizado com sucesso');
     } catch (err: any) {
       console.error('[TURNSTILE] Erro ao renderizar widget:', err.message);
       setTurnstileReady(true);
@@ -255,7 +253,6 @@ const Login: React.FC<{ onLogin: (user: User) => void }> = ({ onLogin }) => {
       }
 
       if (data.success) {
-        console.log('[TURNSTILE] ✅ Verificação server-side aprovada');
         return true;
       } else {
         console.warn('[TURNSTILE] ❌ Verificação falhou:', data.errors);
@@ -327,7 +324,6 @@ const Login: React.FC<{ onLogin: (user: User) => void }> = ({ onLogin }) => {
                     }
                 }
             } else {
-                console.log("Logout manual ativo: ignorando login silencioso.");
             }
         } catch (e) {
             console.error("Erro na inicialização do MSAL:", e);

@@ -42,11 +42,58 @@ const VIEWER_ACCESS_LIST_CANDIDATES = [
 let cachedSiteId: string | null = null;
 const columnMappingCache: Record<string, { mapping: Record<string, string>, readOnly: Set<string>, internalNames: Set<string> }> = {};
 
+// --- Persistência do columnMappingCache no sessionStorage ---
+const COLUMN_SESSION_KEY = 'sp_columnCache_v1';
+try {
+  const raw = sessionStorage.getItem(COLUMN_SESSION_KEY);
+  if (raw) {
+    const parsed = JSON.parse(raw) as Record<string, { mapping: Record<string, string>; readOnly: string[]; internalNames: string[] }>;
+    for (const [k, v] of Object.entries(parsed)) {
+      columnMappingCache[k] = { mapping: v.mapping, readOnly: new Set(v.readOnly), internalNames: new Set(v.internalNames) };
+    }
+    if (Object.keys(columnMappingCache).length > 0) {
+    }
+  }
+} catch { /* ignore */ }
+
 // Cache para dados estáticos/semi-estáticos (10 minutos — otimizado para reduzir chamadas à API)
 const dataCache: Record<string, { data: any, timestamp: number }> = {};
 const CACHE_TTL = 10 * 60 * 1000; // 10 minutos (aumentado de 5 para reduzir consumo de API)
 const MOTORISTAS_CACHE_TTL = 2 * 60 * 60 * 1000; // 2 horas
 const MOTORISTAS_LOCAL_CACHE_KEY = 'sp_cache_motoristas_cco_v1';
+
+// --- Persistência do dataCache no sessionStorage ---
+const SESSION_CACHE_KEY = 'sp_dataCache_v1';
+try {
+  const raw = sessionStorage.getItem(SESSION_CACHE_KEY);
+  if (raw) {
+    const parsed = JSON.parse(raw) as Record<string, { data: any; timestamp: number }>;
+    const now = Date.now();
+    for (const [k, v] of Object.entries(parsed)) {
+      if (v && v.data != null && now - v.timestamp < CACHE_TTL) {
+        dataCache[k] = v;
+      }
+    }
+  }
+} catch { /* ignore */ }
+
+const persistDataCacheToSession = (() => {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  return () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      try {
+        const serializable: Record<string, { data: any; timestamp: number }> = {};
+        // Só persiste as chaves principais que importam para o loading
+        const mainKeys = ['routeConfigs_all', 'departures', 'routeOperationMappings'];
+        for (const k of mainKeys) {
+          if (dataCache[k]) serializable[k] = dataCache[k];
+        }
+        sessionStorage.setItem(SESSION_CACHE_KEY, JSON.stringify(serializable));
+      } catch { /* quota exceeded, ignore */ }
+    }, 500);
+  };
+})();
 
 // Deduplicação de requisições archive em andamento (evita chamadas duplicadas ao mesmo range)
 const inFlightArchiveRequests: Record<string, Promise<any>> = {};
@@ -65,7 +112,6 @@ const dispatchTokenExpired = () => {
     return;
   }
   lastTokenEventTime = now;
-  console.log('[TOKEN_EVENT] Disparando evento token-expired');
   window.dispatchEvent(new CustomEvent('token-expired'));
 };
 
@@ -80,7 +126,6 @@ const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 function getCachedData<T>(key: string): T | null {
   const cached = dataCache[key];
   if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-    console.log(`[CACHE_HIT] ${key}`);
     return cached.data as T;
   }
   return null;
@@ -91,7 +136,7 @@ function getCachedData<T>(key: string): T | null {
  */
 function setCachedData(key: string, data: any): void {
   dataCache[key] = { data, timestamp: Date.now() };
-  console.log(`[CACHE_SET] ${key}`);
+  persistDataCacheToSession();
 }
 
 function getMotoristasLocalCache(): Motorista[] | null {
@@ -145,6 +190,27 @@ export function clearCacheByPrefix(prefix: string): void {
     if (k.startsWith(prefix)) delete dataCache[k];
   });
 }
+
+/**
+ * Converte data/hora de vários formatos (DD/MM/YYYY HH:MM:SS, DD/MM/YYYY HH:MM, ISO) para ISO string.
+ * Retorna null se a string for vazia.
+ */
+const convertToISO = (dateTimeStr: string): string | null => {
+  if (!dateTimeStr || dateTimeStr.trim() === '') return null;
+  const matchCompleto = dateTimeStr.match(/(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})/);
+  if (matchCompleto) {
+    const [, dia, mes, ano, hora, minuto, segundo] = matchCompleto;
+    return new Date(Number(ano), Number(mes) - 1, Number(dia), Number(hora), Number(minuto), Number(segundo)).toISOString();
+  }
+  const matchSemSegundos = dateTimeStr.match(/(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2})/);
+  if (matchSemSegundos) {
+    const [, dia, mes, ano, hora, minuto] = matchSemSegundos;
+    return new Date(Number(ano), Number(mes) - 1, Number(dia), Number(hora), Number(minuto), 0).toISOString();
+  }
+  const parsed = new Date(dateTimeStr);
+  if (!isNaN(parsed.getTime())) return parsed.toISOString();
+  return new Date().toISOString();
+};
 
 /**
  * Fetch com retry e backoff exponencial para lidar com throttling da Microsoft Graph
@@ -292,7 +358,16 @@ async function getListColumnMapping(siteId: string, listId: string, token: strin
   });
 
   columnMappingCache[cacheKey] = { mapping, readOnly, internalNames };
-  console.log(`[COLUMN_CACHE] Cache criado para ${cacheKey} (${columns.value.length} colunas)`);
+
+  // Persiste column mapping no sessionStorage
+  try {
+    const serializable: Record<string, { mapping: Record<string, string>; readOnly: string[]; internalNames: string[] }> = {};
+    for (const [k, v] of Object.entries(columnMappingCache)) {
+      serializable[k] = { mapping: v.mapping, readOnly: [...v.readOnly], internalNames: [...v.internalNames] };
+    }
+    sessionStorage.setItem(COLUMN_SESSION_KEY, JSON.stringify(serializable));
+  } catch { /* quota exceeded, ignore */ }
+
   return columnMappingCache[cacheKey];
 }
 
@@ -421,59 +496,37 @@ export const SharePointService = {
         return cached;
       }
 
-      const siteId = await getResolvedSiteId(token);
-      const list = await findListByIdOrName(siteId, 'CONFIG_OPERACAO_SAIDA_DE_ROTAS', token);
-      const { mapping } = await getListColumnMapping(siteId, list.id, token, forceRefresh);
-
-      const timestamp = Date.now();
-      const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&t=${timestamp}`, token);
-
-      console.log('[DEBUG_SHAREPOINT] CONFIG_OPERACAO_SAIDA_DE_ROTAS raw data:', data);
-
-      const result = (data.value || []).map((item: any): RouteConfig => {
-        const f = item.fields;
-        const plantRaw = extractPlantFieldValue(f, mapping);
-        const config = {
-          operacao: String(f[resolveFieldName(mapping, 'OPERACAO')] || ""),
-          email: String(f[resolveFieldName(mapping, 'EMAIL')] || "").toString().toLowerCase().trim(),
-          tolerancia: String(f[resolveFieldName(mapping, 'TOLERANCIA')] || "00:00:00"),
-          nomeExibicao: String(f[resolveFieldName(mapping, 'NomeExibicao')] || String(f[resolveFieldName(mapping, 'OPERACAO')] || "")),
-          plantId: parseNumericId(plantRaw),
-          Conteudo: String(f[resolveFieldName(mapping, 'Conteudo')] || ""),
-          ConteudoNcoletas: String(f[resolveFieldName(mapping, 'ConteudoNcoletas')] || ""),
-          ultimoEnvioSaida: String(f[resolveFieldName(mapping, 'UltimoEnvioSaida')] || ""),
-          Status: String(f[resolveFieldName(mapping, 'Status')] || ""),
-          Envio: String(f[resolveFieldName(mapping, 'Envio')] || ""),
-          Copia: String(f[resolveFieldName(mapping, 'Copia')] || ""),
-          UltimoEnvioResumoSaida: String(f[resolveFieldName(mapping, 'UltimoEnvioResumoSaida')] || ""),
-          UltimoEnvioNcoletas: String(f[resolveFieldName(mapping, 'UltimoEnvioNcoletas')] || ""),
-          StatusResumoSaida: String(f[resolveFieldName(mapping, 'StatusResumoSaida')] || ""),
-          CodigoKmm: String(f[resolveFieldName(mapping, 'CodigoKmm')] || "")
-        };
-        console.log('[DEBUG_SHAREPOINT] Config item:', {
-          operacao: config.operacao,
-          email: config.email,
-          ultimoEnvioSaida_raw: f[resolveFieldName(mapping, 'UltimoEnvioSaida')],
-          ultimoEnvioSaida: config.ultimoEnvioSaida,
-          Status: config.Status,
-          Envio: config.Envio,
-          Copia: config.Copia,
-          ConteudoLength: config.Conteudo?.length || 0,
-          ConteudoNcoletasLength: config.ConteudoNcoletas?.length || 0,
-          CodigoKmm: config.CodigoKmm,
-          plantRaw,
-          plantId: config.plantId,
-          plantLikeFields: collectPlantLikeFieldsForDebug(f),
-          UltimoEnvioResumoSaida: config.UltimoEnvioResumoSaida,
-          StatusResumoSaida: config.StatusResumoSaida
-        });
-        return config;
+      const res = await fetch('/api/checklist-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: 'getAll' })
       });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Erro ao buscar configs');
+
+      const result: RouteConfig[] = (data.configs || []).map((row: any): RouteConfig => ({
+        operacao: String(row.operacao || ''),
+        email: String(row.email || '').toLowerCase().trim(),
+        tolerancia: String(row.tolerancia || '00:00:00'),
+        nomeExibicao: String(row.nome_exibicao || row.operacao || ''),
+        plantId: row.plant_id != null ? Number(row.plant_id) : null,
+        Conteudo: String(row.conteudo || ''),
+        ConteudoNcoletas: String(row.conteudo_ncoletas || ''),
+        ultimoEnvioSaida: String(row.ultimo_envio_saida || ''),
+        Status: String(row.status || ''),
+        Envio: String(row.envio || ''),
+        Copia: String(row.copia || ''),
+        UltimoEnvioResumoSaida: String(row.ultimo_envio_resumo_saida || ''),
+        UltimoEnvioNcoletas: String(row.ultimo_envio_ncoleta || ''),
+        quantidadeNcoletasRegistrada: Number(row.quantidade_ncoletas_registrada || 0),
+        StatusResumoSaida: String(row.status_resumo_saida || ''),
+        CodigoKmm: String(row.codigo_kmm || '')
+      }));
 
       setCachedData(cacheKey, result);
       return result;
     } catch (e: any) {
-      console.error('[SHAREPOINT] Erro ao buscar CONFIG_OPERACAO_SAIDA_DE_ROTAS:', e.message);
+      console.error('[PG_CONFIG] Erro ao buscar configs:', e.message);
       return [];
     }
   },
@@ -605,7 +658,6 @@ export const SharePointService = {
       const { mapping } = await getListColumnMapping(siteId, list.id, token);
       const celulaField = mapping['celula'] || 'celula';
       
-      console.log('[HISTORY_QUERY] Buscando histórico com paginação...');
       
       // Busca todos os itens com paginação (SharePoint retorna max 100 por página)
       let allItems: any[] = [];
@@ -615,10 +667,8 @@ export const SharePointService = {
         const data = await graphFetch(nextUrl, token);
         allItems = allItems.concat(data.value || []);
         nextUrl = data['@odata.nextLink'] || null;
-        console.log(`[HISTORY_QUERY] Página carregada. Total acumulado: ${allItems.length}`);
       }
       
-      console.log(`[HISTORY_QUERY] Total de registros brutos: ${allItems.length}`);
       
       const result = allItems.map((item: any) => ({ 
         id: item.id, 
@@ -629,7 +679,6 @@ export const SharePointService = {
       })).filter((record: HistoryRecord) => fetchAll ? true : record.email?.toLowerCase() === userEmail.toLowerCase().trim())
         .sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
       
-      console.log(`[HISTORY_QUERY] ✅ ${result.length} registros filtrados`);
       return result;
     } catch (e) { return []; }
   },
@@ -643,7 +692,6 @@ export const SharePointService = {
         const configs = await this.getAllRouteConfigs(token, forceRefresh);
         const result = configs.filter(c => c.email === userEmail.toLowerCase().trim());
 
-        console.log(`[DEBUG_SHAREPOINT] Configs filtradas: ${result.length} encontradas`);
         return result;
     } catch (e: any) {
       console.error('[SHAREPOINT] Erro ao buscar CONFIG_OPERACAO_SAIDA_DE_ROTAS:', e.message);
@@ -888,15 +936,6 @@ export const SharePointService = {
 
       const editableConfigs = allConfigs.filter((config) => config.email === normalizedEmail);
       if (editableConfigs.length > 0) {
-        console.log('[DEBUG_SHAREPOINT_ACCESS] Modo editor:', {
-          userEmail: normalizedEmail,
-          totalAllConfigs: allConfigs.length,
-          editableCount: editableConfigs.length,
-          editablePlantIds: editableConfigs.map((cfg) => ({
-            operacao: cfg.operacao,
-            plantId: cfg.plantId
-          }))
-        });
         return { configs: editableConfigs, canEdit: true, isAllViewer: false };
       }
 
@@ -909,11 +948,6 @@ export const SharePointService = {
 
       // Se o usuário tem "ALL" na OPERACAO, retorna todas as configs como read-only
       if (userViewerOps.includes('ALL')) {
-        console.log('[DEBUG_SHAREPOINT_ACCESS] Modo visualização (ALL):', {
-          userEmail: normalizedEmail,
-          totalAllConfigs: allConfigs.length,
-          allOperations: allConfigs.map((cfg) => cfg.operacao)
-        });
         return { configs: allConfigs, canEdit: false, isAllViewer: true };
       }
 
@@ -921,20 +955,6 @@ export const SharePointService = {
       const readableConfigs = allConfigs.filter((config) =>
         allowedOps.has(String(config.operacao || '').trim().toUpperCase())
       );
-
-      console.log('[DEBUG_SHAREPOINT_ACCESS] Modo visualização:', {
-        userEmail: normalizedEmail,
-        totalAllConfigs: allConfigs.length,
-        viewerEntries: viewerEntries
-          .filter((entry) => entry.email === normalizedEmail)
-          .map((entry) => entry.operacao),
-        allowedOps: Array.from(allowedOps),
-        readableCount: readableConfigs.length,
-        readablePlantIds: readableConfigs.map((cfg) => ({
-          operacao: cfg.operacao,
-          plantId: cfg.plantId
-        }))
-      });
 
       return { configs: readableConfigs, canEdit: false, isAllViewer: false };
     } catch (e: any) {
@@ -991,72 +1011,16 @@ export const SharePointService = {
    */
   async updateUltimoEnvioSaida(token: string, operacao: string, dataHoraEnvio: string): Promise<void> {
     try {
-      const siteId = await getResolvedSiteId(token);
-      const list = await findListByIdOrName(siteId, 'CONFIG_OPERACAO_SAIDA_DE_ROTAS', token);
-      const { mapping, internalNames, readOnly } = await getListColumnMapping(siteId, list.id, token);
-
-      // Busca o item da operação específica
-      const operacaoField = resolveFieldName(mapping, 'OPERACAO');
-      const filter = `fields/${operacaoField} eq '${operacao}'`;
-      const existing = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}&$top=1`, token);
-
-      if (existing.value && existing.value.length > 0) {
-        const itemId = existing.value[0].id;
-        const ultimoEnvioField = resolveFieldName(mapping, 'UltimoEnvioSaida');
-
-        // Se string vazia, limpa o campo
-        let dataISO: string | null = dataHoraEnvio;
-
-        if (!dataHoraEnvio || dataHoraEnvio.trim() === '') {
-          dataISO = null;
-          console.log(`[DATA_CONVERSAO] 🧹 Limpando campo UltimoEnvioSaida para ${operacao}`);
-        } else {
-          console.log(`[DATA_CONVERSAO] Recebido: "${dataHoraEnvio}" (tipo: ${typeof dataHoraEnvio})`);
-
-          // Tenta formato completo: DD/MM/YYYY HH:MM:SS
-          const matchCompleto = dataHoraEnvio.match(/(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})/);
-          // Tenta formato sem segundos: DD/MM/YYYY HH:MM
-          const matchSemSegundos = dataHoraEnvio.match(/(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2})/);
-
-          if (matchCompleto) {
-            const [, dia, mes, ano, hora, minuto, segundo] = matchCompleto;
-            const localDate = new Date(Number(ano), Number(mes) - 1, Number(dia), Number(hora), Number(minuto), Number(segundo));
-            dataISO = localDate.toISOString();
-            console.log(`[DATA_CONVERSAO] ✅ Formato DD/MM/YYYY HH:MM:SS: "${dataHoraEnvio}" → "${dataISO}"`);
-          } else if (matchSemSegundos) {
-            const [, dia, mes, ano, hora, minuto] = matchSemSegundos;
-            const localDate = new Date(Number(ano), Number(mes) - 1, Number(dia), Number(hora), Number(minuto), 0);
-            dataISO = localDate.toISOString();
-            console.log(`[DATA_CONVERSAO] ✅ Formato DD/MM/YYYY HH:MM: "${dataHoraEnvio}" → "${dataISO}"`);
-          } else {
-            const parsed = new Date(dataHoraEnvio);
-            if (!isNaN(parsed.getTime())) {
-              dataISO = parsed.toISOString();
-              console.log(`[DATA_CONVERSAO] ⚠️ Parseado como ISO genérico: "${dataHoraEnvio}" → "${dataISO}"`);
-            } else {
-              console.warn(`[DATA_CONVERSAO] ❌ Formato não reconhecido: "${dataHoraEnvio}", usando data atual`);
-              dataISO = new Date().toISOString();
-            }
-          }
-        }
-
-        const fields: any = {
-          [ultimoEnvioField]: dataISO
-        };
-        
-        console.log(`[SHAREPOINT] Enviando PATCH para item ${itemId} campo ${ultimoEnvioField} = ${dataISO}`);
-        
-        await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${itemId}/fields`, token, { 
-          method: 'PATCH', 
-          body: JSON.stringify(fields) 
-        });
-        
-        console.log(`[SHAREPOINT] ✅ UltimoEnvioSaida atualizado para ${operacao}: ${dataISO}`);
-      } else {
-        console.warn(`[SHAREPOINT] Operação "${operacao}" não encontrada na lista CONFIG_OPERACAO_SAIDA_DE_ROTAS`);
-      }
+      const dataISO = convertToISO(dataHoraEnvio);
+      const res = await fetch('/api/checklist-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: 'updateField', operacao, field: 'ultimo_envio_saida', value: dataISO })
+      });
+      const data = await res.json();
+      if (!data.success) console.warn('[PG_CONFIG] Falha ao atualizar UltimoEnvioSaida:', data.error);
     } catch (error: any) {
-      console.error('[SHAREPOINT] ❌ Erro ao atualizar UltimoEnvioSaida:', error.message);
+      console.error('[PG_CONFIG] ❌ Erro ao atualizar UltimoEnvioSaida:', error.message);
     }
   },
 
@@ -1065,72 +1029,33 @@ export const SharePointService = {
    */
   async updateUltimoEnvioNaoColetas(token: string, operacao: string, dataHoraEnvio: string): Promise<void> {
     try {
-      const siteId = await getResolvedSiteId(token);
-      const list = await findListByIdOrName(siteId, 'CONFIG_OPERACAO_SAIDA_DE_ROTAS', token);
-      const { mapping, internalNames, readOnly } = await getListColumnMapping(siteId, list.id, token);
-
-      // Busca o item da operação específica
-      const operacaoField = resolveFieldName(mapping, 'OPERACAO');
-      const filter = `fields/${operacaoField} eq '${operacao}'`;
-      const existing = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}&$top=1`, token);
-
-      if (existing.value && existing.value.length > 0) {
-        const itemId = existing.value[0].id;
-        const ultimoEnvioField = resolveFieldName(mapping, 'UltimoEnvioNcoletas');
-
-        // Converte data/hora para ISO
-        let dataISO: string | null = dataHoraEnvio;
-
-        if (!dataHoraEnvio || dataHoraEnvio.trim() === '') {
-          dataISO = null;
-          console.log(`[DATA_CONVERSAO_NC] 🧹 Limpando campo UltimoEnvioNcoletas para ${operacao}`);
-        } else {
-          console.log(`[DATA_CONVERSAO_NC] Recebido: "${dataHoraEnvio}"`);
-
-          // Tenta formato completo: DD/MM/YYYY HH:MM:SS
-          const matchCompleto = dataHoraEnvio.match(/(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})/);
-          // Tenta formato sem segundos: DD/MM/YYYY HH:MM
-          const matchSemSegundos = dataHoraEnvio.match(/(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2})/);
-
-          if (matchCompleto) {
-            const [, dia, mes, ano, hora, minuto, segundo] = matchCompleto;
-            const localDate = new Date(Number(ano), Number(mes) - 1, Number(dia), Number(hora), Number(minuto), Number(segundo));
-            dataISO = localDate.toISOString();
-            console.log(`[DATA_CONVERSAO_NC] ✅ Formato DD/MM/YYYY HH:MM:SS: "${dataHoraEnvio}" → "${dataISO}"`);
-          } else if (matchSemSegundos) {
-            const [, dia, mes, ano, hora, minuto] = matchSemSegundos;
-            const localDate = new Date(Number(ano), Number(mes) - 1, Number(dia), Number(hora), Number(minuto), 0);
-            dataISO = localDate.toISOString();
-            console.log(`[DATA_CONVERSAO_NC] ✅ Formato DD/MM/YYYY HH:MM: "${dataHoraEnvio}" → "${dataISO}"`);
-          } else {
-            const parsed = new Date(dataHoraEnvio);
-            if (!isNaN(parsed.getTime())) {
-              dataISO = parsed.toISOString();
-              console.log(`[DATA_CONVERSAO_NC] ⚠️ Parseado como ISO genérico: "${dataHoraEnvio}" → "${dataISO}"`);
-            } else {
-              console.warn(`[DATA_CONVERSAO_NC] ❌ Formato não reconhecido: "${dataHoraEnvio}", usando data atual`);
-              dataISO = new Date().toISOString();
-            }
-          }
-        }
-
-        const fields: any = {
-          [ultimoEnvioField]: dataISO
-        };
-
-        console.log(`[SHAREPOINT_NC] Enviando PATCH para item ${itemId} campo ${ultimoEnvioField} = ${dataISO}`);
-
-        await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${itemId}/fields`, token, {
-          method: 'PATCH',
-          body: JSON.stringify(fields)
-        });
-
-        console.log(`[SHAREPOINT_NC] ✅ UltimoEnvioNcoletas atualizado para ${operacao}: ${dataISO}`);
-      } else {
-        console.warn(`[SHAREPOINT_NC] Operação "${operacao}" não encontrada na lista CONFIG_OPERACAO_SAIDA_DE_ROTAS`);
-      }
+      const dataISO = convertToISO(dataHoraEnvio);
+      const res = await fetch('/api/checklist-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: 'updateField', operacao, field: 'ultimo_envio_ncoleta', value: dataISO })
+      });
+      const data = await res.json();
+      if (!data.success) console.warn('[PG_CONFIG] Falha ao atualizar UltimoEnvioNcoletas:', data.error);
     } catch (error: any) {
-      console.error('[SHAREPOINT_NC] ❌ Erro ao atualizar UltimoEnvioNcoletas:', error.message);
+      console.error('[PG_CONFIG] ❌ Erro ao atualizar UltimoEnvioNcoletas:', error.message);
+    }
+  },
+
+  /**
+   * Atualiza o campo quantidade_ncoletas_registrada no operacao_config
+   */
+  async updateQuantidadeNcoletasRegistrada(token: string, operacao: string, quantidade: number): Promise<void> {
+    try {
+      const res = await fetch('/api/checklist-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: 'updateField', operacao, field: 'quantidade_ncoletas_registrada', value: quantidade })
+      });
+      const data = await res.json();
+      if (!data.success) console.warn('[PG_CONFIG] Falha ao atualizar quantidade_ncoletas_registrada:', data.error);
+    } catch (error: any) {
+      console.error('[PG_CONFIG] ❌ Erro ao atualizar quantidade_ncoletas_registrada:', error.message);
     }
   },
 
@@ -1139,36 +1064,15 @@ export const SharePointService = {
    */
   async updateStatusOperacao(token: string, operacao: string, status: string): Promise<void> {
     try {
-      const siteId = await getResolvedSiteId(token);
-      const list = await findListByIdOrName(siteId, 'CONFIG_OPERACAO_SAIDA_DE_ROTAS', token);
-      const { mapping, internalNames, readOnly } = await getListColumnMapping(siteId, list.id, token);
-
-      // Busca o item da operação específica
-      const operacaoField = resolveFieldName(mapping, 'OPERACAO');
-      const filter = `fields/${operacaoField} eq '${operacao}'`;
-      const existing = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}&$top=1`, token);
-
-      if (existing.value && existing.value.length > 0) {
-        const itemId = existing.value[0].id;
-        const statusField = resolveFieldName(mapping, 'Status');
-
-        const fields: any = {
-          [statusField]: status
-        };
-
-        console.log(`[SHAREPOINT] Enviando PATCH para item ${itemId} campo ${statusField} = ${status}`);
-
-        await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${itemId}/fields`, token, {
-          method: 'PATCH',
-          body: JSON.stringify(fields)
-        });
-
-        console.log(`[SHAREPOINT] ✅ Status atualizado para ${operacao}: ${status}`);
-      } else {
-        console.warn(`[SHAREPOINT] Operação "${operacao}" não encontrada na lista CONFIG_OPERACAO_SAIDA_DE_ROTAS`);
-      }
+      const res = await fetch('/api/checklist-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: 'updateField', operacao, field: 'status', value: status })
+      });
+      const data = await res.json();
+      if (!data.success) console.warn('[PG_CONFIG] Falha ao atualizar Status:', data.error);
     } catch (error: any) {
-      console.error('[SHAREPOINT] ❌ Erro ao atualizar Status:', error.message);
+      console.error('[PG_CONFIG] ❌ Erro ao atualizar Status:', error.message);
     }
   },
 
@@ -1177,43 +1081,18 @@ export const SharePointService = {
    */
   async updateRouteConfigEmails(token: string, operacao: string, envio: string, copia: string): Promise<void> {
     try {
-      const siteId = await getResolvedSiteId(token);
-      const list = await findListByIdOrName(siteId, 'CONFIG_OPERACAO_SAIDA_DE_ROTAS', token);
-      const { mapping, internalNames, readOnly } = await getListColumnMapping(siteId, list.id, token);
-
-      // Busca o item da operação específica
-      const operacaoField = resolveFieldName(mapping, 'OPERACAO');
-      const filter = `fields/${operacaoField} eq '${operacao}'`;
-      const existing = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}&$top=1`, token);
-
-      if (existing.value && existing.value.length > 0) {
-        const itemId = existing.value[0].id;
-        const envioField = resolveFieldName(mapping, 'Envio');
-        const copiaField = resolveFieldName(mapping, 'Copia');
-
-        const fields: any = {
-          [envioField]: envio,
-          [copiaField]: copia
-        };
-
-        console.log(`[SHAREPOINT] Enviando PATCH para item ${itemId}:`);
-        console.log(`  - ${envioField} = ${envio}`);
-        console.log(`  - ${copiaField} = ${copia}`);
-
-        await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${itemId}/fields`, token, {
-          method: 'PATCH',
-          body: JSON.stringify(fields)
-        });
-
-        console.log(`[SHAREPOINT] ✅ Emails atualizados para ${operacao}:`);
-        console.log(`  - Envio: ${envio}`);
-        console.log(`  - Copia: ${copia}`);
-      } else {
-        console.warn(`[SHAREPOINT] Operação "${operacao}" não encontrada na lista CONFIG_OPERACAO_SAIDA_DE_ROTAS`);
-        throw new Error(`Operação "${operacao}" não encontrada no SharePoint`);
+      const res = await fetch('/api/checklist-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: 'updateFields', operacao, fields: { envio, copia } })
+      });
+      const data = await res.json();
+      if (!data.success) {
+        console.warn('[PG_CONFIG] Falha ao atualizar emails:', data.error);
+        throw new Error(data.error || 'Erro ao atualizar emails');
       }
     } catch (error: any) {
-      console.error('[SHAREPOINT] ❌ Erro ao atualizar emails:', error.message);
+      console.error('[PG_CONFIG] ❌ Erro ao atualizar emails:', error.message);
       throw error;
     }
   },
@@ -1224,44 +1103,19 @@ export const SharePointService = {
    */
   async updateRouteConfigConteudoIfChanged(token: string, operacao: string, conteudo: string): Promise<boolean> {
     try {
-      const siteId = await getResolvedSiteId(token);
-      const list = await findListByIdOrName(siteId, 'CONFIG_OPERACAO_SAIDA_DE_ROTAS', token);
-      const { mapping } = await getListColumnMapping(siteId, list.id, token);
-
-      const operacaoField = resolveFieldName(mapping, 'OPERACAO');
-      const conteudoField = resolveFieldName(mapping, 'Conteudo');
-      const filter = `fields/${operacaoField} eq '${operacao}'`;
-      const existing = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}&$top=1`, token);
-
-      if (!existing.value || existing.value.length === 0) {
-        console.warn(`[SHAREPOINT_CONTEUDO] Operação "${operacao}" não encontrada para atualização do cache`);
-        return false;
-      }
-
-      const item = existing.value[0];
-      const itemId = item.id;
-      const atual = String(item.fields?.[conteudoField] || '');
-      const proximo = String(conteudo || '');
-
-      if (atual === proximo) {
-        console.log(`[SHAREPOINT_CONTEUDO] Sem mudança para ${operacao} — PATCH evitado`);
-        return false;
-      }
-
-      await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${itemId}/fields`, token, {
-        method: 'PATCH',
-        body: JSON.stringify({
-          [conteudoField]: proximo
-        })
+      const res = await fetch('/api/checklist-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: 'updateConteudoIfChanged', operacao, conteudo })
       });
-
-      clearCache('routeConfigs_all');
-      clearCache('routeConfigs');
-
-      console.log(`[SHAREPOINT_CONTEUDO] ✅ Conteudo atualizado para ${operacao} (${proximo.length} chars)`);
-      return true;
+      const data = await res.json();
+      if (data.success && data.changed) {
+        clearCache('routeConfigs_all');
+        clearCache('routeConfigs');
+      }
+      return data.changed || false;
     } catch (error: any) {
-      console.error('[SHAREPOINT_CONTEUDO] ❌ Erro ao atualizar Conteudo:', error.message);
+      console.error('[PG_CONFIG] ❌ Erro ao atualizar Conteudo:', error.message);
       return false;
     }
   },
@@ -1272,44 +1126,19 @@ export const SharePointService = {
    */
   async updateRouteConfigConteudoNcoletasIfChanged(token: string, operacao: string, conteudoNcoletas: string): Promise<boolean> {
     try {
-      const siteId = await getResolvedSiteId(token);
-      const list = await findListByIdOrName(siteId, 'CONFIG_OPERACAO_SAIDA_DE_ROTAS', token);
-      const { mapping } = await getListColumnMapping(siteId, list.id, token);
-
-      const operacaoField = resolveFieldName(mapping, 'OPERACAO');
-      const conteudoField = resolveFieldName(mapping, 'ConteudoNcoletas');
-      const filter = `fields/${operacaoField} eq '${operacao}'`;
-      const existing = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}&$top=1`, token);
-
-      if (!existing.value || existing.value.length === 0) {
-        console.warn(`[SHAREPOINT_CONTEUDO_NC] Operação "${operacao}" não encontrada para atualização do cache`);
-        return false;
-      }
-
-      const item = existing.value[0];
-      const itemId = item.id;
-      const atual = String(item.fields?.[conteudoField] || '');
-      const proximo = String(conteudoNcoletas || '');
-
-      if (atual === proximo) {
-        console.log(`[SHAREPOINT_CONTEUDO_NC] Sem mudança para ${operacao} — PATCH evitado`);
-        return false;
-      }
-
-      await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${itemId}/fields`, token, {
-        method: 'PATCH',
-        body: JSON.stringify({
-          [conteudoField]: proximo
-        })
+      const res = await fetch('/api/checklist-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: 'updateConteudoNcoletasIfChanged', operacao, conteudoNcoletas })
       });
-
-      clearCache('routeConfigs_all');
-      clearCache('routeConfigs');
-
-      console.log(`[SHAREPOINT_CONTEUDO_NC] ✅ ConteudoNcoletas atualizado para ${operacao} (${proximo.length} chars)`);
-      return true;
+      const data = await res.json();
+      if (data.success && data.changed) {
+        clearCache('routeConfigs_all');
+        clearCache('routeConfigs');
+      }
+      return data.changed || false;
     } catch (error: any) {
-      console.error('[SHAREPOINT_CONTEUDO_NC] ❌ Erro ao atualizar ConteudoNcoletas:', error.message);
+      console.error('[PG_CONFIG] ❌ Erro ao atualizar ConteudoNcoletas:', error.message);
       return false;
     }
   },
@@ -1319,72 +1148,16 @@ export const SharePointService = {
    */
   async updateUltimoEnvioResumoSaida(token: string, operacao: string, dataHoraEnvio: string): Promise<void> {
     try {
-      const siteId = await getResolvedSiteId(token);
-      const list = await findListByIdOrName(siteId, 'CONFIG_OPERACAO_SAIDA_DE_ROTAS', token);
-      const { mapping, internalNames, readOnly } = await getListColumnMapping(siteId, list.id, token);
-
-      // Busca o item da operação específica
-      const operacaoField = resolveFieldName(mapping, 'OPERACAO');
-      const filter = `fields/${operacaoField} eq '${operacao}'`;
-      const existing = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}&$top=1`, token);
-
-      if (existing.value && existing.value.length > 0) {
-        const itemId = existing.value[0].id;
-        const ultimoEnvioResumoField = resolveFieldName(mapping, 'UltimoEnvioResumoSaida');
-
-        // Se string vazia, limpa o campo
-        let dataISO: string | null = dataHoraEnvio;
-
-        if (!dataHoraEnvio || dataHoraEnvio.trim() === '') {
-          dataISO = null;
-          console.log(`[DATA_CONVERSAO] 🧹 Limpando campo UltimoEnvioResumoSaida para ${operacao}`);
-        } else {
-          console.log(`[DATA_CONVERSAO] Recebido: "${dataHoraEnvio}" (tipo: ${typeof dataHoraEnvio})`);
-
-          // Tenta formato completo: DD/MM/YYYY HH:MM:SS
-          const matchCompleto = dataHoraEnvio.match(/(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})/);
-          // Tenta formato sem segundos: DD/MM/YYYY HH:MM
-          const matchSemSegundos = dataHoraEnvio.match(/(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2})/);
-
-          if (matchCompleto) {
-            const [, dia, mes, ano, hora, minuto, segundo] = matchCompleto;
-            const localDate = new Date(Number(ano), Number(mes) - 1, Number(dia), Number(hora), Number(minuto), Number(segundo));
-            dataISO = localDate.toISOString();
-            console.log(`[DATA_CONVERSAO] ✅ Formato DD/MM/YYYY HH:MM:SS: "${dataHoraEnvio}" → "${dataISO}"`);
-          } else if (matchSemSegundos) {
-            const [, dia, mes, ano, hora, minuto] = matchSemSegundos;
-            const localDate = new Date(Number(ano), Number(mes) - 1, Number(dia), Number(hora), Number(minuto), 0);
-            dataISO = localDate.toISOString();
-            console.log(`[DATA_CONVERSAO] ✅ Formato DD/MM/YYYY HH:MM: "${dataHoraEnvio}" → "${dataISO}"`);
-          } else {
-            const parsed = new Date(dataHoraEnvio);
-            if (!isNaN(parsed.getTime())) {
-              dataISO = parsed.toISOString();
-              console.log(`[DATA_CONVERSAO] ⚠️ Parseado como ISO genérico: "${dataHoraEnvio}" → "${dataISO}"`);
-            } else {
-              console.warn(`[DATA_CONVERSAO] ❌ Formato não reconhecido: "${dataHoraEnvio}", usando data atual`);
-              dataISO = new Date().toISOString();
-            }
-          }
-        }
-
-        const fields: any = {
-          [ultimoEnvioResumoField]: dataISO
-        };
-
-        console.log(`[SHAREPOINT] Enviando PATCH para item ${itemId} campo ${ultimoEnvioResumoField} = ${dataISO}`);
-
-        await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${itemId}/fields`, token, {
-          method: 'PATCH',
-          body: JSON.stringify(fields)
-        });
-
-        console.log(`[SHAREPOINT] ✅ UltimoEnvioResumoSaida atualizado para ${operacao}: ${dataISO}`);
-      } else {
-        console.warn(`[SHAREPOINT] Operação "${operacao}" não encontrada na lista CONFIG_OPERACAO_SAIDA_DE_ROTAS`);
-      }
+      const dataISO = convertToISO(dataHoraEnvio);
+      const res = await fetch('/api/checklist-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: 'updateField', operacao, field: 'ultimo_envio_resumo_saida', value: dataISO })
+      });
+      const data = await res.json();
+      if (!data.success) console.warn('[PG_CONFIG] Falha ao atualizar UltimoEnvioResumoSaida:', data.error);
     } catch (error: any) {
-      console.error('[SHAREPOINT] ❌ Erro ao atualizar UltimoEnvioResumoSaida:', error.message);
+      console.error('[PG_CONFIG] ❌ Erro ao atualizar UltimoEnvioResumoSaida:', error.message);
     }
   },
 
@@ -1393,44 +1166,21 @@ export const SharePointService = {
    */
   async updateStatusResumoSaida(token: string, operacao: string, status: string): Promise<void> {
     try {
-      const siteId = await getResolvedSiteId(token);
-      const list = await findListByIdOrName(siteId, 'CONFIG_OPERACAO_SAIDA_DE_ROTAS', token);
-      const { mapping, internalNames, readOnly } = await getListColumnMapping(siteId, list.id, token);
-
-      // Busca o item da operação específica
-      const operacaoField = resolveFieldName(mapping, 'OPERACAO');
-      const filter = `fields/${operacaoField} eq '${operacao}'`;
-      const existing = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}&$top=1`, token);
-
-      if (existing.value && existing.value.length > 0) {
-        const itemId = existing.value[0].id;
-        const statusResumoField = resolveFieldName(mapping, 'StatusResumoSaida');
-
-        const fields: any = {
-          [statusResumoField]: status
-        };
-
-        console.log(`[SHAREPOINT] Enviando PATCH para item ${itemId} campo ${statusResumoField} = ${status}`);
-
-        await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${itemId}/fields`, token, {
-          method: 'PATCH',
-          body: JSON.stringify(fields)
-        });
-
-        console.log(`[SHAREPOINT] ✅ StatusResumoSaida atualizado para ${operacao}: ${status}`);
-      } else {
-        console.warn(`[SHAREPOINT] Operação "${operacao}" não encontrada na lista CONFIG_OPERACAO_SAIDA_DE_ROTAS`);
-      }
+      const res = await fetch('/api/checklist-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: 'updateField', operacao, field: 'status_resumo_saida', value: status })
+      });
+      const data = await res.json();
+      if (!data.success) console.warn('[PG_CONFIG] Falha ao atualizar StatusResumoSaida:', data.error);
     } catch (error: any) {
-      console.error('[SHAREPOINT] ❌ Erro ao atualizar StatusResumoSaida:', error.message);
+      console.error('[PG_CONFIG] ❌ Erro ao atualizar StatusResumoSaida:', error.message);
     }
   },
 
   async getDepartures(token: string, forceRefresh: boolean = false): Promise<RouteDeparture[]> {
     try {
       const cacheKey = 'departures';
-
-      // Se forceRefresh for true, limpa o cache antes de buscar
       if (forceRefresh) {
         clearCache(cacheKey);
       } else {
@@ -1438,63 +1188,59 @@ export const SharePointService = {
         if (cached) return cached;
       }
 
-      const siteId = await getResolvedSiteId(token);
-      const list = await findListByIdOrName(siteId, 'Dados_Saida_de_rotas', token);
-      const { mapping } = await getListColumnMapping(siteId, list.id, token);
-
-      // Adiciona timestamp para evitar cache do browser
-      const timestamp = Date.now();
-
-      console.log('[GET_DEPARTURES] Buscando todas as rotas com paginação...');
-
-      // Busca todos os itens com paginação (SharePoint retorna max ~200 por página)
-      let allItems: any[] = [];
-      let nextUrl: string | null = `/sites/${siteId}/lists/${list.id}/items?expand=fields&$top=100&t=${timestamp}`;
-
-      while (nextUrl) {
-        const data = await graphFetch(nextUrl, token);
-        allItems = allItems.concat(data.value || []);
-        nextUrl = data['@odata.nextLink'] || null;
-        console.log(`[GET_DEPARTURES] Página carregada. Total acumulado: ${allItems.length}`);
-      }
-
-      console.log(`[GET_DEPARTURES] Total de rotas carregadas: ${allItems.length}`);
-
-      const result = allItems.map((item: any) => {
-        const f = item.fields;
-        const dataStr = f[resolveFieldName(mapping, 'DataOperacao')] ? f[resolveFieldName(mapping, 'DataOperacao')].split('T')[0] : "";
-        const semanaFromSharePoint = f[resolveFieldName(mapping, 'Semana')] || "";
-
-        return {
-          id: String(item.id),
-          semana: semanaFromSharePoint || getWeekString(dataStr), // Calcula se não vier do SharePoint
-          rota: f.Title || "",
-          data: dataStr,
-          inicio: f[resolveFieldName(mapping, 'HorarioInicio')] || "",
-          motorista: f[resolveFieldName(mapping, 'Motorista')] || "",
-          codPessoa: String(f[resolveFieldName(mapping, 'CodPessoa')] || ""),
-          contato: String(f[resolveFieldName(mapping, 'Contato')] || "").replace(/\D/g, ''),
-          placa: f[resolveFieldName(mapping, 'Placa')] || "",
-          saida: f[resolveFieldName(mapping, 'HorarioSaida')] || "",
-          motivo: f[resolveFieldName(mapping, 'MotivoAtraso')] || "",
-          observacao: f[resolveFieldName(mapping, 'Observacao')] || "",
-          statusGeral: f[resolveFieldName(mapping, 'StatusGeral')] || "",
-          aviso: f[resolveFieldName(mapping, 'Aviso')] || "NÃO",
-          operacao: f[resolveFieldName(mapping, 'Operacao')] || "",
-          statusOp: f[resolveFieldName(mapping, 'StatusOp')] || "Previsto",
-          tempo: f[resolveFieldName(mapping, 'TempGab')] || f[resolveFieldName(mapping, 'TempoGap')] || "",
-          createdAt: f.Created || new Date().toISOString(),
-          checklistMotorista: f[resolveFieldName(mapping, 'ChecklistMotorista')] || "",
-          retornoMotorista: f[resolveFieldName(mapping, 'RetornoMotorista')] || f.RetornoMotorista || "",
-          causaRaiz: f[resolveFieldName(mapping, 'CausaRaiz')] || "",
-          tempoResposta: f[resolveFieldName(mapping, 'TempoResposta')] || "",
-          logTempoResposta: f[resolveFieldName(mapping, 'LogTempoResposta')] || ""
-        };
+      const res = await fetch('/api/checklist-departures', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: 'getAll' })
       });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Erro ao buscar departures');
+
+      const formatDateFromPg = (v: any): string => {
+        if (!v) return '';
+        const s = String(v).trim();
+        const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+        return m ? `${m[3]}/${m[2]}/${m[1]}` : s;
+      };
+      const formatTimeFromPg = (v: any): string => {
+        if (!v) return '';
+        const s = String(v).trim();
+        const m = s.match(/^(\d{2}):(\d{2}):?(\d{2})?/);
+        return m ? `${m[1]}:${m[2]}:${m[3] || '00'}` : s;
+      };
+
+      const result: RouteDeparture[] = (data.departures || []).map((row: any): RouteDeparture => ({
+        id: String(row.id),
+        semana: '',
+        rota: String(row.rota || ''),
+        data: formatDateFromPg(row.data_operacao),
+        inicio: formatTimeFromPg(row.hora_prevista),
+        motorista: String(row.motorista || ''),
+        codPessoa: '',
+        contato: String(row.celular_motorista || '').replace(/\D/g, ''),
+        placa: String(row.placa_veiculo || ''),
+        saida: formatTimeFromPg(row.hora_saida),
+        motivo: String(row.motivo_atraso || ''),
+        observacao: String(row.observacao || ''),
+        statusGeral: String(row.status_saida || ''),
+        aviso: 'NÃO',
+        operacao: String(row.operacao || ''),
+        statusOp: String(row.status_rota || 'Previsto'),
+        tempo: '',
+        createdAt: String(row.criado_em || new Date().toISOString()),
+        checklistMotorista: String(row.checklist_motorista || ''),
+        retornoMotorista: String(row.retorno_motorista || ''),
+        causaRaiz: String(row.causa_raiz || ''),
+        tempoResposta: String(row.tempo_resposta || ''),
+        logTempoResposta: String(row.log_tempo_resposta || '')
+      }));
 
       setCachedData(cacheKey, result);
       return result;
-    } catch (e) { return []; }
+    } catch (e: any) {
+      console.error('[PG_DEPARTURES] Erro ao buscar departures:', e.message);
+      return [];
+    }
   },
 
   async getArchivedDepartures(token: string, operation: string | null, startDate: string, endDate: string, signal?: AbortSignal): Promise<RouteDeparture[]> {
@@ -1503,13 +1249,11 @@ export const SharePointService = {
     // 1. Cache: retorna imediatamente se já buscou esse range recentemente
     const cached = getCachedData<RouteDeparture[]>(cacheKey);
     if (cached) {
-      console.log(`[ARCHIVE_QUERY] Cache hit para ${cacheKey}`);
       return cached;
     }
 
     // 2. Deduplicação: se já existe uma requisição em andamento para o mesmo range, reutiliza
     if (inFlightArchiveRequests[cacheKey]) {
-      console.log(`[ARCHIVE_QUERY] Reutilizando requisição em andamento para ${cacheKey}`);
       return inFlightArchiveRequests[cacheKey];
     }
 
@@ -1528,7 +1272,6 @@ export const SharePointService = {
             filter += ` and fields/${colOp} eq '${operation}'`;
         }
 
-        console.log(`[ARCHIVE_QUERY] URL: /sites/${siteId}/lists/${historyListId}/items Filter: ${filter}`);
 
         // Busca todos os itens com paginação (SharePoint retorna max 100 por página)
         let allItems: any[] = [];
@@ -1540,7 +1283,6 @@ export const SharePointService = {
           const data = await graphFetch(nextUrl, token, signal ? { signal } : {});
           allItems = allItems.concat(data.value || []);
           nextUrl = data['@odata.nextLink'] || null;
-          console.log(`[ARCHIVE_QUERY] Página carregada. Total acumulado: ${allItems.length}`);
         }
 
         const results = allItems.map((item: any) => {
@@ -1575,12 +1317,10 @@ export const SharePointService = {
           };
         });
 
-        console.log(`[ARCHIVE_QUERY] Search success. Found ${results.length} records.`);
         setCachedData(cacheKey, results);
         return results;
       } catch (e: any) {
         if (e.name === 'AbortError') {
-          console.log('[ARCHIVE_QUERY] Requisição cancelada pelo usuário.');
           return [];
         }
         console.error("[ARCHIVE_FETCH_ERROR] Error fetching archived data:", e.message);
@@ -1596,60 +1336,16 @@ export const SharePointService = {
   },
 
   async updateDeparture(token: string, departure: RouteDeparture): Promise<string> {
-    const siteId = await getResolvedSiteId(token);
-    const list = await findListByIdOrName(siteId, 'Dados_Saida_de_rotas', token);
-    const { mapping, internalNames, readOnly } = await getListColumnMapping(siteId, list.id, token);
-
-    // Calcula a semana com base na data, usando a mesma lógica do Excel
-    // Se departure.semana já existir, usa; caso contrário, calcula automaticamente
-    const semana = departure.semana || getWeekString(departure.data);
-
-    const raw: any = {
-        Title: departure.rota,
-        Semana: semana,
-        DataOperacao: departure.data ? new Date(departure.data + 'T12:00:00Z').toISOString() : null,
-        HorarioInicio: departure.inicio,
-        Motorista: departure.motorista,
-        CodPessoa: departure.codPessoa || '',
-        Contato: departure.contato || '',
-        Placa: departure.placa,
-        HorarioSaida: departure.saida,
-        MotivoAtraso: departure.motivo,
-        Observacao: departure.observacao,
-        StatusGeral: departure.statusGeral,
-        Aviso: departure.aviso,
-        Operacao: departure.operacao,
-        StatusOp: departure.statusOp,
-        TempGab: departure.tempo,
-        ChecklistMotorista: departure.checklistMotorista || '',
-        RetornoMotorista: departure.retornoMotorista || '',
-        CausaRaiz: departure.causaRaiz || '',
-        TempoResposta: departure.tempoResposta || '',
-        LogTempoResposta: departure.logTempoResposta || ''
-    };
-
-    const fields: any = {};
-    Object.keys(raw).forEach(k => {
-        const int = resolveFieldName(mapping, k);
-        if (int === 'Title' || (internalNames.has(int) && !readOnly.has(int))) {
-            fields[int] = raw[k];
-        }
+    const res = await fetch('/api/checklist-departures', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ action: 'upsert', departure })
     });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Erro ao salvar departure');
 
-    const isUpdate = departure.id && departure.id !== "" && departure.id !== "0" && !isNaN(Number(departure.id));
-    let result: string;
-
-    if (isUpdate) {
-      await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${departure.id}/fields`, token, { method: 'PATCH', body: JSON.stringify(fields) });
-      result = departure.id;
-    } else {
-      const res = await graphFetch(`/sites/${siteId}/lists/${list.id}/items`, token, { method: 'POST', body: JSON.stringify({ fields }) });
-      result = String(res.id);
-    }
-
-    // Invalida cache após atualização
     clearCache('departures');
-    return result;
+    return String(data.id);
   },
 
   async updateArchivedDeparture(token: string, departure: RouteDeparture): Promise<string> {
@@ -1696,11 +1392,9 @@ export const SharePointService = {
     let result: string;
 
     if (isUpdate) {
-      console.log(`[HISTORY_UPDATE] Atualizando item ${departure.id} na lista de histórico`);
       await graphFetch(`/sites/${siteId}/lists/${historyListId}/items/${departure.id}/fields`, token, { method: 'PATCH', body: JSON.stringify(fields) });
       result = departure.id;
     } else {
-      console.log(`[HISTORY_UPDATE] Criando novo item na lista de histórico`);
       const res = await graphFetch(`/sites/${siteId}/lists/${historyListId}/items`, token, { method: 'POST', body: JSON.stringify({ fields }) });
       result = String(res.id);
     }
@@ -1711,48 +1405,43 @@ export const SharePointService = {
   },
 
   async deleteDeparture(token: string, id: string): Promise<void> {
-    const siteId = await getResolvedSiteId(token);
-    const list = await findListByIdOrName(siteId, 'Dados_Saida_de_rotas', token);
-    await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${id}`, token, { method: 'DELETE' });
-    
-    // Invalida cache após deletar
+    const res = await fetch('/api/checklist-departures', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ action: 'delete', id })
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error || 'Erro ao deletar departure');
     clearCache('departures');
   },
 
   async moveDeparturesToHistory(token: string, items: RouteDeparture[]): Promise<{ success: number, failed: number, lastError?: string }> {
-    console.log(`[ARCHIVE_START] Starting migration of ${items.length} items to permanent history.`);
     const siteId = await getResolvedSiteId(token);
-    const sourceList = await findListByIdOrName(siteId, 'Dados_Saida_de_rotas', token);
     const historyListId = "856bf9d5-6081-4360-bcad-e771cbabfda8";
     const { mapping: histMapping, internalNames: histInternals } = await getListColumnMapping(siteId, historyListId, token);
-    
+
     let successCount = 0;
     let failedCount = 0;
     let lastErrorMessage = "";
 
     for (const item of items) {
         try {
-            // Calcula a semana com base na data, usando a mesma lógica do Excel
-            // Se item.semana já existir, usa; caso contrário, calcula automaticamente
             const semana = item.semana || getWeekString(item.data);
-            
-            const raw: any = { 
-                Title: item.rota, 
-                Semana: semana, 
-                DataOperacao: item.data ? new Date(item.data + 'T12:00:00Z').toISOString() : null, 
-                HorarioInicio: item.inicio, 
-                Motorista: item.motorista, 
-                CodPessoa: item.codPessoa || '',
-                Contato: item.contato || '',
-                Placa: item.placa, 
-                HorarioSaida: item.saida, 
-                MotivoAtraso: item.motivo, 
-                Observacao: item.observacao, 
-                StatusGeral: item.statusGeral, 
-                Aviso: item.aviso, 
-                Operacao: item.operacao, 
-                StatusOp: item.statusOp, 
-                TempGab: item.tempo, 
+            const raw: any = {
+                Title: item.rota, Semana: semana,
+                DataOperacao: item.data ? (() => {
+                    const d = String(item.data);
+                    const dm = d.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+                    const iso = dm ? `${dm[3]}-${dm[2]}-${dm[1]}` : d;
+                    return new Date(iso + 'T12:00:00Z').toISOString();
+                })() : null,
+                HorarioInicio: item.inicio, Motorista: item.motorista,
+                CodPessoa: item.codPessoa || '', Contato: item.contato || '',
+                Placa: item.placa, HorarioSaida: item.saida,
+                MotivoAtraso: item.motivo, Observacao: item.observacao,
+                StatusGeral: item.statusGeral, Aviso: item.aviso,
+                Operacao: item.operacao, StatusOp: item.statusOp,
+                TempGab: item.tempo,
                 ChecklistMotorista: item.checklistMotorista || '',
                 RetornoMotorista: item.retornoMotorista || '',
                 CausaRaiz: item.causaRaiz || '',
@@ -1762,11 +1451,17 @@ export const SharePointService = {
             Object.keys(raw).forEach(k => { const int = resolveFieldName(histMapping, k); if (histInternals.has(int)) histFields[int] = raw[k]; });
             const postRes = await graphFetch(`/sites/${siteId}/lists/${historyListId}/items`, token, { method: 'POST', body: JSON.stringify({ fields: histFields }) });
             if (postRes && postRes.id) {
-                await graphFetch(`/sites/${siteId}/lists/${sourceList.id}/items/${item.id}`, token, { method: 'DELETE' });
+                // Delete from PG instead of SharePoint
+                await fetch('/api/checklist-departures', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                  body: JSON.stringify({ action: 'delete', id: item.id })
+                });
                 successCount++;
             } else { failedCount++; lastErrorMessage = "Failed to confirm archived ID."; }
-        } catch (err: any) { failedCount++; lastErrorMessage = err.message; }
+        } catch (err: any) { failedCount++; lastErrorMessage = err.message; console.error(`[ARCHIVE_ERROR] Falha ao arquivar rota ${item.rota}:`, err.message, err?.detail || ''); }
     }
+    clearCache('departures');
     return { success: successCount, failed: failedCount, lastError: lastErrorMessage };
   },
 
@@ -1903,59 +1598,34 @@ export const SharePointService = {
    */
   async checkSendLock(token: string, operacao: string): Promise<{ locked: boolean; user?: string; timestamp?: string; expired?: boolean } | null> {
     try {
-      const siteId = await getResolvedSiteId(token);
-      const list = await findListByIdOrName(siteId, 'CONFIG_OPERACAO_SAIDA_DE_ROTAS', token);
-      const { mapping } = await getListColumnMapping(siteId, list.id, token);
+      const res = await fetch('/api/checklist-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: 'getLockStatus', operacao })
+      });
+      const data = await res.json();
+      if (!data.success || !data.lock) return { locked: false };
 
-      const operacaoField = resolveFieldName(mapping, 'OPERACAO');
-      const filter = `fields/${operacaoField} eq '${operacao}'`;
-      const existing = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}&$top=1`, token);
+      const lockStatus = String(data.lock.lock_envio || '');
+      const lockUser = String(data.lock.lock_user || '');
+      const lockTimestamp = String(data.lock.lock_timestamp || '');
 
-      if (!existing.value || existing.value.length === 0) {
-        return { locked: false };
-      }
-
-      const item = existing.value[0];
-      const f = item.fields;
-      
-      const lockField = resolveFieldName(mapping, 'LockEnvio');
-      const lockUserField = resolveFieldName(mapping, 'LockUser');
-      const lockTimestampField = resolveFieldName(mapping, 'LockTimestamp');
-
-      const lockStatus = f[lockField] || '';
-      const lockUser = f[lockUserField] || '';
-      const lockTimestamp = f[lockTimestampField] || '';
-
-      // Se não tem trava, retorna false
-      if (!lockStatus || lockStatus.toLowerCase() !== 'true') {
+      if (!lockStatus || (lockStatus.toLowerCase() !== 'true' && lockStatus !== '1')) {
         return { locked: false };
       }
 
       // Verifica se a trava expirou (timeout de 2 minutos)
       if (lockTimestamp) {
-        let lockDate: Date | null = null;
-        if (lockTimestamp.includes('T')) {
-          lockDate = new Date(lockTimestamp);
-        } else if (lockTimestamp.includes('/')) {
-          const [data, hora] = lockTimestamp.split(' ');
-          const [dia, mes, ano] = data.split('/');
-          const [h, m, s] = hora ? hora.split(':') : ['00', '00', '00'];
-          lockDate = new Date(Number(ano), Number(mes) - 1, Number(dia), Number(h), Number(m), Number(s));
-        }
-
-        if (lockDate && !isNaN(lockDate.getTime())) {
-          const now = new Date();
-          const diffMs = now.getTime() - lockDate.getTime();
-          const timeoutMs = 2 * 60 * 1000; // 2 minutos de timeout
-
+        const lockDate = new Date(lockTimestamp);
+        if (!isNaN(lockDate.getTime())) {
+          const diffMs = Date.now() - lockDate.getTime();
+          const timeoutMs = 2 * 60 * 1000;
           if (diffMs > timeoutMs) {
-            console.log(`[LOCK_CHECK] Trava expirada para ${operacao} (usuário: ${lockUser}, tempo: ${Math.floor(diffMs / 1000)}s)`);
             return { locked: false, user: lockUser, timestamp: lockTimestamp, expired: true };
           }
         }
       }
 
-      console.log(`[LOCK_CHECK] Trava ativa para ${operacao} por ${lockUser} em ${lockTimestamp}`);
       return { locked: true, user: lockUser, timestamp: lockTimestamp, expired: false };
     } catch (e: any) {
       console.error('[LOCK_CHECK] Erro ao verificar trava:', e.message);
@@ -1969,74 +1639,24 @@ export const SharePointService = {
    */
   async acquireSendLock(token: string, operacao: string, userEmail: string): Promise<{ success: boolean; message?: string }> {
     try {
-      const siteId = await getResolvedSiteId(token);
-      const list = await findListByIdOrName(siteId, 'CONFIG_OPERACAO_SAIDA_DE_ROTAS', token);
-      const { mapping, internalNames } = await getListColumnMapping(siteId, list.id, token);
-
-      const operacaoField = resolveFieldName(mapping, 'OPERACAO');
-      const filter = `fields/${operacaoField} eq '${operacao}'`;
-      const existing = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}&$top=1`, token);
-
-      if (!existing.value || existing.value.length === 0) {
-        return { success: false, message: 'Operação não encontrada' };
+      // First check if already locked by someone else
+      const lockInfo = await this.checkSendLock(token, operacao);
+      if (lockInfo?.locked && lockInfo.user?.toLowerCase() !== userEmail.toLowerCase()) {
+        return {
+          success: false,
+          message: `Outro usuário (${lockInfo.user}) está enviando os dados. Aguarde alguns segundos e tente novamente.`
+        };
       }
 
-      const itemId = existing.value[0].id;
-      const lockField = resolveFieldName(mapping, 'LockEnvio');
-      const lockUserField = resolveFieldName(mapping, 'LockUser');
-      const lockTimestampField = resolveFieldName(mapping, 'LockTimestamp');
-
-      // Verifica estado atual da trava
-      const f = existing.value[0].fields;
-      const currentLock = f[lockField] || '';
-      const currentLockUser = f[lockUserField] || '';
-      const currentLockTimestamp = f[lockTimestampField] || '';
-
-      // Verifica se a trava está ativa e não é do usuário atual
-      if (currentLock && currentLock.toLowerCase() === 'true' && currentLockUser.toLowerCase() !== userEmail.toLowerCase()) {
-        // Verifica se não expirou
-        if (currentLockTimestamp) {
-          let lockDate: Date | null = null;
-          if (currentLockTimestamp.includes('T')) {
-            lockDate = new Date(currentLockTimestamp);
-          } else if (currentLockTimestamp.includes('/')) {
-            const [data, hora] = currentLockTimestamp.split(' ');
-            const [dia, mes, ano] = data.split('/');
-            const [h, m, s] = hora ? hora.split(':') : ['00', '00', '00'];
-            lockDate = new Date(Number(ano), Number(mes) - 1, Number(dia), Number(h), Number(m), Number(s));
-          }
-
-          if (lockDate && !isNaN(lockDate.getTime())) {
-            const now = new Date();
-            const diffMs = now.getTime() - lockDate.getTime();
-            const timeoutMs = 2 * 60 * 1000; // 2 minutos
-
-            if (diffMs <= timeoutMs) {
-              return { 
-                success: false, 
-                message: `Outro usuário (${currentLockUser}) está enviando os dados. Aguarde alguns segundos e tente novamente.`
-              };
-            }
-          }
-        }
-      }
-
-      // Adquire a trava
-      const now = new Date();
-      const timestamp = now.toISOString();
-      
-      const fields: any = {
-        [lockField]: 'true',
-        [lockUserField]: userEmail,
-        [lockTimestampField]: timestamp
-      };
-
-      await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${itemId}/fields`, token, {
-        method: 'PATCH',
-        body: JSON.stringify(fields)
+      const timestamp = new Date().toISOString();
+      const res = await fetch('/api/checklist-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: 'acquireLock', operacao, userEmail, timestamp })
       });
+      const data = await res.json();
+      if (!data.success) return { success: false, message: data.error || 'Erro ao adquirir trava' };
 
-      console.log(`[LOCK_ACQUIRE] Trava adquirida por ${userEmail} para ${operacao} em ${timestamp}`);
       return { success: true };
     } catch (e: any) {
       console.error('[LOCK_ACQUIRE] Erro ao adquirir trava:', e.message);
@@ -2049,36 +1669,13 @@ export const SharePointService = {
    */
   async releaseSendLock(token: string, operacao: string): Promise<void> {
     try {
-      const siteId = await getResolvedSiteId(token);
-      const list = await findListByIdOrName(siteId, 'CONFIG_OPERACAO_SAIDA_DE_ROTAS', token);
-      const { mapping, internalNames } = await getListColumnMapping(siteId, list.id, token);
-
-      const operacaoField = resolveFieldName(mapping, 'OPERACAO');
-      const filter = `fields/${operacaoField} eq '${operacao}'`;
-      const existing = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}&$top=1`, token);
-
-      if (!existing.value || existing.value.length === 0) {
-        console.warn(`[LOCK_RELEASE] Operação ${operacao} não encontrada`);
-        return;
-      }
-
-      const itemId = existing.value[0].id;
-      const lockField = resolveFieldName(mapping, 'LockEnvio');
-      const lockUserField = resolveFieldName(mapping, 'LockUser');
-      const lockTimestampField = resolveFieldName(mapping, 'LockTimestamp');
-
-      const fields: any = {
-        [lockField]: '',
-        [lockUserField]: '',
-        [lockTimestampField]: ''
-      };
-
-      await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${itemId}/fields`, token, {
-        method: 'PATCH',
-        body: JSON.stringify(fields)
+      const res = await fetch('/api/checklist-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: 'releaseLock', operacao })
       });
-
-      console.log(`[LOCK_RELEASE] Trava liberada para ${operacao}`);
+      const data = await res.json();
+      if (!data.success) console.warn('[LOCK_RELEASE] Falha ao liberar trava:', data.error);
     } catch (e: any) {
       console.error('[LOCK_RELEASE] Erro ao liberar trava:', e.message);
     }
@@ -2090,43 +1687,32 @@ export const SharePointService = {
    */
   async getNonCollections(token: string, userEmail: string): Promise<NonCollection[]> {
     try {
-      const siteId = await getResolvedSiteId(token);
-      const listId = '83e8cfb9-1982-47ae-b515-3fec112da457';
-
-      // Busca todos os itens com paginação (SharePoint retorna max 100 por página)
-      let allItems: any[] = [];
-      let nextUrl: string | null = `/sites/${siteId}/lists/${listId}/items?expand=fields&$top=100`;
-
-      while (nextUrl) {
-        const data = await graphFetch(nextUrl, token);
-        allItems = allItems.concat(data.value || []);
-        nextUrl = data['@odata.nextLink'] || null;
-        console.log(`[NonCollections] Página carregada. Total acumulado: ${allItems.length}`);
-      }
-
-      console.log(`[NonCollections] Total bruto: ${allItems.length} itens`);
-
-      return allItems.map((item: any) => {
-        const f = item.fields || {};
-        return {
-          id: item.id.toString(),
-          semana: f.Title || '',
-          rota: f.Rota || '',
-          data: f.Data ? formatDateFromSharePoint(f.Data) : '',
-          codigo: f.C_x00f3_digo || '',
-          produtor: f.Produtor || '',
-          motivo: f.Motivo || '',
-          observacao: f.Observa_x00e7__x00e3_o || '',
-          acao: f.A_x00e7__x00e3_o || '',
-          dataAcao: f.DataA_x00e7__x00e3_o ? formatDateFromSharePoint(f.DataA_x00e7__x00e3_o) : '',
-          ultimaColeta: f._x00da_ltimaColeta ? formatDateFromSharePoint(f._x00da_ltimaColeta) : '',
-          Culpabilidade: f.Culpabilidade || '',
-          operacao: f.Opera_x00e7__x00e3_o || '',
-          causaRaiz: f.CausaRaiz || ''
-        };
+      const res = await fetch('/api/checklist-non-collections', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: 'getAll' })
       });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Erro ao buscar non-collections');
+
+      return (data.nonCollections || []).map((row: any): NonCollection => ({
+        id: String(row.id),
+        semana: String(row.semana || ''),
+        rota: String(row.rota || ''),
+        data: String(row.data || row.data_operacao || ''),
+        codigo: String(row.codigo || ''),
+        produtor: String(row.produtor || ''),
+        motivo: String(row.motivo || ''),
+        observacao: String(row.observacao || ''),
+        acao: String(row.acao || ''),
+        dataAcao: String(row.data_acao || ''),
+        ultimaColeta: String(row.ultima_coleta || ''),
+        Culpabilidade: String(row.culpabilidade || ''),
+        operacao: String(row.operacao || ''),
+        causaRaiz: String(row.causa_raiz || '')
+      }));
     } catch (e: any) {
-      console.error('[NonCollections] Erro ao buscar não coletas:', e.message);
+      console.error('[PG_NC] Erro ao buscar non-collections:', e.message);
       return [];
     }
   },
@@ -2150,42 +1736,16 @@ export const SharePointService = {
    */
   async saveNonCollection(token: string, nonCollection: NonCollection): Promise<string> {
     try {
-      const siteId = await getResolvedSiteId(token);
-      const listId = '83e8cfb9-1982-47ae-b515-3fec112da457';
-
-      // Constrói payload removendo campos vazios (SharePoint rejeita DateTime com "")
-      const payload: any = {};
-
-      if (nonCollection.semana) payload.Title = nonCollection.semana;
-      if (nonCollection.rota) payload.Rota = nonCollection.rota;
-      if (nonCollection.data) {
-        const parsedData = parseDateForSharePoint(nonCollection.data);
-        if (parsedData) payload.Data = parsedData;
-      }
-      if (nonCollection.codigo) payload.C_x00f3_digo = nonCollection.codigo;
-      if (nonCollection.produtor) payload.Produtor = nonCollection.produtor;
-      if (nonCollection.motivo) payload.Motivo = nonCollection.motivo;
-      if (nonCollection.observacao) payload.Observa_x00e7__x00e3_o = nonCollection.observacao;
-      if (nonCollection.acao) payload.A_x00e7__x00e3_o = nonCollection.acao;
-      // Campos DateTime: só envia se parse resultou em valor válido
-      { const v = parseDateForSharePoint(nonCollection.dataAcao); if (v) payload.DataA_x00e7__x00e3_o = v; }
-      { const v = parseDateForSharePoint(nonCollection.ultimaColeta); if (v) payload._x00da_ltimaColeta = v; }
-      if (nonCollection.Culpabilidade) payload.Culpabilidade = nonCollection.Culpabilidade;
-      if (nonCollection.operacao) payload.Opera_x00e7__x00e3_o = nonCollection.operacao;
-      if (nonCollection.causaRaiz) payload.CausaRaiz = nonCollection.causaRaiz;
-
-      console.log('[NonCollections] Salvando payload:', JSON.stringify(payload));
-
-      const response = await graphFetch(`/sites/${siteId}/lists/${listId}/items`, token, {
+      const res = await fetch('/api/checklist-non-collections', {
         method: 'POST',
-        body: JSON.stringify({ fields: payload })
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: 'insert', nonCollection })
       });
-
-      const spId = response.id?.toString();
-      console.log('[NonCollections] ✅ Não coleta salva com sucesso, ID:', spId);
-      return spId;
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Erro ao salvar non-collection');
+      return String(data.id);
     } catch (e: any) {
-      console.error('[NonCollections] Erro ao salvar não coleta:', e.message);
+      console.error('[PG_NC] Erro ao salvar não coleta:', e.message);
       throw e;
     }
   },
@@ -2196,41 +1756,15 @@ export const SharePointService = {
    */
   async updateNonCollection(token: string, nonCollection: NonCollection): Promise<void> {
     try {
-      const siteId = await getResolvedSiteId(token);
-      const listId = '83e8cfb9-1982-47ae-b515-3fec112da457';
-
-      // Constrói payload removendo campos vazios (SharePoint rejeita DateTime com "")
-      const payload: any = {};
-
-      if (nonCollection.semana) payload.Title = nonCollection.semana;
-      if (nonCollection.rota) payload.Rota = nonCollection.rota;
-      if (nonCollection.data) {
-        const parsedData = parseDateForSharePoint(nonCollection.data);
-        if (parsedData) payload.Data = parsedData;
-      }
-      if (nonCollection.codigo) payload.C_x00f3_digo = nonCollection.codigo;
-      if (nonCollection.produtor) payload.Produtor = nonCollection.produtor;
-      if (nonCollection.motivo) payload.Motivo = nonCollection.motivo;
-      if (nonCollection.observacao) payload.Observa_x00e7__x00e3_o = nonCollection.observacao;
-      if (nonCollection.acao) payload.A_x00e7__x00e3_o = nonCollection.acao;
-      // Campos DateTime: só envia se parse resultou em valor válido
-      { const v = parseDateForSharePoint(nonCollection.dataAcao); if (v) payload.DataA_x00e7__x00e3_o = v; }
-      { const v = parseDateForSharePoint(nonCollection.ultimaColeta); if (v) payload._x00da_ltimaColeta = v; }
-      if (nonCollection.Culpabilidade) payload.Culpabilidade = nonCollection.Culpabilidade;
-      if (nonCollection.operacao) payload.Opera_x00e7__x00e3_o = nonCollection.operacao;
-      if (nonCollection.causaRaiz) payload.CausaRaiz = nonCollection.causaRaiz;
-
-      console.log('[NonCollections] Atualizando payload:', JSON.stringify(payload));
-      console.log('[NonCollections] ID do item:', nonCollection.id);
-
-      await graphFetch(`/sites/${siteId}/lists/${listId}/items/${nonCollection.id}`, token, {
-        method: 'PATCH',
-        body: JSON.stringify({ fields: payload })
+      const res = await fetch('/api/checklist-non-collections', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: 'update', nonCollection })
       });
-
-      console.log('[NonCollections] ✅ Não coleta atualizada com sucesso:', nonCollection.rota, '-', nonCollection.codigo);
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Erro ao atualizar non-collection');
     } catch (e: any) {
-      console.error('[NonCollections] Erro ao atualizar não coleta:', e.message);
+      console.error('[PG_NC] Erro ao atualizar não coleta:', e.message);
       throw e;
     }
   },
@@ -2277,7 +1811,6 @@ export const SharePointService = {
       // Invalida cache das consultas de histórico de não coletas
       clearCacheByPrefix('archived_noncollections_');
 
-      console.log('[NonCollectionsHistory] ✅ Não coleta de histórico atualizada com sucesso:', nonCollection.rota, '-', nonCollection.codigo);
     } catch (e: any) {
       console.error('[NonCollectionsHistory] Erro ao atualizar não coleta de histórico:', e.message);
       throw e;
@@ -2290,16 +1823,15 @@ export const SharePointService = {
    */
   async deleteNonCollection(token: string, id: string): Promise<void> {
     try {
-      const siteId = await getResolvedSiteId(token);
-      const listId = '83e8cfb9-1982-47ae-b515-3fec112da457';
-
-      await graphFetch(`/sites/${siteId}/lists/${listId}/items/${id}`, token, {
-        method: 'DELETE'
+      const res = await fetch('/api/checklist-non-collections', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: 'delete', id })
       });
-
-      console.log('[NonCollections] ✅ Não coleta excluída com sucesso, ID:', id);
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Erro ao deletar non-collection');
     } catch (e: any) {
-      console.error('[NonCollections] Erro ao excluir não coleta:', e.message);
+      console.error('[PG_NC] Erro ao excluir não coleta:', e.message);
       throw e;
     }
   },
@@ -2314,13 +1846,11 @@ export const SharePointService = {
     // 1. Cache: retorna imediatamente se já buscou esse range recentemente
     const cached = getCachedData<NonCollection[]>(cacheKey);
     if (cached) {
-      console.log(`[NC_ARCHIVE_QUERY] Cache hit para ${cacheKey}`);
       return cached;
     }
 
     // 2. Deduplicação: se já existe uma requisição em andamento para o mesmo range, reutiliza
     if (inFlightArchiveRequests[cacheKey]) {
-      console.log(`[NC_ARCHIVE_QUERY] Reutilizando requisição em andamento para ${cacheKey}`);
       return inFlightArchiveRequests[cacheKey];
     }
 
@@ -2335,7 +1865,6 @@ export const SharePointService = {
 
         let filter = `fields/${colData} ge '${startDate}T00:00:00Z' and fields/${colData} le '${endDate}T23:59:59Z'`;
 
-        console.log(`[NC_ARCHIVE_QUERY] URL: /sites/${siteId}/lists/${historyListId}/items Filter: ${filter}`);
 
         // Busca todos os itens com paginação
         let allItems: any[] = [];
@@ -2347,7 +1876,6 @@ export const SharePointService = {
           const data = await graphFetch(nextUrl, token, signal ? { signal } : {});
           allItems = allItems.concat(data.value || []);
           nextUrl = data['@odata.nextLink'] || null;
-          console.log(`[NC_ARCHIVE_QUERY] Página carregada. Total acumulado: ${allItems.length}`);
         }
 
         const results = allItems.map((item: any) => {
@@ -2386,12 +1914,10 @@ export const SharePointService = {
           };
         });
 
-        console.log(`[NC_ARCHIVE_QUERY] Search success. Found ${results.length} records.`);
         setCachedData(cacheKey, results);
         return results;
       } catch (e: any) {
         if (e.name === 'AbortError') {
-          console.log('[NC_ARCHIVE_QUERY] Requisição cancelada pelo usuário.');
           return [];
         }
         console.error("[NC_ARCHIVE_FETCH_ERROR] Error fetching archived non-collections:", e.message);
@@ -2436,7 +1962,6 @@ export const SharePointService = {
           allItems = allItems.concat(data.value || []);
           nextUrl = data['@odata.nextLink'] || null;
           page++;
-          console.log(`[COLETAS_PREVISTAS] Página ${page} carregada. Total acumulado: ${allItems.length}`);
           if (page > 500) {
             console.warn('[COLETAS_PREVISTAS] Limite de segurança de paginação atingido (500 páginas).');
             break;
@@ -2467,7 +1992,6 @@ export const SharePointService = {
           .replace(/\s+/g, ' ');
 
       const rangeFilter = `fields/${colData} ge '${startISO}' and fields/${colData} le '${endISO}'`;
-      console.log(`[COLETAS_PREVISTAS] URL base: /sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${rangeFilter}`);
 
       // 1) Tentativa padrão por intervalo de data/hora
       let allItems = await fetchAllItems(
@@ -2490,12 +2014,9 @@ export const SharePointService = {
           `/sites/${siteId}/lists/${list.id}/items?expand=fields&$top=100`
         );
         allItems = broadItems.filter((item: any) => normalizeDateField(item?.fields?.[colData]) === date);
-        console.log(`[COLETAS_PREVISTAS] Fallback cliente encontrou ${allItems.length} itens para ${date}.`);
       }
 
-      console.log(`[COLETAS_PREVISTAS] Raw data count: ${allItems.length}`);
       if (allItems.length > 0) {
-        console.log(`[COLETAS_PREVISTAS] Primeiro item raw:`, JSON.stringify(allItems[0], null, 2));
       }
 
       // Busca configurações do usuário para filtrar pelas operações dele
@@ -2506,7 +2027,6 @@ export const SharePointService = {
 
       const myOps = new Set(operationSource.map(normalizeOperation).filter(Boolean));
 
-      console.log(`[COLETAS_PREVISTAS] Operações do usuário (${userEmail}):`, Array.from(myOps));
 
       const result = (allItems || [])
         .map((item: any): ColetaPrevista => {
@@ -2524,7 +2044,6 @@ export const SharePointService = {
           };
         });
 
-      console.log(`[COLETAS_PREVISTAS] Antes do filtro:`, result.map(c => `${c.Title}=${c.QntColeta}`));
 
       const filtered = result.filter(c => myOps.size === 0 || myOps.has(normalizeOperation(c.Title)));
 
@@ -2536,8 +2055,6 @@ export const SharePointService = {
         }
       }
 
-      console.log(`[COLETAS_PREVISTAS] Depois do filtro:`, filtered.map(c => `${c.Title}=${c.QntColeta}`));
-      console.log(`[COLETAS_PREVISTAS] Total: ${filtered.length}, Soma QntColeta: ${filtered.reduce((sum, c) => sum + c.QntColeta, 0)}`);
 
       return filtered;
     } catch (e: any) {
@@ -2552,31 +2069,15 @@ export const SharePointService = {
    * Lista destino: nao_coletas_web_hist (ID: 1702fe62-6a47-4fd1-b935-0e3258073bb6)
    */
   async moveNonCollectionsToHistory(token: string, items: NonCollection[]): Promise<{ success: number, failed: number, lastError?: string }> {
-    console.log(`[NC_ARCHIVE_START] Starting migration of ${items.length} items to permanent history.`);
     const siteId = await getResolvedSiteId(token);
-    const sourceListId = '83e8cfb9-1982-47ae-b515-3fec112da457';
     const historyListId = '1702fe62-6a47-4fd1-b935-0e3258073bb6';
     const { mapping: histMapping, internalNames: histInternals } = await getListColumnMapping(siteId, historyListId, token);
 
-    console.log('[NC_ARCHIVE] histMapping:', histMapping);
-    console.log('[NC_ARCHIVE] histInternals:', Array.from(histInternals));
-
-    // Função segura para converter data DD/MM/YYYY ou YYYY-MM-DD para ISO
     const safeToISO = (dateStr: string | undefined): string | null => {
       if (!dateStr || dateStr.trim() === '') return null;
-      // Já está em formato YYYY-MM-DD
-      if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
-        return dateStr + 'T12:00:00Z';
-      }
-      // Formato DD/MM/YYYY
-      if (/^\d{2}\/\d{2}\/\d{4}$/.test(dateStr)) {
-        const [d, m, y] = dateStr.split('/');
-        return `${y}-${m}-${d}T12:00:00Z`;
-      }
-      // Tenta parse genérico
-      const parsed = new Date(dateStr);
-      if (isNaN(parsed.getTime())) return null;
-      return parsed.toISOString();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return dateStr + 'T12:00:00Z';
+      if (/^\d{2}\/\d{2}\/\d{4}$/.test(dateStr)) { const [d, m, y] = dateStr.split('/'); return `${y}-${m}-${d}T12:00:00Z`; }
+      const parsed = new Date(dateStr); if (isNaN(parsed.getTime())) return null; return parsed.toISOString();
     };
 
     let successCount = 0;
@@ -2586,64 +2087,32 @@ export const SharePointService = {
     for (const item of items) {
       try {
         const semana = item.semana || getWeekString(item.data);
-
-        // Tenta resolver cada campo usando o mapping
         const fieldMap: Record<string, any> = {
-          Semana: semana,
-          Rota: item.rota,
-          Data: safeToISO(item.data),
-          'Código': item.codigo,
-          Produtor: item.produtor,
-          Motivo: item.motivo,
-          'Observação': item.observacao,
-          Observacao: item.observacao,
-          'Observa_x00e7__x00e3_o': item.observacao,
-          Ação: item.acao,
-          'DataAção': safeToISO(item.dataAcao),
-          'ÚltimaColeta': safeToISO(item.ultimaColeta),
-          Culpabilidade: item.Culpabilidade,
-          'Operação': item.operacao,
-          CausaRaiz: item.causaRaiz || ''
+          Semana: semana, Rota: item.rota, Data: safeToISO(item.data),
+          'Código': item.codigo, Produtor: item.produtor, Motivo: item.motivo,
+          'Observação': item.observacao, Observacao: item.observacao, 'Observa_x00e7__x00e3_o': item.observacao,
+          Ação: item.acao, 'DataAção': safeToISO(item.dataAcao), 'ÚltimaColeta': safeToISO(item.ultimaColeta),
+          Culpabilidade: item.Culpabilidade, 'Operação': item.operacao, CausaRaiz: item.causaRaiz || ''
         };
-
-        // Campos read-only que NÃO podem ser escritos via Graph API
-        const readOnlyFields = new Set([
-          'LinkTitle', 'LinkTitleNoMenu', 'ID', 'ContentType', 'Modified', 'Created',
-          'Author', 'Editor', '_UIVersionString', 'Attachments', 'Edit', 'DocIcon',
-          'ItemChildCount', 'FolderChildCount', '_ComplianceFlags', '_ComplianceTag',
-          '_ComplianceTagWrittenTime', '_ComplianceTagUserId', '_IsRecord', 'AppAuthor',
-          'AppEditor', 'Title'
-        ]);
-
+        const readOnlyFields = new Set(['LinkTitle','LinkTitleNoMenu','ID','ContentType','Modified','Created','Author','Editor','_UIVersionString','Attachments','Edit','DocIcon','ItemChildCount','FolderChildCount','_ComplianceFlags','_ComplianceTag','_ComplianceTagWrittenTime','_ComplianceTagUserId','_IsRecord','AppAuthor','AppEditor','Title']);
         const histFields: any = { Title: item.rota };
         Object.entries(fieldMap).forEach(([displayName, value]) => {
           const intName = resolveFieldName(histMapping, displayName);
-          console.log(`[NC_ARCHIVE] resolveFieldName("${displayName}") -> "${intName}" | readOnly: ${readOnlyFields.has(intName)}`);
-          if (intName && histInternals.has(intName) && !readOnlyFields.has(intName)) {
-            histFields[intName] = value;
-          }
+          if (intName && histInternals.has(intName) && !readOnlyFields.has(intName)) histFields[intName] = value;
         });
 
-        console.log('[NC_ARCHIVE] histFields final:', histFields);
-
         const postRes = await graphFetch(`/sites/${siteId}/lists/${historyListId}/items`, token, { method: 'POST', body: JSON.stringify({ fields: histFields }) });
-        console.log('[NC_ARCHIVE] POST result:', postRes);
         if (postRes && postRes.id) {
-          await graphFetch(`/sites/${siteId}/lists/${sourceListId}/items/${item.id}`, token, { method: 'DELETE' });
+          // Delete from PG instead of SharePoint
+          await fetch('/api/checklist-non-collections', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+            body: JSON.stringify({ action: 'delete', id: item.id })
+          });
           successCount++;
-          console.log(`[NC_ARCHIVE] ✅ Item ${item.id} arquivado com sucesso`);
-        } else {
-          failedCount++;
-          lastErrorMessage = "Failed to confirm archived NC ID.";
-          console.error('[NC_ARCHIVE] ❌ Falha ao confirmar ID arquivado:', postRes);
-        }
-      } catch (err: any) {
-        failedCount++;
-        lastErrorMessage = err.message;
-        console.error(`[NC_ARCHIVE] ❌ Erro ao arquivar item ${item.id}:`, err.message);
-      }
+        } else { failedCount++; lastErrorMessage = "Failed to confirm archived NC ID."; }
+      } catch (err: any) { failedCount++; lastErrorMessage = err.message; }
     }
-    console.log(`[NC_ARCHIVE] Final: success=${successCount}, failed=${failedCount}`);
     return { success: successCount, failed: failedCount, lastError: lastErrorMessage };
   }
 };

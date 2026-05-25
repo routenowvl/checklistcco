@@ -371,12 +371,13 @@ const RouteDepartureView: React.FC<{
   onLogout?: () => void;
   isAllViewer?: boolean;
 }> = ({ currentUser, isConfigModalOpen = false, setIsConfigModalOpen = () => {}, onLogout, isAllViewer = false }) => {
+  const hasLoadedOnce = useRef(sessionStorage.getItem('_rd_loaded') === '1');
   const [routes, setRoutes] = useState<RouteDeparture[]>([]);
   const [userConfigs, setUserConfigs] = useState<RouteConfig[]>([]);
   const [canEditData, setCanEditData] = useState(true);
   const [routeMappings, setRouteMappings] = useState<RouteOperationMapping[]>([]);
   const [motoristas, setMotoristas] = useState<Motorista[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(() => !hasLoadedOnce.current);
   const [isSyncing, setIsSyncing] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [bulkStatus, setBulkStatus] = useState<{ active: boolean, current: number, total: number } | null>(null);
@@ -586,7 +587,6 @@ const RouteDepartureView: React.FC<{
   const [colFilters, setColFilters] = useState<Record<string, string>>(() => {
     const saved = sessionStorage.getItem('route_departure_col_filters');
     if (saved) {
-        console.log('[ROUTE_DEPARTURE] Filtros de coluna restaurados:', JSON.parse(saved));
         return JSON.parse(saved);
     }
     return {};
@@ -594,7 +594,6 @@ const RouteDepartureView: React.FC<{
   const [selectedFilters, setSelectedFilters] = useState<Record<string, string[]>>(() => {
     const saved = sessionStorage.getItem('route_departure_selected_filters');
     if (saved) {
-        console.log('[ROUTE_DEPARTURE] Filtros selecionados restaurados:', JSON.parse(saved));
         return JSON.parse(saved);
     }
     return {};
@@ -602,7 +601,6 @@ const RouteDepartureView: React.FC<{
   const [isSortByTimeEnabled, setIsSortByTimeEnabled] = useState(() => {
     const saved = sessionStorage.getItem('route_departure_sort_by_time');
     if (saved) {
-        console.log('[ROUTE_DEPARTURE] Ordenação por horário restaurada:', JSON.parse(saved));
         return JSON.parse(saved);
     }
     return true; // Padrão: ativado ao abrir a tela
@@ -610,7 +608,6 @@ const RouteDepartureView: React.FC<{
   const [colWidths, setColWidths] = useState<Record<string, number>>(() => {
     const saved = sessionStorage.getItem('route_departure_col_widths');
     if (saved) {
-        console.log('[ROUTE_DEPARTURE] Larguras das colunas restauradas:', JSON.parse(saved));
         return JSON.parse(saved);
     }
     return { rota: 140, data: 125, inicio: 95, motorista: 230, placa: 100, saida: 95, motivo: 170, observacao: 400, geral: 120, operacao: 140, status: 90, tempo: 90, tempoResposta: 130 };
@@ -618,7 +615,6 @@ const RouteDepartureView: React.FC<{
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(() => {
     const saved = sessionStorage.getItem('route_departure_hidden_cols');
     if (saved) {
-        console.log('[ROUTE_DEPARTURE] Colunas ocultas restauradas:', new Set(JSON.parse(saved)));
         return new Set(JSON.parse(saved));
     }
     return new Set();
@@ -848,6 +844,9 @@ const RouteDepartureView: React.FC<{
   const normalizeMaintenanceDate = (value: string): string => {
     const raw = String(value || '').trim();
     if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+    // Suporta DD/MM/AAAA
+    const brMatch = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (brMatch) return `${brMatch[3]}-${brMatch[2]}-${brMatch[1]}`;
     const parsed = new Date(raw);
     if (Number.isNaN(parsed.getTime())) return '';
     return parsed.toISOString().slice(0, 10);
@@ -971,8 +970,6 @@ const RouteDepartureView: React.FC<{
   // Analisa histórico dos últimos 7 dias e identifica rotas com problemas
   const analyzeRouteHistory = async (token: string) => {
     try {
-      console.log('[ROUTE_ALERT] Analisando histórico dos últimos 7 dias...');
-
       // Calcula data de 7 dias atrás
       const sevenDaysAgo = new Date();
       sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
@@ -982,22 +979,17 @@ const RouteDepartureView: React.FC<{
       // Busca histórico no SharePoint
       const history = await SharePointService.getArchivedDepartures(token, null, startDate, endDate);
 
-      console.log(`[ROUTE_ALERT] ${history.length} registros encontrados, filtrando status Atrasada/Adiantada...`);
-      
       // Log para depuração - verifica statusOp dos registros
       const statusCounts: Record<string, number> = {};
       history.forEach(r => {
         statusCounts[r.statusOp] = (statusCounts[r.statusOp] || 0) + 1;
       });
-      console.log('[ROUTE_ALERT] Status encontrados:', statusCounts);
 
       // Filtra apenas rotas com status "Atrasada/Atrasado" ou "Adiantada/Adiantado"
       const problemRoutes = history.filter(r =>
         r.statusOp === 'Atrasada' || r.statusOp === 'Atrasado' ||
         r.statusOp === 'Adiantada' || r.statusOp === 'Adiantado'
       );
-
-      console.log(`[ROUTE_ALERT] ${problemRoutes.length} registros com problemas`);
 
       // Agrupa por nome de rota
       const alerts: Record<string, { count: number; history: RouteDeparture[] }> = {};
@@ -1019,12 +1011,10 @@ const RouteDepartureView: React.FC<{
       });
 
       setRouteAlerts(alerts);
-      console.log(`[ROUTE_ALERT] ✅ ${Object.keys(alerts).length} rotas com alertas de problemas`);
-      
+
       // Log para depuração - mostra primeiras 5 rotas com alertas
       const first5Routes = Object.keys(alerts).slice(0, 5);
       first5Routes.forEach(rota => {
-        console.log(`[ROUTE_ALERT] Rota: ${rota} -> ${alerts[rota].count} ocorrências`);
       });
     } catch (e: any) {
       console.error('[ROUTE_ALERT] Erro ao analisar histórico:', e.message);
@@ -1035,8 +1025,6 @@ const RouteDepartureView: React.FC<{
   const analyzeMotoristHistory = async (motoristaNome: string, token: string, motoristaOperacao?: string): Promise<{ count: number; history: RouteDeparture[] } | null> => {
     try {
       if (!motoristaNome || motoristaNome.trim() === '') return null;
-
-      console.log(`[MOTORIST_ALERT] Analisando histórico de "${motoristaNome}" nos últimos 30 dias...`);
 
       // Calcula data de 30 dias atrás
       const thirtyDaysAgo = new Date();
@@ -1057,8 +1045,6 @@ const RouteDepartureView: React.FC<{
         r.motorista.toLowerCase().trim() === motoristaNome.toLowerCase().trim() &&
         r.operacao && userOps.has(r.operacao.trim().toLowerCase())
       );
-
-      console.log(`[MOTORIST_ALERT] ${maodeObraRecords.length} ocorrência(s) de "Mão de obra" para ${motoristaNome} (filtro por operações do usuário)`);
 
       if (maodeObraRecords.length === 0) return null;
 
@@ -1118,8 +1104,6 @@ const RouteDepartureView: React.FC<{
         return;
       }
 
-      console.log(`[MOTORIST_SCAN] ${motoristasWithMaDeObra.size} motorista(s) com "Mão de obra" na tabela:`, Array.from(motoristasWithMaDeObra));
-
       // Operações que o usuário tem acesso
       const userOps = new Set(userConfigs.map(c => c.operacao.trim().toLowerCase()));
 
@@ -1151,7 +1135,6 @@ const RouteDepartureView: React.FC<{
       });
 
       setMotoristAlerts(alerts);
-      console.log(`[MOTORIST_SCAN] ✅ ${Object.keys(alerts).length} motorista(s) com alertas`);
     } catch (e: any) {
       console.error('[MOTORIST_SCAN] Erro ao escanear alertas:', e.message);
     }
@@ -1287,9 +1270,6 @@ const RouteDepartureView: React.FC<{
       c.operacao.toUpperCase() === operacaoParaBuscar.toUpperCase()
     );
     if (config) {
-      console.log(`[EMAIL_CONFIG] Carregando dados iniciais para ${selectedOperacaoConfig} (buscando: ${operacaoParaBuscar}):`);
-      console.log(`  Envio: ${config.Envio || '(vazio)'}`);
-      console.log(`  Copia: ${config.Copia || '(vazio)'}`);
       setConfigEnvio(config.Envio || '');
       setConfigCopia(config.Copia || '');
       emailConfigLoadedRef.current[selectedOperacaoConfig] = true;
@@ -1322,10 +1302,6 @@ const RouteDepartureView: React.FC<{
       if (isDeale && selectedOperacaoConfig === 'DEALE') {
         operacaoParaSalvar = getDealeAnchorOperation();
       }
-
-      console.log(`[EMAIL_CONFIG] Salvando configuração para ${operacaoParaSalvar} (selecionado: ${selectedOperacaoConfig})`);
-      console.log(`[EMAIL_CONFIG] Envio: ${configEnvio}`);
-      console.log(`[EMAIL_CONFIG] Copia: ${configCopia}`);
 
       await SharePointService.updateRouteConfigEmails(token, operacaoParaSalvar, configEnvio, configCopia);
 
@@ -1361,7 +1337,6 @@ const RouteDepartureView: React.FC<{
         const updated = prev.map(route => {
           // Se tem lock e expirou, remove
           if (route.lockExpiresAt && now > route.lockExpiresAt && route.editingUser) {
-            console.log(`[LOCK_CLEANUP] Lock expirado para ${route.id} (era de ${route.editingUser})`);
             hasChanges = true;
             return { ...route, editingUser: undefined, lockExpiresAt: undefined };
           }
@@ -1648,7 +1623,15 @@ const RouteDepartureView: React.FC<{
     const today = new Date(todayY, todayM - 1, todayD);
     today.setHours(0, 0, 0, 0);
 
-    const [y, m, d] = routeDate.split('-').map(Number);
+    // Suporta ambos os formatos: DD/MM/AAAA e YYYY-MM-DD
+    let y: number, m: number, d: number;
+    const brMatch = routeDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (brMatch) {
+      d = Number(brMatch[1]); m = Number(brMatch[2]); y = Number(brMatch[3]);
+    } else {
+      const parts = routeDate.split('-').map(Number);
+      y = parts[0]; m = parts[1]; d = parts[2];
+    }
     const rDate = new Date(y, m - 1, d);
     rDate.setHours(0, 0, 0, 0);
 
@@ -1987,7 +1970,6 @@ const RouteDepartureView: React.FC<{
     }
 
     const causaRaizSanitizada = (causaRaiz || '').trim();
-    console.log('[CHECKLIST] Salvando:', { routeId, result, causaRaiz: causaRaizSanitizada });
 
     try {
       // Atualiza checklist e causa raiz em uma única operação para evitar sobrescrita por estado antigo.
@@ -2077,22 +2059,16 @@ const RouteDepartureView: React.FC<{
       return;
     }
 
-    // Só mostra loading se NÃO for refresh em segundo plano
-    if (!isBackgroundRefresh) {
+    // Só mostra loading se NÃO for refresh em segundo plano E não tem dados em cache
+    const hasCachedData = routes.length > 0;
+    if (!isBackgroundRefresh && !hasCachedData) {
       setIsLoading(true);
     }
 
     try {
-      console.log('[LOAD_DATA] Buscando dados atualizados...', isBackgroundRefresh ? '(segundo plano)' : '(inicial)');
-      console.log('[LOAD_DATA] Usuário logado:', currentUser.email);
-
-      const routeAccess = await SharePointService.getRouteConfigsByAccess(token, currentUser.email, true);
+      const routeAccess = await SharePointService.getRouteConfigsByAccess(token, currentUser.email, !isBackgroundRefresh);
       const configs = routeAccess.configs || [];
       setCanEditData(Boolean(routeAccess.canEdit));
-
-      console.log('[LOAD_DATA] Configurações carregadas:', configs?.length || 0);
-      console.log('[LOAD_DATA] Operações do usuário:', configs?.map(c => c.operacao));
-      console.log('[LOAD_DATA] Perfil de edição habilitado?', Boolean(routeAccess.canEdit));
 
       // Detecta se é usuário DEALE (para o modal de configurar emails)
       const deale = isDealeUser(configs || []);
@@ -2100,7 +2076,6 @@ const RouteDepartureView: React.FC<{
       setUserConfigs(configs || []);
 
       if (!routeAccess.canEdit) {
-        console.log('[LOAD_DATA] Modo visualização: carregando rotas a partir da coluna Conteudo.');
         setRouteMappings([]);
         setMotoristas([]);
 
@@ -2125,7 +2100,9 @@ const RouteDepartureView: React.FC<{
         });
 
         setRoutes(recalculatedRoutes);
-        await loadMaintenanceAlerts(recalculatedRoutes);
+        loadMaintenanceAlerts(recalculatedRoutes).catch(err =>
+          console.warn('[LOAD_DATA] Falha ao carregar alertas de manutenção:', err?.message || err)
+        );
 
         const motoristaRecords = recalculatedRoutes.filter(r => r.motorista && r.motorista.trim() !== '');
         const byOperation: Record<string, RouteDeparture[]> = {};
@@ -2149,33 +2126,26 @@ const RouteDepartureView: React.FC<{
           }
         });
         setLastMotoristaChecklist(resultChecklist);
-        console.log('[LOAD_DATA] Dados carregados via snapshot para visualização.');
+        setIsLoading(false);
+        hasLoadedOnce.current = true;
+        sessionStorage.setItem('_rd_loaded', '1');
         return;
       }
 
       const [mappings, spData, motoristasData] = await Promise.all([
         SharePointService.getRouteOperationMappings(token),
-        SharePointService.getDepartures(token, true), // force refresh
+        SharePointService.getDepartures(token, !isBackgroundRefresh), // force refresh only on first load
         SharePointService.getMotoristas(token, !isBackgroundRefresh)
       ]);
 
-      console.log('[LOAD_DATA] Total de rotas brutas do SharePoint:', spData?.length || 0);
       setRouteMappings(mappings || []);
       setMotoristas(motoristasData || []);
-
-      // Debug: mostra primeiros mappings (Title = nome da rota no checklist)
-      console.log('[LOAD_DATA] RouteOperationMappings (primeiros 10):', (mappings || []).slice(0, 10).map(m => m.Title));
 
       // Filtra rotas APENAS das operações do usuário logado
       const myOps = new Set((configs || []).map(c => c.operacao));
 
-      // DEBUG: Log detalhe das operações para identificar problemas de comparação
-      console.log('[LOAD_DATA] Operações configuradas (myOps):', Array.from(myOps));
-      console.log('[LOAD_DATA] Total de rotas brutas do SharePoint:', spData?.length || 0);
-
       // Log das primeiras 5 operações únicas nas rotas brutas
       const uniqueOpsInRoutes = Array.from(new Set((spData || []).map(r => r.operacao)));
-      console.log('[LOAD_DATA] Operações únicas nas rotas brutas:', uniqueOpsInRoutes.slice(0, 10));
 
       const filteredByUser = (spData || []).filter(route => {
         // Sem operações configuradas, não retorna dados por segurança
@@ -2183,13 +2153,9 @@ const RouteDepartureView: React.FC<{
         const match = myOps.has(route.operacao);
         if (!match && myOps.size <= 3) {
           // Log apenas para poucos configs (debug)
-          console.log(`[LOAD_DATA] Rota "${route.rota}" NÃO match: operacao="${route.operacao}" não está em myOps`);
         }
         return match;
       });
-
-      console.log('[LOAD_DATA] Rotas filtradas por usuário:', filteredByUser.length);
-      console.log('[LOAD_DATA] Operações nas rotas filtradas:', Array.from(new Set(filteredByUser.map(r => r.operacao))));
 
       // Recalcula status e tempo para todas as rotas FILTRADAS
       const recalculatedRoutes = filteredByUser.map(route => {
@@ -2242,7 +2208,6 @@ const RouteDepartureView: React.FC<{
               }
             }
             if (!hasChanges) {
-              console.log('[LOAD_DATA] Nenhuma mudança detectada — mantendo estado atual');
               return prevRoutes; // Retorna mesma referência — React não re-renderiza
             }
           }
@@ -2263,7 +2228,6 @@ const RouteDepartureView: React.FC<{
             }
           }
 
-          console.log('[LOAD_DATA] Merge concluído —', merged.length, 'rotas');
           return merged;
         });
       } else {
@@ -2271,9 +2235,17 @@ const RouteDepartureView: React.FC<{
         setRoutes(recalculatedRoutes);
       }
 
-      await loadMaintenanceAlerts(recalculatedRoutes);
+      // ✅ Rotas já estão na tela — esconde loading IMEDIATAMENTE
+      setIsLoading(false);
+      hasLoadedOnce.current = true;
+      sessionStorage.setItem('_rd_loaded', '1');
 
-      console.log('[LOAD_DATA] Dados carregados com sucesso');
+      // ── Tudo abaixo roda em background após spinner sumir ──────────
+
+      // Manutenção: carrega em background
+      loadMaintenanceAlerts(recalculatedRoutes).catch(err =>
+        console.warn('[LOAD_DATA] Falha ao carregar alertas de manutenção:', err?.message || err)
+      );
 
       // Analisa histórico dos últimos 7 dias para alertas (apenas no carregamento inicial)
       if (!isBackgroundRefresh) {
@@ -2310,42 +2282,42 @@ const RouteDepartureView: React.FC<{
         setLastMotoristaChecklist(result);
       }
 
-      // Busca dados de rotas do banco (route_web_routes) para comparação de placa
-      try {
-        const dbDateRef = getBrazilDate();
-        const dbRes = await fetch('/api/route-web-routes-db', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ dataReferencia: dbDateRef })
-        });
-        if (dbRes.ok) {
-          const dbJson = await dbRes.json();
-          if (dbJson.success && Array.isArray(dbJson.routes)) {
-            const map: Record<string, { placa: string; motorista: string; smartquestion_actual_start_time: string | null; roadmap_code: string }> = {};
-            for (const r of dbJson.routes) {
-              if (r.roadmap_code) {
-                map[r.roadmap_code] = {
-                  placa: r.placa || '',
-                  smartquestion_unloading_plate: r.smartquestion_unloading_plate || '',
-                  motorista: r.motorista || '',
-                  smartquestion_actual_start_time: r.smartquestion_actual_start_time || null,
-                  roadmap_code: r.roadmap_code
-                };
+      // Busca dados de rotas do banco (route_web_routes) em background
+      (async () => {
+        try {
+          const dbDateRef = getBrazilDate();
+          const dbRes = await fetch('/api/route-web-routes-db', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ dataReferencia: dbDateRef })
+          });
+          if (dbRes.ok) {
+            const dbJson = await dbRes.json();
+            if (dbJson.success && Array.isArray(dbJson.routes)) {
+              const map: Record<string, { placa: string; motorista: string; smartquestion_actual_start_time: string | null; roadmap_code: string }> = {};
+              for (const r of dbJson.routes) {
+                if (r.roadmap_code) {
+                  map[r.roadmap_code] = {
+                    placa: r.placa || '',
+                    smartquestion_unloading_plate: r.smartquestion_unloading_plate || '',
+                    motorista: r.motorista || '',
+                    smartquestion_actual_start_time: r.smartquestion_actual_start_time || null,
+                    roadmap_code: r.roadmap_code
+                  };
+                }
               }
+              setDbRoutesMap(map);
             }
-            setDbRoutesMap(map);
           }
+        } catch (dbErr: any) {
+          console.warn('[LOAD_DATA] Falha ao buscar DB routes:', dbErr?.message || dbErr);
         }
-      } catch (dbErr: any) {
-        console.warn('[LOAD_DATA] Falha ao buscar DB routes:', dbErr?.message || dbErr);
-      }
+      })();
 
-      // Atualiza snapshot de visualização por operação (somente se houver mudança no Conteudo)
-      try {
-        await syncViewerContentForDepartures(token, configs || [], recalculatedRoutes);
-      } catch (err) {
-        console.error('[VIEWER_CACHE][SAIDAS] Falha ao sincronizar Conteudo:', (err as any)?.message || err);
-      }
+      // Atualiza snapshot de visualização por operação em background
+      syncViewerContentForDepartures(token, configs || [], recalculatedRoutes).catch(err =>
+        console.error('[VIEWER_CACHE][SAIDAS] Falha ao sincronizar Conteudo:', (err as any)?.message || err)
+      );
     } catch (e: any) {
       console.error('[RouteDeparture] Erro ao carregar dados:', e.message);
       if (!isBackgroundRefresh && (e.message.includes('expired') || e.message.includes('401'))) {
@@ -2354,14 +2326,10 @@ const RouteDepartureView: React.FC<{
       } else if (!isBackgroundRefresh) {
         alert('Erro ao carregar dados: ' + e.message);
       }
-    } finally {
-      if (!isBackgroundRefresh) {
-        setIsLoading(false);
-      }
     }
   };
 
-  useEffect(() => { loadData(); }, [currentUser]);
+  useEffect(() => { loadData(routes.length > 0); }, [currentUser]);
 
   // Função para buscar histórico do SharePoint (usada no modal e no polling)
   const handleSearchArchive = async () => {
@@ -2389,9 +2357,7 @@ const RouteDepartureView: React.FC<{
     setHistoryEditWarning(null);
     setHistoryCelulaFilter('todas');
     try {
-        console.log('[SEARCH_ARCHIVE] Requesting history from SharePoint list {856bf9d5-6081-4360-bcad-e771cbabfda8}...');
         const results = await SharePointService.getArchivedDepartures(await getAccessToken(), null, histStart, histEnd, controller.signal);
-        console.log('[SEARCH_ARCHIVE] Results received:', results.length);
 
         // Só atualiza state se esta requisição não foi cancelada
         if (!controller.signal.aborted) {
@@ -2407,7 +2373,6 @@ const RouteDepartureView: React.FC<{
         }
     } catch (err: any) {
         if (err.name === 'AbortError') {
-          console.log('[SEARCH_ARCHIVE] Requisição cancelada.');
           return;
         }
         console.error('[SEARCH_ARCHIVE] Error during search:', err);
@@ -2427,11 +2392,8 @@ const RouteDepartureView: React.FC<{
     const refreshInterval = setInterval(() => {
       // Se o usuário está editando, NÃO faz polling para evitar lag
       if (isEditingCell) {
-        console.log('[POLLING_ROUTE_DEPARTURE] Pulando atualização (usuário editando)');
         return;
       }
-      console.log('[POLLING_ROUTE_DEPARTURE] Atualização automática de dados (segundo plano)');
-      console.log('[POLLING_ROUTE_DEPARTURE] Usuário:', currentUser.email);
       loadData(true); // true = segundo plano (sem loading, sem spinner)
     }, 30000);
 
@@ -2673,26 +2635,26 @@ const RouteDepartureView: React.FC<{
       let clearCount = 0;
 
       if (routesToArchive.length > 0) {
-        console.log(`[ARCHIVE] Movendo ${routesToArchive.length} itens para o histórico...`);
         const archiveResult = await SharePointService.moveDeparturesToHistory(token, routesToArchive);
         archiveSuccess = archiveResult.success;
         archiveFailed = archiveResult.failed;
-        console.log(`[ARCHIVE] Sucesso: ${archiveSuccess}, Falhas: ${archiveFailed}`);
 
-        // Limpa status de envio apenas das operações arquivadas
-        console.log('[ARCHIVE] Limpando status de envio nas configurações das operações arquivadas...');
-        const opsToClear = Array.from(new Set(routesToArchive.map(r => r.operacao).filter(Boolean)));
-        for (const operacao of opsToClear) {
-          try {
-            await SharePointService.updateUltimoEnvioSaida(token, operacao, '');
-            await SharePointService.updateStatusOperacao(token, operacao, '');
-            await SharePointService.updateUltimoEnvioResumoSaida(token, operacao, '');
-            await SharePointService.updateStatusResumoSaida(token, operacao, '');
-            clearCount++;
-            console.log(`[ARCHIVE] ✅ Status limpo para ${operacao}`);
-          } catch (e: any) {
-            console.error(`[ARCHIVE] Erro ao limpar status de ${operacao}:`, e.message);
+        // Limpa status de envio apenas das operações que foram arquivadas com sucesso
+        if (archiveSuccess > 0) {
+          const opsToClear = Array.from(new Set(routesToArchive.map(r => r.operacao).filter(Boolean)));
+          for (const operacao of opsToClear) {
+            try {
+              await SharePointService.updateUltimoEnvioSaida(token, operacao, '');
+              await SharePointService.updateStatusOperacao(token, operacao, '');
+              await SharePointService.updateUltimoEnvioResumoSaida(token, operacao, '');
+              await SharePointService.updateStatusResumoSaida(token, operacao, '');
+              clearCount++;
+            } catch (e: any) {
+              console.error(`[ARCHIVE] Erro ao limpar status de ${operacao}:`, e.message);
+            }
           }
+        } else {
+          console.warn('[ARCHIVE] Nenhuma rota arquivada com sucesso — mantendo status de envio atual');
         }
       }
 
@@ -3080,7 +3042,6 @@ const RouteDepartureView: React.FC<{
         // Verifica se é campo 'rota' e se tem múltiplas linhas (paste)
         if (field === 'rota' && (value.includes('\n') || value.includes(';'))) {
             const lines = value.split(/[\n;]/).map(l => l.trim()).filter(Boolean);
-            console.log('[GHOST_ROTA] Múltiplas linhas detectadas:', lines);
             if (lines.length > 1) {
                 setPendingBulkRoutes(lines);
                 setIsBulkMappingModalOpen(true);
@@ -3093,8 +3054,7 @@ const RouteDepartureView: React.FC<{
 
         // Se é campo 'rota' e tem valor, abre popup de mapeamento SEMPRE
         if (field === 'rota' && value !== "" && value.trim() !== "") {
-            console.log('[GHOST_ROTA] Buscando mapeamento para:', value, 'Mappings disponíveis:', routeMappings.map(m => m.Title));
-            
+
             // BLOQUEIO: Não permite adicionar rota se há filtros ou ordenação ativos
             if (hasActiveFiltersOrSort) {
                 console.warn('[GHOST_ROTA] Bloqueado - filtros ou ordenação ativos');
@@ -3107,12 +3067,10 @@ const RouteDepartureView: React.FC<{
             const mapping = routeMappings.find(m => m.Title === value);
             if (mapping) {
                 // Já tem mapeamento, aplica diretamente
-                console.log('[GHOST_ROTA] Mapeamento encontrado:', mapping);
                 updatedGhost.operacao = mapping.OPERACAO;
                 setGhostRow(updatedGhost);
             } else {
                 // Não tem mapeamento, abre popup
-                console.log('[GHOST_ROTA] Sem mapeamento, abrindo modal para:', value);
                 // Primeiro atualiza o ghostRow para manter o valor da rota
                 setGhostRow(updatedGhost);
                 setPendingMappingRoute(value);
@@ -3395,7 +3353,6 @@ const RouteDepartureView: React.FC<{
     const editableIds = editIds.filter((id) => !blockedIds.includes(id));
     if (editableIds.length === 0) return;
 
-    console.log(`[HISTORY_BATCH_SAVE] Salvando ${editableIds.length} edições pendentes...`);
     setIsSyncing(true);
 
     let successCount = 0;
@@ -3433,7 +3390,6 @@ const RouteDepartureView: React.FC<{
           // Salva no SharePoint
           await SharePointService.updateArchivedDeparture(token, updatedRoute);
           successCount++;
-          console.log(`[HISTORY_SAVE] ✅ Rota ${id} atualizada com sucesso`);
         } catch (e: any) {
           errorCount++;
           console.error(`[HISTORY_SAVE] Erro ao atualizar ${id}:`, e.message);
@@ -3478,7 +3434,6 @@ const RouteDepartureView: React.FC<{
 
       // Feedback para o usuário
       if (errorCount === 0) {
-        console.log(`[HISTORY_SAVE] ✅ ${successCount} edições salvas com sucesso!`);
       } else {
         alert(`⚠️ ${successCount} edições salvas, ${errorCount} falharam.`);
       }
@@ -3994,7 +3949,8 @@ const RouteDepartureView: React.FC<{
             // Converte data + início em timestamp para comparação
             const getTimestamp = (route: RouteDeparture) => {
                 if (!route.data || !route.inicio) return 0;
-                const [year, month, day] = route.data.split('-').map(Number);
+                const brM = route.data.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+                const [year, month, day] = brM ? [Number(brM[3]), Number(brM[2]), Number(brM[1])] : route.data.split('-').map(Number);
                 const timeParts = route.inicio.split(':').map(Number);
                 const date = new Date(year, month - 1, day, timeParts[0] || 0, timeParts[1] || 0, timeParts[2] || 0);
                 return date.getTime();
@@ -4067,55 +4023,66 @@ const RouteDepartureView: React.FC<{
     { id: 'operacao', label: 'OPERAÇÃO' }, { id: 'status', label: 'STATUS' }, { id: 'tempo', label: 'TEMPO' }, { id: 'tempoResposta', label: 'DELAY DE MAPEAMENTO' }
   ];
 
-  if (isLoading) return (
-    <div className="splash-loading">
-      <div className="splash-bg-glow" />
-      <div className="splash-inner">
-        <img src="/logo.png" alt="VIA" className="splash-logo-anim" />
-        <div className="splash-dots-anim">
-          <span></span><span></span><span></span>
+  if (isLoading) {
+    // Primeira abertura do app (sessão): splash com logo VIA
+    if (!hasLoadedOnce.current) {
+      return (
+        <div className="splash-loading">
+          <div className="splash-bg-glow" />
+          <div className="splash-inner">
+            <img src="/logo.png" alt="VIA" className="splash-logo-anim" />
+            <div className="splash-dots-anim">
+              <span></span><span></span><span></span>
+            </div>
+          </div>
+          <style>{`
+            .splash-loading {
+              position: fixed; inset: 0; z-index: 99999;
+              display: flex; align-items: center; justify-content: center;
+              background: #05080f;
+            }
+            .splash-bg-glow {
+              position: absolute; inset: 0;
+              background: radial-gradient(ellipse at 50% 50%, rgba(0,212,255,0.08) 0%, transparent 70%);
+            }
+            .splash-inner {
+              position: relative; z-index: 1;
+              display: flex; flex-direction: column; align-items: center; gap: 32px;
+            }
+            .splash-logo-anim {
+              width: 220px; height: auto;
+              animation: splashFloat 3s ease-in-out infinite;
+              filter: drop-shadow(0 0 40px rgba(0,212,255,0.25));
+            }
+            @keyframes splashFloat {
+              0%, 100% { transform: translateY(0px); }
+              50% { transform: translateY(-18px); }
+            }
+            .splash-dots-anim {
+              display: flex; gap: 10px;
+            }
+            .splash-dots-anim span {
+              width: 8px; height: 8px; border-radius: 50%;
+              background: rgba(0,212,255,0.4);
+              animation: splashPulse 1.4s ease-in-out infinite;
+            }
+            .splash-dots-anim span:nth-child(2) { animation-delay: 0.2s; }
+            .splash-dots-anim span:nth-child(3) { animation-delay: 0.4s; }
+            @keyframes splashPulse {
+              0%, 80%, 100% { transform: scale(0.6); opacity: 0.3; background: rgba(0,212,255,0.3); }
+              40% { transform: scale(1.2); opacity: 1; background: rgba(0,212,255,0.9); }
+            }
+          `}</style>
         </div>
+      );
+    }
+    // Navegação entre telas: spinner simples
+    return (
+      <div className="flex items-center justify-center h-full">
+        <Loader2 size={36} className="animate-spin text-blue-500" />
       </div>
-      <style>{`
-        .splash-loading {
-          position: fixed; inset: 0; z-index: 99999;
-          display: flex; align-items: center; justify-content: center;
-          background: #05080f;
-        }
-        .splash-bg-glow {
-          position: absolute; inset: 0;
-          background: radial-gradient(ellipse at 50% 50%, rgba(0,212,255,0.08) 0%, transparent 70%);
-        }
-        .splash-inner {
-          position: relative; z-index: 1;
-          display: flex; flex-direction: column; align-items: center; gap: 32px;
-        }
-        .splash-logo-anim {
-          width: 220px; height: auto;
-          animation: splashFloat 3s ease-in-out infinite;
-          filter: drop-shadow(0 0 40px rgba(0,212,255,0.25));
-        }
-        @keyframes splashFloat {
-          0%, 100% { transform: translateY(0px); }
-          50% { transform: translateY(-18px); }
-        }
-        .splash-dots-anim {
-          display: flex; gap: 10px;
-        }
-        .splash-dots-anim span {
-          width: 8px; height: 8px; border-radius: 50%;
-          background: rgba(0,212,255,0.4);
-          animation: splashPulse 1.4s ease-in-out infinite;
-        }
-        .splash-dots-anim span:nth-child(2) { animation-delay: 0.2s; }
-        .splash-dots-anim span:nth-child(3) { animation-delay: 0.4s; }
-        @keyframes splashPulse {
-          0%, 80%, 100% { transform: scale(0.6); opacity: 0.3; background: rgba(0,212,255,0.3); }
-          40% { transform: scale(1.2); opacity: 1; background: rgba(0,212,255,0.9); }
-        }
-      `}</style>
-    </div>
-  );
+    );
+  }
 
   return (
     <div className={`flex flex-col h-full p-4 overflow-hidden select-none font-sans animate-fade-in relative ${isDarkMode ? 'bg-[#020617]' : 'bg-gradient-to-br from-white via-slate-50/50 to-slate-50'}`}>
@@ -5677,7 +5644,8 @@ const RouteDepartureView: React.FC<{
           const [, y, mo, d, hh, mm, ss] = match;
           const timeOnly = `${hh}:${mm}:${ss}`;
           if (dbRoute?.data) {
-            const [ry, rm, rd] = dbRoute.data.split('-').map(Number);
+            const dbBr = dbRoute.data.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+            const [rd, rm, ry] = dbBr ? [Number(dbBr[1]), Number(dbBr[2]), Number(dbBr[3])] : dbRoute.data.split('-').map(Number);
             if (Number(d) !== rd || Number(mo) !== rm || Number(y) !== ry) {
               return `${d}/${mo} ${timeOnly}`;
             }
@@ -6155,6 +6123,8 @@ const RouteDepartureView: React.FC<{
                                                       >
                                                           {(() => {
                                                             if (!r.data) return '';
+                                                            // Se já está em DD/MM/AAAA, retorna direto
+                                                            if (/^\d{2}\/\d{2}\/\d{4}$/.test(r.data)) return r.data;
                                                             // Converte de AAAA-MM-DD para DD/MM/AAAA
                                                             const [ano, mes, dia] = r.data.split('-');
                                                             return `${dia}/${mes}/${ano}`;
@@ -6164,10 +6134,6 @@ const RouteDepartureView: React.FC<{
                                               </td>
                                               <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} relative">
                                                   {(() => {
-                                                    // Debug: log para verificar se routeAlerts está acessível
-                                                    if (r.rota && routeAlerts[r.rota] && routeAlerts[r.rota].count > 0 && Math.random() < 0.01) {
-                                                      console.log(`[ROUTE_CELL_DEBUG] Rota ${r.rota} tem ${routeAlerts[r.rota].count} alertas`);
-                                                    }
                                                     return (
                                                       <>
                                                   {editingHistoryId === r.id && editingHistoryField === 'rota' ? (

@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { SharePointService } from '../services/sharepointService';
 import { getValidToken } from '../services/tokenService';
-import { getBrazilDate, getBrazilHours, isAfter10amBrazil } from '../utils/dateUtils';
+import { getBrazilDate, getBrazilHours, getBrazilLocaleDateTime, isAfter10amBrazil } from '../utils/dateUtils';
 import { isDealeUser, getDealeFilteredConfigs, getDealeAnchorOperation, getDealeOperationsToSend, getDealeRealOperations, getDealeCombinedLastEnvio, getDealeEffectiveConfig } from '../utils/dealeUtils';
 import { RouteDeparture, Task, User, RouteConfig, ColetaPrevista } from '../types';
 import {
@@ -211,22 +211,15 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     if (!token) return;
 
     try {
-      console.log('[FETCH_ALL] Buscando dados completos...', forceRefresh ? '(force refresh)' : '');
-
       const [depData, configs, spNonCollections] = await Promise.all([
         SharePointService.getDepartures(token, forceRefresh),
         SharePointService.getRouteConfigs(token, currentUser.email, forceRefresh),
         SharePointService.getNonCollections(token, currentUser.email)
       ]);
 
-      console.log('[FETCH_ALL] Total de rotas brutas do SharePoint:', depData?.length || 0);
-      console.log('[FETCH_ALL] Configurações carregadas:', configs?.length || 0);
-      console.log('[FETCH_ALL] Operações do usuário:', configs?.map(c => c.operacao));
-
       // Detecta se é usuário DEALE (tem ARATIBA + CATUIPE + ALMIRANTE)
       const deale = isDealeUser(configs || []);
       setIsDeale(deale);
-      console.log('[FETCH_ALL] É usuário DEALE?', deale);
 
       // FILTRA rotas APENAS das operações do usuário logado
       const myOps = new Set((configs || []).map(c => c.operacao));
@@ -239,9 +232,6 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
         return myOps.has(route.operacao);
       });
 
-      console.log('[FETCH_ALL] Rotas filtradas por usuário:', filteredRoutes.length);
-      console.log('[FETCH_ALL] Operações nas rotas filtradas:', Array.from(new Set(filteredRoutes.map(r => r.operacao))));
-
       setDepartures(filteredRoutes);
 
       // Manter TODAS as configs originais do usuário
@@ -249,10 +239,8 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
       // Salvar não coletas reais do SharePoint
       setRealNonCollections(spNonCollections || []);
-      console.log('[FETCH_ALL] Não coletas reais carregadas:', (spNonCollections || []).length);
 
       setLastSync(new Date());
-      console.log('[FETCH_ALL] Dados atualizados com sucesso');
     } catch (e) {
       console.error("Erro ao carregar resumo:", e);
     } finally {
@@ -267,7 +255,6 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       if (!token) return;
 
       try {
-        console.log('[POLLING_CONFIGS] Buscando configs atualizadas...', force ? '(force refresh)' : '');
         const configs = await SharePointService.getRouteConfigs(token, currentUser.email, force);
 
         // Detecta DEALE e mantém estado atualizado
@@ -307,7 +294,6 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
     // Atualização completa a cada 60 segundos (otimizado para reduzir chamadas à API)
     const fullInterval = setInterval(() => {
-      console.log('[POLLING] Atualização completa dos dados');
       fetchAllData(false); // Sem forceRefresh — usa cache do serviço
     }, 60000);
 
@@ -425,10 +411,10 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       return;
     }
 
-    console.log(`[SEND_DEPARTURES] ✅ Trava adquirida para ${anchorOperation} (selecionado: ${selectedOperacao})`);
-
     setIsSending(true);
     setSendError(null);
+
+    try {
 
     // Para DEALE, pega todas as rotas das 3 operações
     const selectedDepartures = departures.filter(d => realOperations.includes(d.operacao));
@@ -444,11 +430,6 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       }
     }
 
-    console.log('[SEND_DEPARTURES] === ENVIANDO SAÍDAS ===');
-    console.log('[SEND_DEPARTURES] Operação selecionada:', selectedOperacao);
-    console.log('[SEND_DEPARTURES] Operações reais sendo enviadas:', realOperations);
-    console.log('[SEND_DEPARTURES] Rotas encontradas:', selectedDepartures.length);
-
     if (selectedDepartures.length === 0) {
       setSendError("Nenhuma saída encontrada para esta operação.");
       setTimeout(() => setSendError(null), 3000);
@@ -460,7 +441,10 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     // Se houver, o status deve ser "Atualizar" em vez de "OK"
     const today = getBrazilDate();
     const hasPendingRoute = selectedDepartures.some(d => {
-      const routeDate = d.data || '';
+      const rawDate = d.data || '';
+      // Normaliza DD/MM/AAAA -> YYYY-MM-DD para comparar com getBrazilDate()
+      const dm = rawDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+      const routeDate = dm ? `${dm[3]}-${dm[2]}-${dm[1]}` : rawDate;
       if (routeDate !== today) return false;
 
       // Verifica se a coluna saida está vazia (nula, undefined, string vazia, ou apenas espaços)
@@ -473,7 +457,6 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
     // Determina o status baseado na verificação de rotas pendentes
     const statusDeterminado = hasPendingRoute ? 'Atualizar' : 'OK';
-    console.log(`[SEND_DEPARTURES] Status determinado para ${selectedOperacao}: ${statusDeterminado} (hasPendingRoute: ${hasPendingRoute})`);
 
     const payload = {
       tipo: "SAIDA",
@@ -499,161 +482,135 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       }))
     };
 
+    // 1) Atualiza PG imediatamente (status + ultimo_envio_saida) ANTES do webhook
     try {
-      const response = await fetch(WEBHOOK_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
+      const token = await getValidToken() || currentUser.accessToken;
+      if (token) {
+        const opParaSalvar = isDealeSelection ? anchorOperation : selectedOperacao;
+        const dataHoraAgora = getBrazilLocaleDateTime();
 
-      if (response.ok) {
-        // Processa a resposta do webhook para pegar data/hora de envio
-        let responseData;
+        // Atualiza ultimo_envio_saida
         try {
-          responseData = await response.json();
-        } catch (jsonError) {
-          console.warn('[WEBHOOK] Resposta não é JSON válido, usando dados do payload:', jsonError);
-          // Se o webhook não retorna JSON, usa os dados do payload
-          responseData = { sucesso: true, data: new Date().toLocaleDateString('pt-BR'), horario: new Date().toLocaleTimeString('pt-BR') };
-        }
-        
-        console.log('[WEBHOOK_RESPONSE]', responseData);
-
-        // Tenta pegar a data/hora de envio de diferentes campos possíveis
-        // Agora o webhook retorna data e hora separados: dataEnvioEmail e horarioEnvioEmail
-        let dataHoraEnvio = '';
-        
-        const dataEnvio = 
-          responseData[0]?.dataEnvioEmail ||
-          responseData[0]?.data ||
-          responseData.dataEnvioEmail ||
-          responseData.data;
-        
-        const horarioEnvio = 
-          responseData[0]?.horarioEnvioEmail ||
-          responseData[0]?.horario ||
-          responseData.horarioEnvioEmail ||
-          responseData.horario;
-        
-        // Junta data e hora no formato DD/MM/YYYY HH:MM:SS
-        if (dataEnvio && horarioEnvio) {
-          dataHoraEnvio = `${dataEnvio} ${horarioEnvio}`;
-        } else if (dataEnvio) {
-          // Se só tem data, adiciona horário zerado
-          dataHoraEnvio = `${dataEnvio} 00:00:00`;
-        } else if (horarioEnvio) {
-          // Se só tem hora, usa data atual (fuso de Brasília)
-          const hoje = getBrazilDate();
-          dataHoraEnvio = `${hoje} ${horarioEnvio}`;
+          await SharePointService.updateUltimoEnvioSaida(token, opParaSalvar, dataHoraAgora);
+          if (isDealeSelection) {
+            const realOps = getDealeRealOperations();
+            for (const op of realOps) {
+              if (op !== anchorOperation) {
+                try { await SharePointService.updateUltimoEnvioSaida(token, op, dataHoraAgora); } catch (_) { /* ignore */ }
+              }
+            }
+          }
+        } catch (err: any) {
+          console.error('[PG_ENVIO_SAIDA] Erro ao atualizar UltimoEnvioSaida:', err.message);
         }
 
-        console.log('[DEBUG_DATA] dataEnvio:', dataEnvio, 'horarioEnvio:', horarioEnvio, 'dataHoraEnvio final:', dataHoraEnvio);
+        // Atualiza status
+        try {
+          await SharePointService.updateStatusOperacao(token, opParaSalvar, statusDeterminado);
+          if (isDealeSelection) {
+            const realOps = getDealeRealOperations();
+            for (const op of realOps) {
+              if (op !== anchorOperation) {
+                try { await SharePointService.updateStatusOperacao(token, op, statusDeterminado); } catch (_) { /* ignore */ }
+              }
+            }
+          }
+        } catch (err: any) {
+          console.error('[PG_STATUS] Erro ao atualizar Status:', err.message);
+        }
+      }
+    } catch (err: any) {
+      console.error('[PG_PRE_UPDATE] Erro geral:', err.message);
+    }
 
-        // Se o webhook retornou data/hora de envio, atualiza no SharePoint
-        // Para DEALE, salva na operação âncora (ALMIRANTE)
-        if (dataHoraEnvio) {
-          const token = await getValidToken() || currentUser.accessToken;
-          if (token) {
-            try {
+    // 2) Tenta webhook (não-bloqueante — falha não impede sucesso)
+    try {
+      if (WEBHOOK_URL) {
+        const response = await fetch(WEBHOOK_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        if (response.ok) {
+          let responseData;
+          try {
+            responseData = await response.json();
+          } catch (jsonError) {
+            responseData = { sucesso: true };
+          }
+
+          // Se o webhook retornou data/hora, atualiza no PG (sobrescreve o valor genérico)
+          const dataEnvio = responseData[0]?.dataEnvioEmail || responseData[0]?.data || responseData.dataEnvioEmail || responseData.data;
+          const horarioEnvio = responseData[0]?.horarioEnvioEmail || responseData[0]?.horario || responseData.horarioEnvioEmail || responseData.horario;
+          let dataHoraEnvio = '';
+          if (dataEnvio && horarioEnvio) {
+            dataHoraEnvio = `${dataEnvio} ${horarioEnvio}`;
+          } else if (dataEnvio) {
+            dataHoraEnvio = `${dataEnvio} 00:00:00`;
+          }
+          if (dataHoraEnvio) {
+            const token2 = await getValidToken() || currentUser.accessToken;
+            if (token2) {
               const opParaSalvar = isDealeSelection ? anchorOperation : selectedOperacao;
-              console.log(`[ULTIMO_ENVIO] Enviando para atualização: ${dataHoraEnvio} (operação: ${opParaSalvar})`);
-              await SharePointService.updateUltimoEnvioSaida(
-                token,
-                opParaSalvar,
-                dataHoraEnvio
-              );
-              console.log(`[ULTIMO_ENVIO] ✅ Atualizado com sucesso na operação ${opParaSalvar}: ${dataHoraEnvio}`);
-
-              // Para DEALE, também atualiza as outras 2 operações
-              if (isDealeSelection) {
-                const realOps = getDealeRealOperations();
-                for (const op of realOps) {
-                  if (op !== anchorOperation) {
-                    try {
-                      await SharePointService.updateUltimoEnvioSaida(token, op, dataHoraEnvio);
-                      console.log(`[ULTIMO_ENVIO_DEALE] ✅ Atualizado também ${op}: ${dataHoraEnvio}`);
-                    } catch (err) {
-                      console.warn(`[ULTIMO_ENVIO_DEALE] Falha ao atualizar ${op}:`, err);
+              try {
+                await SharePointService.updateUltimoEnvioSaida(token2, opParaSalvar, dataHoraEnvio);
+                if (isDealeSelection) {
+                  for (const op of getDealeRealOperations()) {
+                    if (op !== anchorOperation) {
+                      try { await SharePointService.updateUltimoEnvioSaida(token2, op, dataHoraEnvio); } catch (_) { /* ignore */ }
                     }
                   }
                 }
-              }
-            } catch (err: any) {
-              console.error('Erro ao atualizar UltimoEnvioSaida:', err.message);
+              } catch (_) { /* ignore */ }
             }
           }
-        } else {
-          console.warn('[WEBHOOK] Campo de data/hora de envio não encontrado na resposta');
-        }
 
-        // Processa e salva o status retornado pelo webhook OU o status determinado localmente
-        const webhookStatus = responseData[0]?.status || responseData.status;
-
-        // Usa o status do webhook se disponível, senão usa o status determinado localmente
-        let statusFinal = '';
-
-        if (webhookStatus) {
-          // Webhook retornou status - usa o retorno
-          statusFinal = webhookStatus.toLowerCase() === 'atualizar' ? 'Atualizar' :
-                        webhookStatus.toLowerCase() === 'ok' ? 'OK' : webhookStatus;
-          console.log('[STATUS_WEBHOOK] Status retornado pelo webhook:', statusFinal);
-        } else {
-          // Webhook não retornou status - usa o status determinado localmente
-          statusFinal = statusDeterminado;
-          console.log('[STATUS_WEBHOOK] Webhook não retornou status - usando status determinado localmente:', statusFinal);
-        }
-
-        const token = await getValidToken() || currentUser.accessToken;
-        if (token) {
-          try {
-            const opParaSalvar = isDealeSelection ? anchorOperation : selectedOperacao;
-            console.log(`[STATUS] Atualizando Status no SharePoint para ${opParaSalvar}:`, statusFinal);
-            await SharePointService.updateStatusOperacao(
-              token,
-              opParaSalvar,
-              statusFinal
-            );
-            console.log(`[STATUS] ✅ Status atualizado no SharePoint para ${opParaSalvar}:`, statusFinal);
-
-            // Para DEALE, também atualiza as outras 2 operações
-            if (isDealeSelection) {
-              const realOps = getDealeRealOperations();
-              for (const op of realOps) {
-                if (op !== anchorOperation) {
-                  try {
-                    await SharePointService.updateStatusOperacao(token, op, statusFinal);
-                    console.log(`[STATUS_DEALE] ✅ Status atualizado também para ${op}:`, statusFinal);
-                  } catch (err) {
-                    console.warn(`[STATUS_DEALE] Falha ao atualizar ${op}:`, err);
+          // Se o webhook retornou status, sobrescreve o status determinado localmente
+          const webhookStatus = responseData[0]?.status || responseData.status;
+          if (webhookStatus) {
+            const statusFinal = webhookStatus.toLowerCase() === 'atualizar' ? 'Atualizar' :
+              webhookStatus.toLowerCase() === 'ok' ? 'OK' : webhookStatus;
+            const token3 = await getValidToken() || currentUser.accessToken;
+            if (token3) {
+              const opParaSalvar = isDealeSelection ? anchorOperation : selectedOperacao;
+              try {
+                await SharePointService.updateStatusOperacao(token3, opParaSalvar, statusFinal);
+                if (isDealeSelection) {
+                  for (const op of getDealeRealOperations()) {
+                    if (op !== anchorOperation) {
+                      try { await SharePointService.updateStatusOperacao(token3, op, statusFinal); } catch (_) { /* ignore */ }
+                    }
                   }
                 }
-              }
+              } catch (_) { /* ignore */ }
             }
-          } catch (err: any) {
-            console.error('Erro ao atualizar Status:', err.message);
           }
+        } else {
+          console.warn(`[WEBHOOK] Resposta não-OK: ${response.status}`);
         }
-
-        setSendSuccess(true);
-        activateCooldown(operationCooldownKey);
-        setTimeout(() => setSendSuccess(false), 3000);
       } else {
-        throw new Error(`Erro na resposta do webhook: ${response.status}`);
+        console.warn('[WEBHOOK] URL não configurada, pulando envio webhook');
       }
-    } catch (error: any) {
-      console.error("Erro ao enviar webhook:", error);
-      setSendError(error.message || "Falha ao enviar dados.");
-      setTimeout(() => setSendError(null), 5000);
-    } finally {
-      setIsSending(false);
+    } catch (webhookError: any) {
+      console.warn('[WEBHOOK] Falha no webhook (não bloqueante):', webhookError.message);
+    }
 
-      // Libera trava após o envio (sucesso ou erro) - usa operação âncora para DEALE
-      const token = await getValidToken() || currentUser.accessToken;
-      if (token) {
-        const opParaLiberar = isDealeSelection ? anchorOperation : selectedOperacao;
-        await SharePointService.releaseSendLock(token, opParaLiberar);
-        console.log(`[SEND_DEPARTURES] 🔓 Trava liberada para ${opParaLiberar}`);
-      }
+    // 3) Sucesso independente do webhook
+    setSendSuccess(true);
+    activateCooldown(operationCooldownKey);
+    setTimeout(() => setSendSuccess(false), 3000);
+
+    } finally {
+      // 4) Libera trava (sempre, mesmo em caso de erro ou return early)
+      try {
+        const token4 = await getValidToken() || currentUser.accessToken;
+        if (token4) {
+          const opParaLiberar = isDealeSelection ? anchorOperation : selectedOperacao;
+          await SharePointService.releaseSendLock(token4, opParaLiberar);
+        }
+      } catch (_) { /* ignore */ }
+      setIsSending(false);
     }
   };
 
@@ -735,10 +692,10 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       return;
     }
 
-    console.log(`[SEND_NAO_COLETA] ✅ Trava adquirida para ${anchorOperation} (selecionado: ${selectedOperacaoNC})`);
-
     setIsSending(true);
     setNcSendError(null);
+
+    try {
 
     // Para DEALE, pega todas as rotas das 3 operações
     const selectedDepartures = departures.filter(d => realOperations.includes(d.operacao));
@@ -747,16 +704,9 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       ? userConfigs.find(c => c.operacao.toUpperCase() === getDealeAnchorOperation())
       : userConfigs.find(c => c.operacao === selectedOperacaoNC);
 
-    console.log('[SEND_NAO_COLETA] === ENVIANDO NÃO COLETAS ===');
-    console.log('[SEND_NAO_COLETA] Operação selecionada:', selectedOperacaoNC);
-    console.log('[SEND_NAO_COLETA] Operações reais sendo enviadas:', realOperations);
-    console.log('[SEND_NAO_COLETA] Total de rotas:', selectedDepartures.length);
-
     // BUSCA NÃO COLETAS REAIS NO SHAREPOINT PARA ESTA OPERAÇÃO
     const spNonCollections = await SharePointService.getNonCollections(token, currentUser.email);
     const ncFiltradas = spNonCollections.filter(nc => realOperations.includes(nc.operacao));
-
-    console.log('[SEND_NAO_COLETA] Não coletas encontradas no SharePoint:', ncFiltradas.length);
 
     // BUSCA COLETAS PREVISTAS DA DATA DAS NÃO COLETAS PARA INCLUIR NO PAYLOAD
     // Pega a data da primeira não coleta encontrada (todas são da mesma data)
@@ -775,7 +725,6 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       if (dataISO) {
         coletasPrev = await SharePointService.getColetasPrevistas(token, dataISO, currentUser.email);
         setColetasPrevistas(coletasPrev);
-        console.log('[SEND_NAO_COLETA] Coletas previstas para data:', dataISO, '— encontradas:', coletasPrev.length);
       }
     } catch (err) {
       console.warn('[SEND_NAO_COLETA] Erro ao buscar coletas previstas, usando cache:', err);
@@ -789,9 +738,6 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     });
 
     const totalColetasPrevistas = Object.values(coletasPorOperacao).reduce((sum, n) => sum + n, 0);
-
-    console.log('[SEND_NAO_COLETA] Coletas previstas por operação:', coletasPorOperacao);
-    console.log('[SEND_NAO_COLETA] Total coletas previstas:', totalColetasPrevistas);
 
     if (ncFiltradas.length === 0) {
       setNcSendError(`⚠️ Nenhuma não coleta lançada para ${selectedOperacaoNC} na tabela. Não há dados para enviar.`);
@@ -809,9 +755,12 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     // Se houver, o status deve ser "Atualizar" em vez de "OK"
     const today = getBrazilDate();
     const hasPendingRoute = nonCollections.some(d => {
-      const routeDate = d.data || '';
+      const rawDate = d.data || '';
+      // Normaliza DD/MM/AAAA -> YYYY-MM-DD para comparar com getBrazilDate()
+      const dm = rawDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+      const routeDate = dm ? `${dm[3]}-${dm[2]}-${dm[1]}` : rawDate;
       if (routeDate !== today) return false;
-      
+
       // Verifica se a coluna saida está vazia (nula, undefined, string vazia, ou apenas espaços)
       // IMPORTANTE: "00:00:00" é um horário válido (meia-noite) e NÃO é considerado vazio
       // Se tiver "-" na coluna saida, considera como rota que já saiu (não é pendente)
@@ -822,7 +771,6 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
     // Determina o status baseado na verificação de rotas pendentes
     const statusDeterminado = hasPendingRoute ? 'Atualizar' : 'OK';
-    console.log(`[SEND_NAO_COLETA] Status determinado para ${selectedOperacaoNC}: ${statusDeterminado} (hasPendingRoute: ${hasPendingRoute})`);
 
     const payload = {
       tipo: "NAO_COLETA",
@@ -853,161 +801,131 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       }))
     };
 
+    // 1) Atualiza PG imediatamente (status + ultimo_envio_ncoleta) ANTES do webhook
     try {
-      const response = await fetch(WEBHOOK_URL_NAO_COLETAS, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
+      const token = await getValidToken() || currentUser.accessToken;
+      if (token) {
+        const opParaSalvar = isDealeSelectionNC ? anchorOperation : selectedOperacaoNC;
+        const dataHoraAgora = getBrazilLocaleDateTime();
 
-      if (response.ok) {
-        // Processa a resposta do webhook para pegar data/hora de envio
-        let responseData;
+        // Atualiza ultimo_envio_ncoleta
         try {
-          responseData = await response.json();
-        } catch (jsonError) {
-          console.warn('[WEBHOOK_NAO_COLETAS] Resposta não é JSON válido, usando dados do payload:', jsonError);
-          // Se o webhook não retorna JSON, usa os dados do payload
-          responseData = { sucesso: true, data: new Date().toLocaleDateString('pt-BR'), horario: new Date().toLocaleTimeString('pt-BR') };
-        }
-        
-        console.log('[WEBHOOK_RESPONSE_NAO_COLETAS]', responseData);
-
-        // Tenta pegar a data/hora de envio de diferentes campos possíveis
-        // Agora o webhook retorna data e hora separados: dataEnvioEmail e horarioEnvioEmail
-        let dataHoraEnvio = '';
-        
-        const dataEnvio = 
-          responseData[0]?.dataEnvioEmail ||
-          responseData[0]?.data ||
-          responseData.dataEnvioEmail ||
-          responseData.data;
-        
-        const horarioEnvio = 
-          responseData[0]?.horarioEnvioEmail ||
-          responseData[0]?.horario ||
-          responseData.horarioEnvioEmail ||
-          responseData.horario;
-        
-        // Junta data e hora no formato DD/MM/YYYY HH:MM:SS
-        if (dataEnvio && horarioEnvio) {
-          dataHoraEnvio = `${dataEnvio} ${horarioEnvio}`;
-        } else if (dataEnvio) {
-          // Se só tem data, adiciona horário zerado
-          dataHoraEnvio = `${dataEnvio} 00:00:00`;
-        } else if (horarioEnvio) {
-          // Se só tem hora, usa data atual (fuso de Brasília)
-          const hoje = getBrazilDate();
-          dataHoraEnvio = `${hoje} ${horarioEnvio}`;
+          await SharePointService.updateUltimoEnvioNaoColetas(token, opParaSalvar, dataHoraAgora);
+          if (isDealeSelectionNC) {
+            const realOps = getDealeRealOperations();
+            for (const op of realOps) {
+              if (op !== anchorOperation) {
+                try { await SharePointService.updateUltimoEnvioNaoColetas(token, op, dataHoraAgora); } catch (_) { /* ignore */ }
+              }
+            }
+          }
+        } catch (err: any) {
+          console.error('[PG_ENVIO_NC] Erro ao atualizar UltimoEnvioNcoleta:', err.message);
         }
 
-        console.log('[DEBUG_DATA_NAO_COLETAS] dataEnvio:', dataEnvio, 'horarioEnvio:', horarioEnvio, 'dataHoraEnvio final:', dataHoraEnvio);
+        // Atualiza status
+        try {
+          await SharePointService.updateStatusOperacao(token, opParaSalvar, statusDeterminado);
+          if (isDealeSelectionNC) {
+            const realOps = getDealeRealOperations();
+            for (const op of realOps) {
+              if (op !== anchorOperation) {
+                try { await SharePointService.updateStatusOperacao(token, op, statusDeterminado); } catch (_) { /* ignore */ }
+              }
+            }
+          }
+        } catch (err: any) {
+          console.error('[PG_STATUS_NC] Erro ao atualizar Status:', err.message);
+        }
+      }
+    } catch (err: any) {
+      console.error('[PG_PRE_UPDATE_NC] Erro geral:', err.message);
+    }
 
-        // Se o webhook retornou data/hora de envio, atualiza no SharePoint
-        // Para DEALE, salva na operação âncora (ALMIRANTE)
-        if (dataHoraEnvio) {
-          const token = await getValidToken() || currentUser.accessToken;
-          if (token) {
-            try {
+    // 2) Tenta webhook (não-bloqueante)
+    try {
+      if (WEBHOOK_URL_NAO_COLETAS) {
+        const response = await fetch(WEBHOOK_URL_NAO_COLETAS, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        if (response.ok) {
+          let responseData;
+          try { responseData = await response.json(); } catch (_) { responseData = { sucesso: true }; }
+
+          // Se o webhook retornou data/hora, sobrescreve no PG
+          const dataEnvio = responseData[0]?.dataEnvioEmail || responseData[0]?.data || responseData.dataEnvioEmail || responseData.data;
+          const horarioEnvio = responseData[0]?.horarioEnvioEmail || responseData[0]?.horario || responseData.horarioEnvioEmail || responseData.horario;
+          let dataHoraEnvio = '';
+          if (dataEnvio && horarioEnvio) {
+            dataHoraEnvio = `${dataEnvio} ${horarioEnvio}`;
+          } else if (dataEnvio) {
+            dataHoraEnvio = `${dataEnvio} 00:00:00`;
+          }
+          if (dataHoraEnvio) {
+            const token2 = await getValidToken() || currentUser.accessToken;
+            if (token2) {
               const opParaSalvar = isDealeSelectionNC ? anchorOperation : selectedOperacaoNC;
-              console.log(`[ULTIMO_ENVIO_NAO_COLETAS] Enviando para atualização: ${dataHoraEnvio} (operação: ${opParaSalvar})`);
-              await SharePointService.updateUltimoEnvioNaoColetas(
-                token,
-                opParaSalvar,
-                dataHoraEnvio
-              );
-              console.log(`[ULTIMO_ENVIO_NAO_COLETAS] ✅ Atualizado com sucesso na operação ${opParaSalvar}: ${dataHoraEnvio}`);
-
-              // Para DEALE, também atualiza as outras 2 operações
-              if (isDealeSelectionNC) {
-                const realOps = getDealeRealOperations();
-                for (const op of realOps) {
-                  if (op !== anchorOperation) {
-                    try {
-                      await SharePointService.updateUltimoEnvioNaoColetas(token, op, dataHoraEnvio);
-                      console.log(`[ULTIMO_ENVIO_DEALE_NC] ✅ Atualizado também ${op}: ${dataHoraEnvio}`);
-                    } catch (err) {
-                      console.warn(`[ULTIMO_ENVIO_DEALE_NC] Falha ao atualizar ${op}:`, err);
+              try {
+                await SharePointService.updateUltimoEnvioNaoColetas(token2, opParaSalvar, dataHoraEnvio);
+                if (isDealeSelectionNC) {
+                  for (const op of getDealeRealOperations()) {
+                    if (op !== anchorOperation) {
+                      try { await SharePointService.updateUltimoEnvioNaoColetas(token2, op, dataHoraEnvio); } catch (_) { /* ignore */ }
                     }
                   }
                 }
-              }
-            } catch (err: any) {
-              console.error('Erro ao atualizar UltimoEnvioNaoColetas:', err.message);
+              } catch (_) { /* ignore */ }
             }
           }
-        } else {
-          console.warn('[WEBHOOK] Campo de data/hora de envio não encontrado na resposta');
-        }
 
-        // Processa e salva o status retornado pelo webhook OU o status determinado localmente
-        const webhookStatus = responseData[0]?.status || responseData.status;
-
-        // Usa o status do webhook se disponível, senão usa o status determinado localmente
-        let statusFinal = '';
-
-        if (webhookStatus) {
-          // Webhook retornou status - usa o retorno
-          statusFinal = webhookStatus.toLowerCase() === 'atualizar' ? 'Atualizar' :
-                        webhookStatus.toLowerCase() === 'ok' ? 'OK' : webhookStatus;
-          console.log('[STATUS_WEBHOOK_NAO_COLETAS] Status retornado pelo webhook:', statusFinal);
-        } else {
-          // Webhook não retornou status - usa o status determinado localmente
-          statusFinal = statusDeterminado;
-          console.log('[STATUS_WEBHOOK_NAO_COLETAS] Webhook não retornou status - usando status determinado localmente:', statusFinal);
-        }
-
-        const token = await getValidToken() || currentUser.accessToken;
-        if (token) {
-          try {
-            const opParaSalvar = isDealeSelectionNC ? anchorOperation : selectedOperacaoNC;
-            console.log(`[STATUS_NAO_COLETAS] Atualizando Status no SharePoint para ${opParaSalvar}:`, statusFinal);
-            await SharePointService.updateStatusOperacao(
-              token,
-              opParaSalvar,
-              statusFinal
-            );
-            console.log(`[STATUS_NAO_COLETAS] ✅ Status atualizado no SharePoint para ${opParaSalvar}:`, statusFinal);
-
-            // Para DEALE, também atualiza as outras 2 operações
-            if (isDealeSelectionNC) {
-              const realOps = getDealeRealOperations();
-              for (const op of realOps) {
-                if (op !== anchorOperation) {
-                  try {
-                    await SharePointService.updateStatusOperacao(token, op, statusFinal);
-                    console.log(`[STATUS_DEALE_NC] ✅ Status atualizado também para ${op}:`, statusFinal);
-                  } catch (err) {
-                    console.warn(`[STATUS_DEALE_NC] Falha ao atualizar ${op}:`, err);
+          // Se o webhook retornou status, sobrescreve
+          const webhookStatus = responseData[0]?.status || responseData.status;
+          if (webhookStatus) {
+            const statusFinal = webhookStatus.toLowerCase() === 'atualizar' ? 'Atualizar' :
+              webhookStatus.toLowerCase() === 'ok' ? 'OK' : webhookStatus;
+            const token3 = await getValidToken() || currentUser.accessToken;
+            if (token3) {
+              const opParaSalvar = isDealeSelectionNC ? anchorOperation : selectedOperacaoNC;
+              try {
+                await SharePointService.updateStatusOperacao(token3, opParaSalvar, statusFinal);
+                if (isDealeSelectionNC) {
+                  for (const op of getDealeRealOperations()) {
+                    if (op !== anchorOperation) {
+                      try { await SharePointService.updateStatusOperacao(token3, op, statusFinal); } catch (_) { /* ignore */ }
+                    }
                   }
                 }
-              }
+              } catch (_) { /* ignore */ }
             }
-          } catch (err: any) {
-            console.error('Erro ao atualizar Status:', err.message);
           }
+        } else {
+          console.warn(`[WEBHOOK_NC] Resposta não-OK: ${response.status}`);
         }
-
-        setNcSendSuccess(true);
-        activateCooldown(operationCooldownKey);
-        setTimeout(() => setNcSendSuccess(false), 3000);
       } else {
-        throw new Error(`Erro na resposta do webhook: ${response.status}`);
+        console.warn('[WEBHOOK_NC] URL não configurada, pulando envio webhook');
       }
-    } catch (error: any) {
-      console.error("[SEND_NAO_COLETA] Erro ao enviar webhook:", error);
-      setNcSendError(error.message || "Falha ao enviar dados.");
-      setTimeout(() => setNcSendError(null), 5000);
-    } finally {
-      setIsSending(false);
+    } catch (webhookError: any) {
+      console.warn('[WEBHOOK_NC] Falha no webhook (não bloqueante):', webhookError.message);
+    }
 
-      // Libera trava após o envio (sucesso ou erro) - usa operação âncora para DEALE
-      const token = await getValidToken() || currentUser.accessToken;
-      if (token) {
-        const opParaLiberar = isDealeSelectionNC ? anchorOperation : selectedOperacaoNC;
-        await SharePointService.releaseSendLock(token, opParaLiberar);
-        console.log(`[SEND_NAO_COLETA] 🔓 Trava liberada para ${opParaLiberar}`);
-      }
+    // 3) Sucesso independente do webhook
+    setNcSendSuccess(true);
+    activateCooldown(operationCooldownKey);
+    setTimeout(() => setNcSendSuccess(false), 3000);
+
+    } finally {
+      // 4) Libera trava (sempre, mesmo em caso de erro ou return early)
+      try {
+        const token4 = await getValidToken() || currentUser.accessToken;
+        if (token4) {
+          const opParaLiberar = isDealeSelectionNC ? anchorOperation : selectedOperacaoNC;
+          await SharePointService.releaseSendLock(token4, opParaLiberar);
+        }
+      } catch (_) { /* ignore */ }
+      setIsSending(false);
     }
   };
 
@@ -1031,20 +949,10 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     // FILTRA rotas APENAS das operações do usuário logado (validação de segurança)
     const myOps = new Set(userConfigs.map(c => c.operacao));
 
-    console.log('[RESUMO_GERAL] === INICIANDO ENVIO DE RESUMO ===');
-    console.log('[RESUMO_GERAL] Operações configuradas para este usuário:', userConfigs.map(c => c.operacao));
-    console.log('[RESUMO_GERAL] Total de rotas no estado departures:', departures.length);
-
     const userRoutes = departures.filter(r => {
       const pertence = !r.operacao || myOps.has(r.operacao);
-      if (!pertence) {
-        console.log(`[RESUMO_GERAL] 🚫 Rota ${r.rota} da operação ${r.operacao} NÃO pertence a este usuário - será ignorada`);
-      }
       return pertence;
     });
-
-    console.log('[RESUMO_GERAL] ✅ Rotas filtradas para envio (apenas do usuário):', userRoutes.length);
-    console.log('[RESUMO_GERAL] Operações nas rotas filtradas:', Array.from(new Set(userRoutes.map(r => r.operacao))));
 
     if (userRoutes.length === 0) {
       setSendError("Não há rotas das suas operações para enviar.");
@@ -1063,11 +971,6 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       }
       routesByOperation[r.operacao].push(r);
     });
-
-    console.log('[RESUMO_GERAL] 📦 Operações sendo enviadas:', Object.keys(routesByOperation));
-    console.log('[RESUMO_GERAL] 📊 Total de rotas por operação:', 
-      Object.entries(routesByOperation).map(([op, rotas]) => `${op}: ${rotas.length}`)
-    );
 
     // Prepara payload com todas as operações DO USUÁRIO
     const payload = {
@@ -1105,96 +1008,85 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       })
     };
 
-    // LOG FINAL DE CONFIRMAÇÃO ANTES DO ENVIO
-    console.log('[RESUMO_GERAL] ========================================');
-    console.log('[RESUMO_GERAL] Total de rotas:', payload.totalRotas);
-    console.log('[RESUMO_GERAL] Total de operações:', payload.operacoes);
-    payload.rotasPorOperacao.forEach((op: any) => {
-      console.log(`[RESUMO_GERAL]      - ${op.operacao}: ${op.totalRotas} rotas`);
-    });
-    console.log('[RESUMO_GERAL] ========================================');
-
+    // 1) Atualiza PG imediatamente (ultimo_envio_resumo_saida + status_resumo_saida) ANTES do webhook
     try {
-      const response = await fetch(WEBHOOK_URL_RESUMO, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
+      const token = await getValidToken() || currentUser.accessToken;
+      if (token) {
+        const dataHoraAgora = getBrazilLocaleDateTime();
 
-      if (response.ok) {
-        let responseData;
-        try {
-          responseData = await response.json();
-        } catch {
-          console.warn("[RESUMO_GERAL] Resposta não é JSON válido");
-          responseData = { sucesso: true };
-        }
+        for (const operacao of Object.keys(routesByOperation)) {
+          try {
+            await SharePointService.updateUltimoEnvioResumoSaida(token, operacao, dataHoraAgora);
 
-        console.log('[RESUMO_GERAL] Resposta recebida:', responseData);
-
-        // Processa a data/hora de envio retornada pelo webhook
-        const dataEnvio = responseData[0]?.dataEnvioEmail || responseData.dataEnvioEmail || responseData.data;
-        const horarioEnvio = responseData[0]?.horarioEnvioEmail || responseData.horarioEnvioEmail || responseData.horario;
-        const statusRetorno = responseData[0]?.status || responseData.status; // "atualizar" ou "ok"
-        
-        let dataHoraEnvio = '';
-        if (dataEnvio && horarioEnvio) {
-          dataHoraEnvio = `${dataEnvio} ${horarioEnvio}`;
-        } else if (dataEnvio) {
-          dataHoraEnvio = `${dataEnvio} 00:00:00`;
-        } else if (horarioEnvio) {
-          dataHoraEnvio = `${new Date().toLocaleDateString('pt-BR')} ${horarioEnvio}`;
-        }
-
-        // Normaliza o status retornado pelo webhook
-        let statusResumo = '';
-        if (statusRetorno) {
-          const statusLower = statusRetorno.toLowerCase().trim();
-          if (statusLower === 'atualizar') {
-            statusResumo = 'Atualizar'; // Azul
-          } else if (statusLower === 'ok') {
-            statusResumo = 'OK'; // Verde
+            // Status padrão: OK (todas as rotas com saída preenchida foram validadas antes)
+            await SharePointService.updateStatusResumoSaida(token, operacao, 'OK');
+          } catch (err: any) {
+            console.error(`[PG_RESUMO] Erro ao atualizar ${operacao}:`, err.message);
           }
         }
+      }
+    } catch (err: any) {
+      console.error('[PG_RESUMO_PRE_UPDATE] Erro geral:', err.message);
+    }
 
-        console.log('[RESUMO_GERAL] Status retornado:', statusRetorno, '→ Status resumo:', statusResumo);
+    // 2) Tenta webhook (não-bloqueante)
+    try {
+      if (WEBHOOK_URL_RESUMO) {
+        const response = await fetch(WEBHOOK_URL_RESUMO, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
 
-        // Atualiza UltimoEnvioResumoSaida e StatusResumoSaida para todas as operações enviadas
-        if (dataHoraEnvio) {
-          const token = await getValidToken() || currentUser.accessToken;
-          if (token) {
-            console.log('[ULTIMO_ENVIO_RESUMO] Atualizando para operações:', Object.keys(routesByOperation));
-            
-            // Atualiza para cada operação
-            for (const operacao of Object.keys(routesByOperation)) {
-              try {
-                // Atualiza data/hora
-                await SharePointService.updateUltimoEnvioResumoSaida(token, operacao, dataHoraEnvio);
-                console.log(`[ULTIMO_ENVIO_RESUMO] ✅ UltimoEnvioResumoSaida atualizado para ${operacao}: ${dataHoraEnvio}`);
-                
-                // Atualiza status se houver
-                if (statusResumo) {
-                  await SharePointService.updateStatusResumoSaida(token, operacao, statusResumo);
-                  console.log(`[ULTIMO_ENVIO_RESUMO] ✅ StatusResumoSaida atualizado para ${operacao}: ${statusResumo}`);
-                }
-              } catch (err: any) {
-                console.error(`[ULTIMO_ENVIO_RESUMO] Erro ao atualizar ${operacao}:`, err.message);
+        if (response.ok) {
+          let responseData;
+          try { responseData = await response.json(); } catch (_) { responseData = { sucesso: true }; }
+
+          // Se o webhook retornou data/hora, sobrescreve no PG
+          const dataEnvio = responseData[0]?.dataEnvioEmail || responseData.dataEnvioEmail || responseData.data;
+          const horarioEnvio = responseData[0]?.horarioEnvioEmail || responseData.horarioEnvioEmail || responseData.horario;
+          let dataHoraEnvio = '';
+          if (dataEnvio && horarioEnvio) {
+            dataHoraEnvio = `${dataEnvio} ${horarioEnvio}`;
+          } else if (dataEnvio) {
+            dataHoraEnvio = `${dataEnvio} 00:00:00`;
+          }
+          if (dataHoraEnvio) {
+            const token2 = await getValidToken() || currentUser.accessToken;
+            if (token2) {
+              for (const operacao of Object.keys(routesByOperation)) {
+                try { await SharePointService.updateUltimoEnvioResumoSaida(token2, operacao, dataHoraEnvio); } catch (_) { /* ignore */ }
               }
             }
           }
-        }
 
-        activateCooldown(summaryCooldownKey);
+          // Se o webhook retornou status diferente, sobrescreve
+          const statusRetorno = responseData[0]?.status || responseData.status;
+          if (statusRetorno) {
+            const statusLower = statusRetorno.toLowerCase().trim();
+            const statusResumo = statusLower === 'atualizar' ? 'Atualizar' : statusLower === 'ok' ? 'OK' : '';
+            if (statusResumo) {
+              const token3 = await getValidToken() || currentUser.accessToken;
+              if (token3) {
+                for (const operacao of Object.keys(routesByOperation)) {
+                  try { await SharePointService.updateStatusResumoSaida(token3, operacao, statusResumo); } catch (_) { /* ignore */ }
+                }
+              }
+            }
+          }
+        } else {
+          console.warn(`[WEBHOOK_RESUMO] Resposta não-OK: ${response.status}`);
+        }
       } else {
-        throw new Error(`Erro na resposta do webhook: ${response.status}`);
+        console.warn('[WEBHOOK_RESUMO] URL não configurada, pulando envio webhook');
       }
-    } catch (e: any) {
-      console.error('[RESUMO_GERAL] Erro ao enviar:', e.message);
-      setSendError(e.message || "Falha ao enviar resumo");
-      setTimeout(() => setSendError(null), 5000);
-    } finally {
-      setIsSendingSummary(false);
+    } catch (webhookError: any) {
+      console.warn('[WEBHOOK_RESUMO] Falha no webhook (não bloqueante):', webhookError.message);
     }
+
+    // 3) Sucesso independente do webhook
+    activateCooldown(summaryCooldownKey);
+    setIsSendingSummary(false);
   };
 
   // Função para enviar resumo GERAL de todas as não coletas do usuário
@@ -1216,10 +1108,6 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
     const myOps = new Set(userConfigs.map(c => c.operacao));
 
-    console.log('[RESUMO_NC] === INICIANDO ENVIO DE RESUMO NÃO COLETAS ===');
-    console.log('[RESUMO_NC] Operações configuradas para este usuário:', userConfigs.map(c => c.operacao));
-    console.log('[RESUMO_NC] Total de não coletas no estado realNonCollections:', realNonCollections.length);
-
     if (myOps.size === 0) {
       setNcSendError("Nenhuma operação configurada para este usuário.");
       setTimeout(() => setNcSendError(null), 3000);
@@ -1232,9 +1120,6 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     // Filtra não coletas apenas das operações do usuário logado
     const userNCs = realNonCollections.filter(nc => {
       const pertence = !nc.operacao || myOps.has(nc.operacao);
-      if (!pertence) {
-        console.log(`[RESUMO_NC] Não coleta da operação ${nc.operacao} NÃO pertence a este usuário - será ignorada`);
-      }
       return pertence;
     });
 
@@ -1260,7 +1145,6 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       if (token) {
         coletasPrev = await SharePointService.getColetasPrevistas(token, dataISOSelecionada, currentUser.email);
         setColetasPrevistas(coletasPrev);
-        console.log('[RESUMO_NC] Coletas previstas para data:', dataISOSelecionada, '— encontradas:', coletasPrev.length);
       } else {
         console.warn('[RESUMO_NC] Token indisponível para buscar coletas previstas, usando cache local da data alvo');
       }
@@ -1329,30 +1213,48 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       })
     };
 
-    console.log('[RESUMO_NC] Operações sendo enviadas:', payload.naoColetasPorOperacao.map((op: any) => `${op.operacao}: ${op.totalNaoColetas} NCs`));
-
+    // 1) Atualiza PG imediatamente ANTES do webhook
     try {
-      const response = await fetch(WEBHOOK_URL_NC_RESUMO, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      if (response.ok) {
-        console.log('[RESUMO_NC] ✅ Resumo de não coletas enviado com sucesso');
-        setNcSendSuccess(true);
-        activateCooldown(summaryCooldownKey);
-        setTimeout(() => setNcSendSuccess(false), 3000);
-      } else {
-        throw new Error(`Erro na resposta do webhook: ${response.status}`);
+      const token = await getValidToken() || currentUser.accessToken;
+      if (token) {
+        const dataHoraAgora = getBrazilLocaleDateTime();
+        for (const op of payload.naoColetasPorOperacao as any[]) {
+          try {
+            await SharePointService.updateUltimoEnvioNaoColetas(token, op.operacao, dataHoraAgora);
+            await SharePointService.updateQuantidadeNcoletasRegistrada(token, op.operacao, op.totalNaoColetas);
+          } catch (err: any) {
+            console.error(`[PG_RESUMO_NC] Erro para ${op.operacao}:`, err.message);
+          }
+        }
       }
-    } catch (e: any) {
-      console.error('[RESUMO_NC] Erro ao enviar:', e.message);
-      setNcSendError(e.message || "Falha ao enviar resumo de não coletas");
-      setTimeout(() => setNcSendError(null), 5000);
-    } finally {
-      setIsSendingNCSummary(false);
+    } catch (err: any) {
+      console.error('[PG_RESUMO_NC_PRE_UPDATE] Erro geral:', err.message);
     }
+
+    // 2) Tenta webhook (não-bloqueante)
+    try {
+      if (WEBHOOK_URL_NC_RESUMO) {
+        const response = await fetch(WEBHOOK_URL_NC_RESUMO, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (response.ok) {
+        } else {
+          console.warn(`[WEBHOOK_NC_RESUMO] Resposta não-OK: ${response.status}`);
+        }
+      } else {
+        console.warn('[WEBHOOK_NC_RESUMO] URL não configurada, pulando envio webhook');
+      }
+    } catch (webhookError: any) {
+      console.warn('[WEBHOOK_NC_RESUMO] Falha no webhook (não bloqueante):', webhookError.message);
+    }
+
+    // 3) Sucesso independente do webhook
+    setNcSendSuccess(true);
+    activateCooldown(summaryCooldownKey);
+    setTimeout(() => setNcSendSuccess(false), 3000);
+    setIsSendingNCSummary(false);
   };
 
   const parseConfigDateTime = (dateStr: string): Date | null => {
@@ -1444,8 +1346,6 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
   // Lógica para processar a lista de SAÍDAS - agrupa DEALE se aplicável
   const departuresSummary = useMemo(() => {
-    console.log('[DEBUG_SUMMARY] userConfigs:', userConfigs);
-
     // Separa configs DEALE e não-DEALE
     const dealeOps = new Set(['ARATIBA', 'CATUIPE', 'ALMIRANTE']);
     const dealeConfigs = userConfigs.filter(c => dealeOps.has(c.operacao.toUpperCase()));
@@ -1641,9 +1541,9 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     const hasDealeOps = allOps.some(op => dealeOps.has(op.toUpperCase()));
 
     const result = nonDealeOps.map(op => {
-      // Conta não coletas REAIS desta operação
-      const ncCount = realNonCollections.filter(nc => nc.operacao === op).length;
+      // Usa a quantidade registrada na coluna separada do operacao_config
       const config = userConfigs.find(c => c.operacao === op);
+      const ncCount = config?.quantidadeNcoletasRegistrada || 0;
       const ultimoEnvioNC = config?.UltimoEnvioNcoletas || '';
       const parsedUltimoEnvio = parseConfigDateTime(ultimoEnvioNC);
 
@@ -1659,8 +1559,8 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
     // Adiciona DEALE agrupado se aplicável
     if (hasDealeOps) {
-      const dealeNcCount = realNonCollections.filter(nc => dealeOps.has(nc.operacao?.toUpperCase())).length;
       const dealeConfigs = userConfigs.filter(c => dealeOps.has(c.operacao.toUpperCase()));
+      const dealeNcCount = dealeConfigs.reduce((sum, c) => sum + (c.quantidadeNcoletasRegistrada || 0), 0);
       const ultimoEnvioDealeNC = getLatestNaoColetasEnvio(dealeConfigs);
       const parsedUltimoEnvioDeale = parseConfigDateTime(ultimoEnvioDealeNC);
 
@@ -1675,7 +1575,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     }
 
     return result;
-  }, [realNonCollections, userConfigs]);
+  }, [userConfigs]);
 
   // Status do Resumo (pega da operação com UltimoEnvioResumoSaida mais recente)
   const resumoStatus = useMemo(() => {
@@ -1763,7 +1663,6 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
         <div className="flex items-center gap-2">
           <button
             onClick={() => {
-              console.log('[USER_ACTION] Refresh manual acionado');
               fetchAllData(true);
             }}
             className="p-2 text-slate-400 hover:text-primary-600 transition-colors relative"

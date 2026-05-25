@@ -187,7 +187,6 @@ const AppContent = () => {
         setUser(prev => prev ? { ...prev, accessToken: response.accessToken } : prev);
         setSessionExpired(false);
         lastTokenErrorRef.current = 0; // Reset debounce após renovação bem-sucedida
-        console.log('[APP] ✅ Sessão renovada com sucesso');
       }
     } catch (err: any) {
       console.error('[APP] Falha ao renovar sessão:', err.message);
@@ -228,7 +227,6 @@ const AppContent = () => {
       else restoreViewerConsole();
 
       if (viewerOnly && isViewerAuthConfigured() && getAuthMode() !== 'viewer') {
-        console.log('[APP] Perfil viewer detectado. Tentando migrar sessão para o App Registration de visualização...');
         const viewerToken = await ensureViewerAuthSession(user.email, { interactive: false });
 
         if (viewerToken) {
@@ -238,7 +236,6 @@ const AppContent = () => {
           // Revalida acesso com o novo token
           routeAccess = await SharePointService.getRouteConfigsByAccess(viewerToken, user.email, true);
           viewerOnly = routeAccess.configs.length > 0 && !routeAccess.canEdit;
-          console.log('[APP] ✅ Sessão viewer estabelecida com sucesso.');
         } else {
           console.warn('[APP] Não foi possível migrar para o App Registration viewer. Mantendo sessão atual.');
         }
@@ -258,7 +255,6 @@ const AppContent = () => {
       setIsAllViewer(routeAccess.isAllViewer);
 
       if (viewerOnly) {
-        console.log('[APP] Perfil de visualização detectado. Checklist/Resumo/Histórico geral ocultos.');
         setTasks([]);
         setLocations([]);
         setTeamMembers([]);
@@ -317,7 +313,6 @@ const AppContent = () => {
         const autoSaveFlag = `auto_save_done_${safeEmail}_${todayBrazil}`;
 
         if (localStorage.getItem(autoSaveFlag) !== 'true') {
-          console.log(`[AUTO_SAVE] Executando às ${getBrazilHours()}:${String(getBrazilMinutes()).padStart(2, '0')} (Brasília)`);
           try {
             // Usa sempre o token mais fresco
             const token = await getValidToken() || currentUser.accessToken!;
@@ -329,7 +324,6 @@ const AppContent = () => {
               email: currentUser.email
             });
             localStorage.setItem(autoSaveFlag, 'true');
-            console.log('[AUTO_SAVE] Concluído com sucesso');
           } catch (e) {
             console.error("[AUTO_SAVE] Falha:", e);
           }
@@ -364,6 +358,7 @@ const AppContent = () => {
       stopRefreshLoopRef.current = null;
     }
     clearTokenState();
+    sessionStorage.removeItem('_rd_loaded');
 
     await msalLogout();
     setUser(null);
