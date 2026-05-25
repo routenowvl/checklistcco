@@ -770,11 +770,12 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
       // Query events from database
       const { response: eventsResponse, data: eventsData } = await fetchJsonWithTimeout(
-        '/api/route-web-events',
+        '/api/route-web-db',
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            entity: 'events',
             dataReferencia: referenceDateMeta.dayRef,
             plantIds: allowedPlantIds
           })

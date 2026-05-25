@@ -496,10 +496,10 @@ export const SharePointService = {
         return cached;
       }
 
-      const res = await fetch('/api/checklist-config', {
+      const res = await fetch('/api/checklist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ action: 'getAll' })
+        body: JSON.stringify({ domain: "config", action: 'getAll' })
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'Erro ao buscar configs');
@@ -1012,10 +1012,10 @@ export const SharePointService = {
   async updateUltimoEnvioSaida(token: string, operacao: string, dataHoraEnvio: string): Promise<void> {
     try {
       const dataISO = convertToISO(dataHoraEnvio);
-      const res = await fetch('/api/checklist-config', {
+      const res = await fetch('/api/checklist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ action: 'updateField', operacao, field: 'ultimo_envio_saida', value: dataISO })
+        body: JSON.stringify({ domain: "config", action: 'updateField', operacao, field: 'ultimo_envio_saida', value: dataISO })
       });
       const data = await res.json();
       if (!data.success) console.warn('[PG_CONFIG] Falha ao atualizar UltimoEnvioSaida:', data.error);
@@ -1030,10 +1030,10 @@ export const SharePointService = {
   async updateUltimoEnvioNaoColetas(token: string, operacao: string, dataHoraEnvio: string): Promise<void> {
     try {
       const dataISO = convertToISO(dataHoraEnvio);
-      const res = await fetch('/api/checklist-config', {
+      const res = await fetch('/api/checklist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ action: 'updateField', operacao, field: 'ultimo_envio_ncoleta', value: dataISO })
+        body: JSON.stringify({ domain: "config", action: 'updateField', operacao, field: 'ultimo_envio_ncoleta', value: dataISO })
       });
       const data = await res.json();
       if (!data.success) console.warn('[PG_CONFIG] Falha ao atualizar UltimoEnvioNcoletas:', data.error);
@@ -1047,10 +1047,10 @@ export const SharePointService = {
    */
   async updateQuantidadeNcoletasRegistrada(token: string, operacao: string, quantidade: number): Promise<void> {
     try {
-      const res = await fetch('/api/checklist-config', {
+      const res = await fetch('/api/checklist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ action: 'updateField', operacao, field: 'quantidade_ncoletas_registrada', value: quantidade })
+        body: JSON.stringify({ domain: "config", action: 'updateField', operacao, field: 'quantidade_ncoletas_registrada', value: quantidade })
       });
       const data = await res.json();
       if (!data.success) console.warn('[PG_CONFIG] Falha ao atualizar quantidade_ncoletas_registrada:', data.error);
@@ -1064,10 +1064,10 @@ export const SharePointService = {
    */
   async updateStatusOperacao(token: string, operacao: string, status: string): Promise<void> {
     try {
-      const res = await fetch('/api/checklist-config', {
+      const res = await fetch('/api/checklist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ action: 'updateField', operacao, field: 'status', value: status })
+        body: JSON.stringify({ domain: "config", action: 'updateField', operacao, field: 'status', value: status })
       });
       const data = await res.json();
       if (!data.success) console.warn('[PG_CONFIG] Falha ao atualizar Status:', data.error);
@@ -1081,10 +1081,10 @@ export const SharePointService = {
    */
   async updateRouteConfigEmails(token: string, operacao: string, envio: string, copia: string): Promise<void> {
     try {
-      const res = await fetch('/api/checklist-config', {
+      const res = await fetch('/api/checklist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ action: 'updateFields', operacao, fields: { envio, copia } })
+        body: JSON.stringify({ domain: "config", action: 'updateFields', operacao, fields: { envio, copia } })
       });
       const data = await res.json();
       if (!data.success) {
@@ -1103,10 +1103,10 @@ export const SharePointService = {
    */
   async updateRouteConfigConteudoIfChanged(token: string, operacao: string, conteudo: string): Promise<boolean> {
     try {
-      const res = await fetch('/api/checklist-config', {
+      const res = await fetch('/api/checklist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ action: 'updateConteudoIfChanged', operacao, conteudo })
+        body: JSON.stringify({ domain: "config", action: 'updateConteudoIfChanged', operacao, conteudo })
       });
       const data = await res.json();
       if (data.success && data.changed) {
@@ -1126,10 +1126,10 @@ export const SharePointService = {
    */
   async updateRouteConfigConteudoNcoletasIfChanged(token: string, operacao: string, conteudoNcoletas: string): Promise<boolean> {
     try {
-      const res = await fetch('/api/checklist-config', {
+      const res = await fetch('/api/checklist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ action: 'updateConteudoNcoletasIfChanged', operacao, conteudoNcoletas })
+        body: JSON.stringify({ domain: "config", action: 'updateConteudoNcoletasIfChanged', operacao, conteudoNcoletas })
       });
       const data = await res.json();
       if (data.success && data.changed) {
@@ -1149,10 +1149,10 @@ export const SharePointService = {
   async updateUltimoEnvioResumoSaida(token: string, operacao: string, dataHoraEnvio: string): Promise<void> {
     try {
       const dataISO = convertToISO(dataHoraEnvio);
-      const res = await fetch('/api/checklist-config', {
+      const res = await fetch('/api/checklist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ action: 'updateField', operacao, field: 'ultimo_envio_resumo_saida', value: dataISO })
+        body: JSON.stringify({ domain: "config", action: 'updateField', operacao, field: 'ultimo_envio_resumo_saida', value: dataISO })
       });
       const data = await res.json();
       if (!data.success) console.warn('[PG_CONFIG] Falha ao atualizar UltimoEnvioResumoSaida:', data.error);
@@ -1166,10 +1166,10 @@ export const SharePointService = {
    */
   async updateStatusResumoSaida(token: string, operacao: string, status: string): Promise<void> {
     try {
-      const res = await fetch('/api/checklist-config', {
+      const res = await fetch('/api/checklist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ action: 'updateField', operacao, field: 'status_resumo_saida', value: status })
+        body: JSON.stringify({ domain: "config", action: 'updateField', operacao, field: 'status_resumo_saida', value: status })
       });
       const data = await res.json();
       if (!data.success) console.warn('[PG_CONFIG] Falha ao atualizar StatusResumoSaida:', data.error);
@@ -1188,10 +1188,10 @@ export const SharePointService = {
         if (cached) return cached;
       }
 
-      const res = await fetch('/api/checklist-departures', {
+      const res = await fetch('/api/checklist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ action: 'getAll' })
+        body: JSON.stringify({ domain: "departures", action: 'getAll' })
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'Erro ao buscar departures');
@@ -1336,10 +1336,10 @@ export const SharePointService = {
   },
 
   async updateDeparture(token: string, departure: RouteDeparture): Promise<string> {
-    const res = await fetch('/api/checklist-departures', {
+    const res = await fetch('/api/checklist', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ action: 'upsert', departure })
+      body: JSON.stringify({ domain: "departures", action: 'upsert', departure })
     });
     const data = await res.json();
     if (!data.success) throw new Error(data.error || 'Erro ao salvar departure');
@@ -1405,10 +1405,10 @@ export const SharePointService = {
   },
 
   async deleteDeparture(token: string, id: string): Promise<void> {
-    const res = await fetch('/api/checklist-departures', {
+    const res = await fetch('/api/checklist', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ action: 'delete', id })
+      body: JSON.stringify({ domain: "departures", action: 'delete', id })
     });
     const data = await res.json();
     if (!data.success) throw new Error(data.error || 'Erro ao deletar departure');
@@ -1452,10 +1452,10 @@ export const SharePointService = {
             const postRes = await graphFetch(`/sites/${siteId}/lists/${historyListId}/items`, token, { method: 'POST', body: JSON.stringify({ fields: histFields }) });
             if (postRes && postRes.id) {
                 // Delete from PG instead of SharePoint
-                await fetch('/api/checklist-departures', {
+                await fetch('/api/checklist', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-                  body: JSON.stringify({ action: 'delete', id: item.id })
+                  body: JSON.stringify({ domain: "departures", action: 'delete', id: item.id })
                 });
                 successCount++;
             } else { failedCount++; lastErrorMessage = "Failed to confirm archived ID."; }
@@ -1598,10 +1598,10 @@ export const SharePointService = {
    */
   async checkSendLock(token: string, operacao: string): Promise<{ locked: boolean; user?: string; timestamp?: string; expired?: boolean } | null> {
     try {
-      const res = await fetch('/api/checklist-config', {
+      const res = await fetch('/api/checklist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ action: 'getLockStatus', operacao })
+        body: JSON.stringify({ domain: "config", action: 'getLockStatus', operacao })
       });
       const data = await res.json();
       if (!data.success || !data.lock) return { locked: false };
@@ -1649,10 +1649,10 @@ export const SharePointService = {
       }
 
       const timestamp = new Date().toISOString();
-      const res = await fetch('/api/checklist-config', {
+      const res = await fetch('/api/checklist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ action: 'acquireLock', operacao, userEmail, timestamp })
+        body: JSON.stringify({ domain: "config", action: 'acquireLock', operacao, userEmail, timestamp })
       });
       const data = await res.json();
       if (!data.success) return { success: false, message: data.error || 'Erro ao adquirir trava' };
@@ -1669,10 +1669,10 @@ export const SharePointService = {
    */
   async releaseSendLock(token: string, operacao: string): Promise<void> {
     try {
-      const res = await fetch('/api/checklist-config', {
+      const res = await fetch('/api/checklist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ action: 'releaseLock', operacao })
+        body: JSON.stringify({ domain: "config", action: 'releaseLock', operacao })
       });
       const data = await res.json();
       if (!data.success) console.warn('[LOCK_RELEASE] Falha ao liberar trava:', data.error);
@@ -1687,10 +1687,10 @@ export const SharePointService = {
    */
   async getNonCollections(token: string, userEmail: string): Promise<NonCollection[]> {
     try {
-      const res = await fetch('/api/checklist-non-collections', {
+      const res = await fetch('/api/checklist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ action: 'getAll' })
+        body: JSON.stringify({ domain: "non-collections", action: 'getAll' })
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'Erro ao buscar non-collections');
@@ -1736,10 +1736,10 @@ export const SharePointService = {
    */
   async saveNonCollection(token: string, nonCollection: NonCollection): Promise<string> {
     try {
-      const res = await fetch('/api/checklist-non-collections', {
+      const res = await fetch('/api/checklist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ action: 'insert', nonCollection })
+        body: JSON.stringify({ domain: "non-collections", action: 'insert', nonCollection })
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'Erro ao salvar non-collection');
@@ -1756,10 +1756,10 @@ export const SharePointService = {
    */
   async updateNonCollection(token: string, nonCollection: NonCollection): Promise<void> {
     try {
-      const res = await fetch('/api/checklist-non-collections', {
+      const res = await fetch('/api/checklist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ action: 'update', nonCollection })
+        body: JSON.stringify({ domain: "non-collections", action: 'update', nonCollection })
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'Erro ao atualizar non-collection');
@@ -1823,10 +1823,10 @@ export const SharePointService = {
    */
   async deleteNonCollection(token: string, id: string): Promise<void> {
     try {
-      const res = await fetch('/api/checklist-non-collections', {
+      const res = await fetch('/api/checklist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ action: 'delete', id })
+        body: JSON.stringify({ domain: "non-collections", action: 'delete', id })
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'Erro ao deletar non-collection');
@@ -2104,10 +2104,10 @@ export const SharePointService = {
         const postRes = await graphFetch(`/sites/${siteId}/lists/${historyListId}/items`, token, { method: 'POST', body: JSON.stringify({ fields: histFields }) });
         if (postRes && postRes.id) {
           // Delete from PG instead of SharePoint
-          await fetch('/api/checklist-non-collections', {
+          await fetch('/api/checklist', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-            body: JSON.stringify({ action: 'delete', id: item.id })
+            body: JSON.stringify({ domain: "non-collections", action: 'delete', id: item.id })
           });
           successCount++;
         } else { failedCount++; lastErrorMessage = "Failed to confirm archived NC ID."; }

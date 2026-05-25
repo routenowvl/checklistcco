@@ -154,7 +154,24 @@ export const insertConfig = async (row: Record<string, unknown>): Promise<number
        conteudo, conteudo_ncoletas,
        lock_envio, lock_user, lock_timestamp)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
-     ON CONFLICT DO NOTHING
+     ON CONFLICT (operacao) DO UPDATE SET
+       email = EXCLUDED.email,
+       tolerancia = EXCLUDED.tolerancia,
+       nome_exibicao = EXCLUDED.nome_exibicao,
+       plant_id = EXCLUDED.plant_id,
+       ultimo_envio_saida = EXCLUDED.ultimo_envio_saida,
+       status = EXCLUDED.status,
+       envio = EXCLUDED.envio,
+       copia = EXCLUDED.copia,
+       ultimo_envio_resumo_saida = EXCLUDED.ultimo_envio_resumo_saida,
+       status_resumo_saida = EXCLUDED.status_resumo_saida,
+       ultimo_envio_ncoleta = EXCLUDED.ultimo_envio_ncoleta,
+       quantidade_ncoletas_registrada = EXCLUDED.quantidade_ncoletas_registrada,
+       conteudo = EXCLUDED.conteudo,
+       conteudo_ncoletas = EXCLUDED.conteudo_ncoletas,
+       lock_envio = EXCLUDED.lock_envio,
+       lock_user = EXCLUDED.lock_user,
+       lock_timestamp = EXCLUDED.lock_timestamp
      RETURNING id`,
     [
       String(row.operacao || ''),

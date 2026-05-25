@@ -266,10 +266,11 @@ export const primeRouteWebWarmRoutes = async (currentUser: User): Promise<RouteW
       }
 
       const { response: tokenResponse, data: tokenData } = await fetchJsonWithTimeout(
-        '/api/route-web-token',
+        '/api/route-web',
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' }
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ resource: 'token' })
         },
         15000
       );
@@ -295,11 +296,12 @@ export const primeRouteWebWarmRoutes = async (currentUser: User): Promise<RouteW
           const plantId = allowedPlantIds[nextIndex];
           try {
             const { response, data: proxyData } = await fetchJsonWithTimeout(
-              '/api/route-web-routes',
+              '/api/route-web',
               {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
+                  resource: 'routes',
                   plantId,
                   perPage: queryVariables.perPage,
                   strictDate: queryVariables.strictDate,
@@ -423,11 +425,12 @@ export const primeRouteWebWarmEvents = async (currentUser: User): Promise<void> 
 
       try {
         const firstCall = await fetchJsonWithTimeout(
-          '/api/route-web-route-events',
+          '/api/route-web',
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
+              resource: 'route-events',
               routeId,
               withOccurrences: true,
               bearerToken,
@@ -444,13 +447,13 @@ export const primeRouteWebWarmEvents = async (currentUser: User): Promise<void> 
         if (!response.ok || !eventData?.success) {
           await sleep(150);
           const retryCall = await fetchJsonWithTimeout(
-            '/api/route-web-route-events',
+            '/api/route-web',
             {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
+                resource: 'route-events',
                 routeId,
-                withOccurrences: true,
                 bearerToken,
                 compact: true,
                 nonCollectionOnly: true

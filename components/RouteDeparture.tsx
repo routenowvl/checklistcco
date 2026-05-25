@@ -2286,10 +2286,10 @@ const RouteDepartureView: React.FC<{
       (async () => {
         try {
           const dbDateRef = getBrazilDate();
-          const dbRes = await fetch('/api/route-web-routes-db', {
+          const dbRes = await fetch('/api/route-web-db', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ dataReferencia: dbDateRef })
+            body: JSON.stringify({ entity: 'routes', dataReferencia: dbDateRef })
           });
           if (dbRes.ok) {
             const dbJson = await dbRes.json();

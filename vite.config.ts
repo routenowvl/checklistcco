@@ -342,7 +342,10 @@ const routeWebDevPlugin = (mode: string) => ({
 
       const pathname = String(req.url || '').split('?')[0];
 
-      if (req.method === 'POST' && pathname === '/api/route-web-token') {
+      if (req.method === 'POST' && pathname === '/api/route-web') {
+        const _rwBody = await readJsonBody(req);
+        const _rwResource = String(_rwBody?.resource || '').trim();
+        if (_rwResource === 'token') {
         try {
           const tokenResult = await requestRouteWebToken();
           return writeJson(res, 200, {
@@ -364,7 +367,7 @@ const routeWebDevPlugin = (mode: string) => ({
         }
       }
 
-      if (req.method === 'POST' && pathname === '/api/route-web-plants') {
+      if (_rwResource === 'plants') {
         try {
           const tokenResult = await requestRouteWebToken();
           const upstreamUrl = getRouteWebUpstreamUrl('/api/plants');
@@ -403,9 +406,9 @@ const routeWebDevPlugin = (mode: string) => ({
         }
       }
 
-      if (req.method === 'POST' && pathname === '/api/route-web-routes') {
+      if (_rwResource === 'routes') {
         try {
-          const body = await readJsonBody(req);
+          const body = _rwBody;
 
           const plantId = toOptionalInt(body?.plantId);
           if (plantId == null) {
@@ -574,9 +577,9 @@ const routeWebDevPlugin = (mode: string) => ({
         }
       }
 
-      if (req.method === 'POST' && pathname === '/api/route-web-route-events') {
+      if (_rwResource === 'route-events') {
         try {
-          const body = await readJsonBody(req);
+          const body = _rwBody;
           const routeIdsRaw = Array.isArray(body?.routeIds) ? body.routeIds : [];
           const singleRouteId = toOptionalInt(body?.routeId);
           const routeIds = Array.from(
@@ -793,10 +796,14 @@ const routeWebDevPlugin = (mode: string) => ({
           });
         }
       }
+      } // end /api/route-web
 
-      if ((req.method === 'POST' || req.method === 'GET') && pathname === '/api/route-web-events') {
+      if ((req.method === 'POST' || req.method === 'GET') && pathname === '/api/route-web-db') {
+        const _dbBody = req.method === 'POST' ? await readJsonBody(req) : Object.fromEntries(new URL(String(req.url || ''), 'http://localhost').searchParams);
+        const _dbEntity = String(_dbBody?.entity || '').trim();
+        if (_dbEntity === 'events') {
         try {
-          const body = req.method === 'POST' ? await readJsonBody(req) : Object.fromEntries(new URL(String(req.url || ''), 'http://localhost').searchParams);
+          const body = _dbBody;
           const dataReferencia = String(body?.dataReferencia || '').trim();
 
           if (!dataReferencia || !/^\d{4}-\d{2}-\d{2}$/.test(dataReferencia)) {
@@ -830,9 +837,9 @@ const routeWebDevPlugin = (mode: string) => ({
         }
       }
 
-      if ((req.method === 'POST' || req.method === 'GET') && pathname === '/api/route-web-routes-db') {
+      if (_dbEntity === 'routes') {
         try {
-          const body = req.method === 'POST' ? await readJsonBody(req) : Object.fromEntries(new URL(String(req.url || ''), 'http://localhost').searchParams);
+          const body = _dbBody;
           const dataReferencia = String(body?.dataReferencia || '').trim();
 
           if (!dataReferencia || !/^\d{4}-\d{2}-\d{2}$/.test(dataReferencia)) {
@@ -865,11 +872,15 @@ const routeWebDevPlugin = (mode: string) => ({
           });
         }
       }
+      } // end /api/route-web-db
 
-      // Checklist API — operacao_config
-      if (req.method === 'POST' && pathname === '/api/checklist-config') {
+      // Checklist API
+      if (req.method === 'POST' && pathname === '/api/checklist') {
+        const _clBody = await readJsonBody(req);
+        const _clDomain = String(_clBody?.domain || '').trim();
+        if (_clDomain === 'config') {
         try {
-          const body = await readJsonBody(req);
+          const body = _clBody;
           const { action } = body;
 
           switch (action) {
@@ -919,9 +930,9 @@ const routeWebDevPlugin = (mode: string) => ({
       }
 
       // Checklist API — departures
-      if (req.method === 'POST' && pathname === '/api/checklist-departures') {
+      if (_clDomain === 'departures') {
         try {
-          const body = await readJsonBody(req);
+          const body = _clBody;
           const { action } = body;
 
           switch (action) {
@@ -962,9 +973,9 @@ const routeWebDevPlugin = (mode: string) => ({
       }
 
       // Checklist API — non-collections
-      if (req.method === 'POST' && pathname === '/api/checklist-non-collections') {
+      if (_clDomain === 'non-collections') {
         try {
-          const body = await readJsonBody(req);
+          const body = _clBody;
           const { action } = body;
 
           switch (action) {
@@ -994,7 +1005,13 @@ const routeWebDevPlugin = (mode: string) => ({
       }
 
       // Migrate config from SharePoint to PG (TEMPORÁRIO — remover após migração)
-      if (req.method === 'POST' && pathname === '/api/migrate-config-from-sharepoint') {
+      } // end /api/checklist
+
+      // Migrate from SharePoint to PG
+      if (req.method === 'POST' && pathname === '/api/migrate') {
+        const _mgBody = await readJsonBody(req);
+        const _mgList = String(_mgBody?.list || '').trim();
+        if (_mgList === 'config') {
         try {
           const SITE_PATH = process.env.VITE_SHAREPOINT_SITE_PATH || '';
           const appToken = await getGraphAppToken();
@@ -1040,7 +1057,8 @@ const routeWebDevPlugin = (mode: string) => ({
 
           let inserted = 0, skipped = 0, alreadyExists = 0;
           const errors: string[] = [];
-          const parseNcoleta = (v: any): { dt: string | null; qtd: number } => { if (!v) return { dt: null, qtd: 0 }; const s = String(v).trim(); const m = s.match(/^(.+?\d{2}:\d{2}:\d{2})\s+(\d+)$/); if (m) return { dt: m[1].trim(), qtd: parseInt(m[2], 10) || 0 }; return { dt: s, qtd: 0 }; };
+          const brToISO = (s: string): string | null => { const m = s.match(/(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})/); return m ? `${m[3]}-${m[2]}-${m[1]}T${m[4]}:${m[5]}:${m[6]}` : null; };
+          const parseNcoleta = (v: any): { dt: string | null; qtd: number } => { if (!v) return { dt: null, qtd: 0 }; const s = String(v).trim(); const m = s.match(/^(.+?\d{2}:\d{2}:\d{2})\s+(\d+)$/); if (m) { const iso = brToISO(m[1].trim()); return { dt: iso || m[1].trim(), qtd: parseInt(m[2], 10) || 0 }; } const iso2 = brToISO(s); return iso2 ? { dt: iso2, qtd: 0 } : { dt: s, qtd: 0 }; };
           const toISO = (v: any): string | null => {
             if (!v) return null;
             const s = String(v).trim();
@@ -1087,7 +1105,7 @@ const routeWebDevPlugin = (mode: string) => ({
       }
 
       // Migrate departures from Dados_Saida_de_rotas to PG (TEMPORÁRIO — remover após migração)
-      if (req.method === 'POST' && pathname === '/api/migrate-departures-from-sharepoint') {
+      if (_mgList === 'departures') {
         try {
           const SITE_PATH = process.env.VITE_SHAREPOINT_SITE_PATH || '';
           const LIST_NAME = 'Dados_Saida_de_rotas';
@@ -1102,7 +1120,7 @@ const routeWebDevPlugin = (mode: string) => ({
           const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '').trim();
           const resolve = (m: Record<string, string>, t: string) => m[norm(t)] || t;
           const fmtISOtoBR = (iso: any): string => { if (!iso) return ''; const s = String(iso).trim(); const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]}/${m[2]}/${m[1]}` : s; };
-          const fmtTime = (v: any): string => { if (!v) return ''; const s = String(v).trim(); const dt = s.match(/T(\d{2}:\d{2})/); if (dt) return dt[1] + ':00'; const t = s.match(/^(\d{2}:\d{2})/); return t ? t[1] + ':00' : s; };
+          const fmtTime = (v: any): string => { if (!v) return ''; const s = String(v).trim(); if (!s || s === '-') return ''; const brDt = s.match(/(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2})/); if (brDt) return `${brDt[4]}:${brDt[5]}:00`; const dt = s.match(/T(\d{2}:\d{2})/); if (dt) return dt[1] + ':00'; const t = s.match(/^(\d{2}:\d{2})/); return t ? t[1] + ':00' : ''; };
           const findList = async (siteId: string, name: string, token: string): Promise<any> => {
             try { return await graphFetchDev(`/sites/${siteId}/lists/${name}`, token); }
             catch { const ld = await graphFetchDev(`/sites/${siteId}/lists`, token); const found = (ld.value || []).find((l: any) => l.name?.toLowerCase() === name.toLowerCase() || l.displayName?.toLowerCase() === name.toLowerCase()); if (!found) throw new Error(`Lista ${name} não encontrada`); return found; }
@@ -1116,7 +1134,7 @@ const routeWebDevPlugin = (mode: string) => ({
           const mapping: Record<string, string> = {};
           for (const col of cols.value || []) { mapping[norm(col.name)] = col.name; mapping[norm(col.displayName)] = col.name; }
 
-          const body = req.body || {};
+          const body = _mgBody;
           const mode = body.mode || 'all';
           let baseUrl = `/sites/${siteId}/lists/${list.id}/items?expand=fields&$top=100`;
           if (mode === 'range' && body.startDate && body.endDate) {
@@ -1168,7 +1186,7 @@ const routeWebDevPlugin = (mode: string) => ({
       }
 
       // Migrate non-collections from Dados_Nao_Coletas to PG (TEMPORÁRIO — remover após migração)
-      if (req.method === 'POST' && pathname === '/api/migrate-non-collections-from-sharepoint') {
+      if (_mgList === 'non-collections') {
         try {
           const SITE_PATH = process.env.VITE_SHAREPOINT_SITE_PATH || '';
           const LIST_ID = '83e8cfb9-1982-47ae-b515-3fec112da457';
@@ -1191,7 +1209,7 @@ const routeWebDevPlugin = (mode: string) => ({
           const mapping: Record<string, string> = {};
           for (const col of cols.value || []) { mapping[norm(col.name)] = col.name; mapping[norm(col.displayName)] = col.name; }
 
-          const body = req.body || {};
+          const body = _mgBody;
           const mode = body.mode || 'all';
           let baseUrl = `/sites/${siteId}/lists/${LIST_ID}/items?expand=fields&$top=100`;
           if (mode === 'range' && body.startDate && body.endDate) {
@@ -1238,6 +1256,7 @@ const routeWebDevPlugin = (mode: string) => ({
           return writeJson(res, 500, { success: false, error: error?.message || 'Erro na migração' });
         }
       }
+      } // end /api/migrate
 
       next();
     });
