@@ -42,7 +42,9 @@
       "Bash(sed -i \"s|pathname === ''/api/route-web-events''|pathname === ''/api/route-web-db''|g\" vite.config.ts)",
       "Bash(echo \"EXIT: $?\")",
       "Bash(vercel logs:*)",
-      "Bash(npx vercel:*)"
+      "Bash(npx vercel:*)",
+      "WebFetch(domain:checklistcco.vercel.app)",
+      "Bash(curl:*)"
     ]
   }
 }
