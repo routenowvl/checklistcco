@@ -16,7 +16,7 @@ import {
   getNonCollections,
   insertNonCollection,
   updateNonCollection,
-  deleteNonCollection
+  deleteNonCollection,
   insertConfig
 } from './lib-checklistDb.js';
 import { getGraphAppToken } from './lib-graphAppAuth.js';
