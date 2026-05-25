@@ -252,9 +252,14 @@ export const upsertDeparture = async (d: Record<string, unknown>): Promise<numbe
   const celular_motorista = String(d.contato || d.celular_motorista || '');
   const hora_prevista_raw = String(d.inicio || d.hora_prevista || '').trim();
   const hora_saida_raw = String(d.saida || d.hora_saida || '').trim();
-  // Campos time/date: envia null se vazio
-  const hora_prevista = hora_prevista_raw || null;
-  const hora_saida = hora_saida_raw || null;
+  // Converte "DD/MM/AAAA HH:MM:SS" → "YYYY-MM-DD HH:MM:SS" para TIMESTAMP do PostgreSQL
+  const toTimestamp = (raw: string): string | null => {
+    if (!raw) return null;
+    const m = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}:\d{2}:\d{2})$/);
+    return m ? `${m[3]}-${m[2]}-${m[1]} ${m[4]}` : raw || null;
+  };
+  const hora_prevista = toTimestamp(hora_prevista_raw);
+  const hora_saida = toTimestamp(hora_saida_raw);
   const status_saida = String(d.statusGeral || d.status_saida || '');
   const motivo_atraso = String(d.motivo || d.motivo_atraso || '');
   const observacao = String(d.observacao || '');
