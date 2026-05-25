@@ -36,6 +36,7 @@ const hasContactData = (value: string): boolean => {
 const MotoristasView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
   const [motoristas, setMotoristas] = useState<Motorista[]>([]);
   const [userOperations, setUserOperations] = useState<string[]>([]);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [page, setPage] = useState(1);
@@ -44,7 +45,6 @@ const MotoristasView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
   const [editingContactId, setEditingContactId] = useState<string | null>(null);
   const [contactDraft, setContactDraft] = useState('');
   const [savingRowId, setSavingRowId] = useState<string | null>(null);
-  const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [sortMode, setSortMode] = useState<'default' | 'az' | 'za'>('default');
   const [cadastroFilter, setCadastroFilter] = useState<CadastroFilterMode>('incomplete');

@@ -749,13 +749,6 @@ const NonCollectionsView: React.FC<{
         }
 
         setNonCollections([...updatedRecords, ...appendedRecords]);
-        console.log(
-          '[BULK_PASTE] ROTA processada:',
-          updatedIndices.length,
-          'linha(s) preenchida(s),',
-          appendedRecords.length,
-          'nova(s) linha(s) criada(s)'
-        );
 
         if (remainingLines.length > 0) {
           await fetchColetasPrevistas(dataFormatada);
@@ -774,9 +767,6 @@ const NonCollectionsView: React.FC<{
           emptyIndices.push(idx);
         }
       });
-
-      console.log('[BULK_PASTE] Campo:', field, 'Valores:', lines);
-      console.log('[BULK_PASTE] Linhas vazias detectadas:', emptyIndices.length);
 
       const updatedRecords: NonCollection[] = [...nonCollections];
       let lineIndex = 0;
@@ -886,15 +876,12 @@ const NonCollectionsView: React.FC<{
         const recordsToSave = updatedRecords.filter(r => isPersistedNonCollectionId(r.id));
 
         if (recordsToSave.length === 0) {
-          console.log('[BULK_PASTE] Nenhum registro para salvar no SharePoint (todos são locais)');
           return;
         }
 
-        console.log('[BULK_PASTE] Salvando', recordsToSave.length, 'registros no SharePoint...');
         const savePromises = recordsToSave.map(async (record) => {
           try {
             await SharePointService.updateNonCollection(token, record);
-            console.log('[BULK_PASTE] Salvo:', record.rota, '-', record.codigo);
           } catch (e: any) {
             console.error('[BULK_PASTE] Erro ao salvar registro:', record.rota, e.message);
           }
@@ -1020,18 +1007,12 @@ const NonCollectionsView: React.FC<{
 
           if (Array.isArray(cached?.data) && cacheAgeMs >= 0 && cacheAgeMs <= COLETAS_PREVISTAS_CACHE_TTL_MS) {
             setColetasPrevistas(cached.data);
-            console.log('[COLETAS_PREVISTAS][CACHE_HIT] Usando cache (idade em ms):', cacheAgeMs);
-            console.log('[COLETAS_PREVISTAS][CACHE_HIT] Total retornado:', cached.data.length);
             return true;
           }
         }
       } catch (cacheErr) {
         console.warn('[COLETAS_PREVISTAS][CACHE] Falha ao ler cache local:', cacheErr);
       }
-
-      console.log('[COLETAS_PREVISTAS] Buscando para data:', dataISO);
-      console.log('[COLETAS_PREVISTAS] Email do usuário:', currentUser.email);
-      console.log('[COLETAS_PREVISTAS] Operações do usuário (userConfigs):', userOperations);
 
       const coletas = await SharePointService.getColetasPrevistas(token, dataISO, currentUser.email, userOperations);
       setColetasPrevistas(coletas);
@@ -1045,9 +1026,6 @@ const NonCollectionsView: React.FC<{
         console.warn('[COLETAS_PREVISTAS][CACHE] Falha ao salvar cache local:', cacheErr);
       }
 
-      console.log('[COLETAS_PREVISTAS] Total retornado:', coletas.length);
-      console.log('[COLETAS_PREVISTAS] Detalhes:', coletas.map(c => `${c.Title}=${c.QntColeta}`));
-      console.log('[COLETAS_PREVISTAS] Soma QntColeta:', coletas.reduce((sum, c) => sum + c.QntColeta, 0));
       return true;
     } catch (e: any) {
       console.error('[COLETAS_PREVISTAS] Erro ao buscar:', e.message);
@@ -1063,21 +1041,15 @@ const NonCollectionsView: React.FC<{
         return;
       }
 
-      console.log('[NonCollections] Carregando dados...', currentUser.email);
-
       // Carrega configurações do usuário (edição por EMAIL; visualização por Cópia)
       const routeAccess = await SharePointService.getRouteConfigsByAccess(token, currentUser.email, forceRefresh);
       const configs = routeAccess.configs || [];
       setCanEditData(Boolean(routeAccess.canEdit));
       setUserConfigs(configs || []);
-      console.log('[NonCollections] operações do usuário:', configs?.map(c => c.operacao));
-      console.log('[NonCollections] Perfil de edição habilitado?', Boolean(routeAccess.canEdit));
 
       const myOps = new Set((configs || []).map(c => c.operacao));
 
       if (!routeAccess.canEdit) {
-        console.log('[NonCollections] Modo visualização: carregando dados via coluna ConteudoNcoletas.');
-
         const rowsFromSnapshots = (configs || []).flatMap((cfg) =>
           parseViewerSnapshotNonCollections(cfg.ConteudoNcoletas || '').map((row) => ({
             ...row,
@@ -1098,22 +1070,17 @@ const NonCollectionsView: React.FC<{
           setColetasPrevistas([]);
         }
 
-        console.log('[NonCollections] ✅ Dados carregados via snapshot para visualização');
         return;
       }
 
       // Carrega Não coletas do SharePoint
       const spNonCollections = await SharePointService.getNonCollections(token, currentUser.email);
-      console.log('[NonCollections] Total bruto do SharePoint:', spNonCollections.length);
 
       // Filtra APENAS Não coletas das operações do usuário logado
       const filtered = (spNonCollections || []).filter(nc => {
         if (myOps.size === 0) return false;
         return myOps.has(nc.operacao);
       });
-
-      console.log('[NonCollections] Não coletas filtradas por usuário:', filtered.length);
-      console.log('[NonCollections] operações nos dados filtrados:', Array.from(new Set(filtered.map(r => r.operacao))));
 
       setNonCollections(filtered);
 
@@ -1130,7 +1097,6 @@ const NonCollectionsView: React.FC<{
       void syncViewerContentForNonCollections(token, configs || [], filtered)
         .catch((err) => console.error('[VIEWER_CACHE][NC] Falha ao sincronizar ConteudoNcoletas:', err?.message || err));
 
-      console.log('[NonCollections] ? Dados carregados com sucesso');
     } catch (e: any) {
       console.error('[NonCollections] Erro ao carregar dados:', e.message);
     } finally {
@@ -1153,12 +1119,10 @@ const NonCollectionsView: React.FC<{
 
       if (isPersistedNonCollectionId(rowId)) {
         await SharePointService.updateNonCollection(token, currentRow);
-        console.log(`[NC_SAVE] ${fieldLabel} salvo:`, currentRow.rota);
         return;
       }
 
       if (!canPersistNonCollection(currentRow)) {
-        console.log(`[NC_SAVE] Linha local ainda incompleta, aguardando dados obrigatórios (${fieldLabel})`);
         return;
       }
 
@@ -1166,7 +1130,6 @@ const NonCollectionsView: React.FC<{
       setNonCollections(prev =>
         prev.map(r => (r.id === rowId ? { ...r, ...currentRow, id: spId } : r))
       );
-      console.log(`[NC_SAVE] ${fieldLabel} salvo criando novo item:`, currentRow.rota, 'ID:', spId);
     } catch (e: any) {
       console.error(`[NC_SAVE] Erro ao salvar ${fieldLabel.toLowerCase()}:`, e?.message || e);
     } finally {
@@ -1442,19 +1405,16 @@ const NonCollectionsView: React.FC<{
     setIsArchiving(true);
 
     try {
-      console.log(`[NC_ARCHIVE] Movendo ${validNonCollections.length} itens para o histórico...`);
       const archiveResult = await SharePointService.moveNonCollectionsToHistory(token, validNonCollections);
-      console.log(`[NC_ARCHIVE] Sucesso: ${archiveResult.success}, Falhas: ${archiveResult.failed}`);
 
-      // Limpa o campo UltimoEnvioNcoletas de cada operação do usuário
-      console.log('[NC_ARCHIVE] Limpando UltimoEnvioNcoletas das operações do usuário...');
+      // Limpa o campo UltimoEnvioNcoletas e quantidade_ncoletas_registrada de cada operação do usuário
       const operacoes = userConfigs.map(c => c.operacao);
       for (const operacao of operacoes) {
         try {
           await SharePointService.updateUltimoEnvioNaoColetas(token, operacao, '');
-          console.log(`[NC_ARCHIVE] ?o. UltimoEnvioNcoletas limpo para ${operacao}`);
+          await SharePointService.updateQuantidadeNcoletasRegistrada(token, operacao, 0);
         } catch (e: any) {
-          console.error(`[NC_ARCHIVE] Erro ao limpar UltimoEnvioNcoletas para ${operacao}:`, e.message);
+          console.error(`[NC_ARCHIVE] Erro ao limpar campos para ${operacao}:`, e.message);
         }
       }
 
@@ -1498,9 +1458,7 @@ const NonCollectionsView: React.FC<{
     setIsSearchingArchive(true);
     setHistoryEditWarning(null);
     try {
-      console.log('[NC_SEARCH_ARCHIVE] Requesting history from SharePoint list nao_coletas_web_hist...');
       const results = await SharePointService.getArchivedNonCollections(await getAccessToken(), currentUser.email, histStart, histEnd, controller.signal);
-      console.log('[NC_SEARCH_ARCHIVE] Results received:', results.length);
 
       // Só atualiza state se esta requisição não foi cancelada
       if (!controller.signal.aborted) {
@@ -1517,7 +1475,6 @@ const NonCollectionsView: React.FC<{
       }
     } catch (err: any) {
       if (err.name === 'AbortError') {
-        console.log('[NC_SEARCH_ARCHIVE] Requisição cancelada.');
         return;
       }
       console.error('[NC_SEARCH_ARCHIVE] Error during search:', err);
@@ -1837,23 +1794,20 @@ const NonCollectionsView: React.FC<{
     const lines = value.split(/[\n\r]/).map(l => l.trim()).filter(Boolean);
     if (lines.length === 0) return;
 
-    const operationToUse = String(operationHint || '').trim();
     const availableOperations = userConfigs.map(cfg => String(cfg.operacao || '').trim()).filter(Boolean);
-    console.log('[BULK_PASTE] Campo:', field, 'Valores:', lines);
-    if (operationToUse) {
-      console.log('[BULK_PASTE] Colagem em massa com operação reaproveitada:', operationToUse);
-      await applyBulkPasteWithOperation(operationToUse, { field, lines });
+
+    // Se já tem operação definida (ghost row ou linha existente), usa ela
+    if (operationHint && availableOperations.includes(operationHint)) {
+      await applyBulkPasteWithOperation(operationHint, { field, lines });
       return;
     }
 
     if (availableOperations.length === 1) {
       const singleOperation = availableOperations[0];
-      console.log('[BULK_PASTE] Única operação disponível, aplicando automaticamente:', singleOperation);
       await applyBulkPasteWithOperation(singleOperation, { field, lines });
       return;
     }
 
-    console.log('[BULK_PASTE] Colagem em massa detectada, aguardando seleção de operação');
     setPendingBulkPaste({ field, lines });
     setIsOperationModalOpen(true);
     setIsCreatingRecords(false);
@@ -1987,9 +1941,8 @@ const NonCollectionsView: React.FC<{
   if (isLoading) {
     return (
       <div className="h-full flex items-center justify-center">
-        <div className="flex flex-col items-center gap-4">
+        <div className="flex items-center">
           <Loader2 size={40} className="animate-spin text-blue-600" />
-          <p className="font-bold uppercase text-sm tracking-widest text-slate-500">Carregando...</p>
         </div>
       </div>
     );
@@ -2388,8 +2341,7 @@ const NonCollectionsView: React.FC<{
                             }}
                             onPaste={(e) => {
                               const val = e.clipboardData.getData('text');
-                              console.log('[PASTE PRODUTOR]', val);
-                              
+
                               // Múltiplas linhas: bulk paste
                               if (val.includes('\n')) {
                                 e.preventDefault();
@@ -2403,7 +2355,6 @@ const NonCollectionsView: React.FC<{
                                 e.preventDefault();
                                 const updated = { ...row, codigo: parsed.codigo, produtor: parsed.produtor };
                                 setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
-                                console.log('[PASTE PRODUTOR] ? Código e produtor separados:', parsed);
                                 return;
                               }
                               
@@ -2434,8 +2385,7 @@ const NonCollectionsView: React.FC<{
                             }}
                             onPaste={(e) => {
                               const val = e.clipboardData.getData('text');
-                              console.log('[PASTE CODIGO ROW]', val);
-                              
+
                               // Múltiplas linhas: bulk paste
                               if (val.includes('\n')) {
                                 e.preventDefault();
@@ -2449,7 +2399,6 @@ const NonCollectionsView: React.FC<{
                                 e.preventDefault();
                                 const updated = { ...row, codigo: parsed.codigo, produtor: parsed.produtor };
                                 setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
-                                console.log('[PASTE CODIGO] ? Código e produtor separados:', parsed);
                                 return;
                               }
                               
@@ -2811,7 +2760,6 @@ const NonCollectionsView: React.FC<{
                             const token = await getValidToken() || currentUser.accessToken;
                             if (token) {
                               await SharePointService.deleteNonCollection(token, rowId);
-                              console.log('[NC_DELETE] Não coleta excluída do SharePoint:', row.rota);
                             }
                           } catch (e: any) {
                             console.error('[NC_DELETE] Erro ao excluir do SharePoint:', e.message);
@@ -3714,76 +3662,25 @@ const NonCollectionsView: React.FC<{
       {isHistoryModalOpen && (
         <div className={`fixed inset-0 bg-black/80 backdrop-blur-md z-[110] flex items-center justify-center animate-in zoom-in duration-300 ${isHistoryFullscreen ? 'p-0' : 'p-4'}`}>
           <div className={`rounded-[2.5rem] shadow-2xl w-full overflow-hidden border flex flex-col ${
-            isHistoryFullscreen ? 'max-w-none w-full h-full rounded-none' : 'max-w-7xl max-h-[90vh]'
+            isHistoryFullscreen ? 'max-w-none w-full h-full rounded-none' : 'max-w-7xl max-h-[94vh]'
           } ${isDarkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'}`}>
-            {/* Header */}
-            <div className={`p-6 flex justify-between items-center shrink-0 ${
-              isDarkMode ? 'bg-slate-800' : 'bg-slate-100'
-            }`}>
-              <div className="flex items-center gap-4">
-                <Database size={32} className={isDarkMode ? 'text-blue-400' : 'text-blue-600'} />
-                <div>
-                  <h3 className={`text-xl font-black uppercase tracking-tight ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Histórico de Não Coletas</h3>
-                  <p className={`text-xs font-bold uppercase tracking-widest ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Busca na lista nao_coletas_web_hist</p>
-                </div>
-                {archivedResults.length > 0 && (
-                  <span className={`text-[10px] font-bold px-3 py-1 rounded-full ${
-                    isDarkMode ? 'text-slate-400 bg-slate-700' : 'text-slate-500 bg-slate-200'
-                  }`}>
-                    {archivedResults.length} registro(s)
-                  </span>
-                )}
-                {canEditData && Object.keys(pendingHistoryEdits).length > 0 && (
-                  <span className="text-[10px] font-black uppercase tracking-widest text-amber-500 bg-amber-100 dark:bg-amber-900/30 px-3 py-1 rounded-full border border-amber-300 dark:border-amber-700">
-                    {Object.keys(pendingHistoryEdits).length} alteração(ões) pendente(s)
-                  </span>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                {canEditData && Object.keys(pendingHistoryEdits).length > 0 && (
-                  <button
-                    onClick={savePendingHistoryEdits}
-                    disabled={isSavingHistoryEdits}
-                    className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black uppercase text-[10px] tracking-widest transition-all disabled:opacity-60"
-                    title="Salvar alterações (Enter)"
-                  >
-                    {isSavingHistoryEdits ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-                    Salvar
-                  </button>
-                )}
-                <button
-                  onClick={() => setIsHistoryFullscreen(!isHistoryFullscreen)}
-                  className={`p-2 rounded-lg transition-all ${isDarkMode ? 'hover:bg-slate-700' : 'hover:bg-slate-200'}`}
-                  title={isHistoryFullscreen ? 'Sair da tela cheia' : 'Tela cheia'}
-                >
-                  {isHistoryFullscreen ? <Minimize2 size={20} className={isDarkMode ? 'text-slate-400' : 'text-slate-600'} /> : <Maximize2 size={20} className={isDarkMode ? 'text-slate-400' : 'text-slate-600'} />}
-                </button>
-                <button
-                  onClick={closeHistoryModal}
-                  className={`p-2 rounded-full transition-all ${isDarkMode ? 'hover:bg-slate-700' : 'hover:bg-slate-200'}`}
-                >
-                  <X size={24} className={isDarkMode ? 'text-slate-400' : 'text-slate-600'} />
-                </button>
-              </div>
-            </div>
-
             {historyEditWarning && (
-              <div className="mx-6 mt-4 mb-2 px-4 py-3 rounded-xl border border-amber-300 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-700 text-amber-800 dark:text-amber-200 text-[11px] font-bold flex items-start gap-2">
+              <div className="mx-5 mt-2 mb-1 px-3 py-2 rounded-xl border border-amber-300 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-700 text-amber-800 dark:text-amber-200 text-[10px] font-bold flex items-start gap-2">
                 <AlertTriangle size={16} className="mt-0.5 shrink-0" />
                 <span>{historyEditWarning}</span>
               </div>
             )}
 
             {/* Filtros */}
-            <div className={`p-4 border-b shrink-0 ${isDarkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'}`}>
-              <div className="flex items-center gap-4 flex-wrap">
+            <div className={`px-5 py-3 border-b shrink-0 ${isDarkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'}`}>
+              <div className="flex items-center gap-3 flex-wrap">
                 <div className="flex items-center gap-2">
                   <label className={`text-[10px] font-black uppercase ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Início:</label>
                   <input
                     type="date"
                     value={histStart}
                     onChange={(e) => setHistStart(e.target.value)}
-                    className={`p-2 border rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500 ${
+                    className={`px-3 py-1.5 border rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500 ${
                       isDarkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-white border-slate-300 text-slate-800'
                     }`}
                   />
@@ -3794,7 +3691,7 @@ const NonCollectionsView: React.FC<{
                     type="date"
                     value={histEnd}
                     onChange={(e) => setHistEnd(e.target.value)}
-                    className={`p-2 border rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500 ${
+                    className={`px-3 py-1.5 border rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500 ${
                       isDarkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-white border-slate-300 text-slate-800'
                     }`}
                   />
@@ -3802,21 +3699,32 @@ const NonCollectionsView: React.FC<{
                 <button
                   onClick={handleSearchArchive}
                   disabled={isSearchingArchive}
-                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-black uppercase text-[10px] tracking-widest transition-all shadow-lg disabled:opacity-60"
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-black uppercase text-[10px] tracking-widest transition-all shadow-lg disabled:opacity-60"
                 >
                   {isSearchingArchive ? <><Loader2 size={16} className="animate-spin" /> Buscando...</> : <><Search size={16} /> Buscar</>}
                 </button>
                 {filteredArchivedResults.length > 0 && (
                   <button
                     onClick={handleExportToExcel}
-                    className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black uppercase text-[10px] tracking-widest transition-all shadow-lg"
+                    className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black uppercase text-[10px] tracking-widest transition-all shadow-lg"
                     title="Exportar para Excel (.xlsx)"
                   >
                     <Table size={16} /> Excel
                   </button>
                 )}
+                {canEditData && Object.keys(pendingHistoryEdits).length > 0 && (
+                  <button
+                    onClick={savePendingHistoryEdits}
+                    disabled={isSavingHistoryEdits}
+                    className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black uppercase text-[10px] tracking-widest transition-all disabled:opacity-60"
+                    title="Salvar alterações (Enter)"
+                  >
+                    {isSavingHistoryEdits ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                    Salvar
+                  </button>
+                )}
                 <span className={`text-[10px] font-bold ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>
-                  {filteredArchivedResults.length} resultado(s)
+                  {filteredArchivedResults.length} resultado(s) • {archivedResults.length} registro(s)
                 </span>
                 {hasHistoryActiveFilters && (
                   <span className={`text-[10px] font-bold px-2 py-1 rounded-full ${
@@ -3833,6 +3741,19 @@ const NonCollectionsView: React.FC<{
                     Limpar Filtros
                   </button>
                 )}
+                <button
+                  onClick={() => setIsHistoryFullscreen(!isHistoryFullscreen)}
+                  className={`p-1.5 rounded-lg transition-all ${isDarkMode ? 'hover:bg-slate-700' : 'hover:bg-slate-200'}`}
+                  title={isHistoryFullscreen ? 'Sair da tela cheia' : 'Tela cheia'}
+                >
+                  {isHistoryFullscreen ? <Minimize2 size={18} className={isDarkMode ? 'text-slate-400' : 'text-slate-600'} /> : <Maximize2 size={18} className={isDarkMode ? 'text-slate-400' : 'text-slate-600'} />}
+                </button>
+                <button
+                  onClick={closeHistoryModal}
+                  className={`p-1.5 rounded-full transition-all ${isDarkMode ? 'hover:bg-slate-700' : 'hover:bg-slate-200'}`}
+                >
+                  <X size={20} className={isDarkMode ? 'text-slate-400' : 'text-slate-600'} />
+                </button>
               </div>
             </div>
 

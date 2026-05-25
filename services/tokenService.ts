@@ -46,7 +46,6 @@ export const getValidToken = async (): Promise<string | null> => {
         const expiresIn = response.expiresOn
           ? Math.round((response.expiresOn.getTime() - Date.now()) / 1000 / 60)
           : '?';
-        console.log(`[TOKEN] ✅ Token válido — expira em ~${expiresIn} min`);
         return token;
       })
       .catch(async (err) => {
@@ -128,13 +127,11 @@ export const startTokenRefreshLoop = (
 
         // Se expira em menos de REFRESH_THRESHOLD_MS, força renovação
         if (timeUntilExpiry < REFRESH_THRESHOLD_MS) {
-          console.log('[TOKEN_LOOP] Token próximo de expirar — forçando renovação');
           const forced = await msalInstance.acquireTokenSilent({
             scopes,
             account,
             forceRefresh: true,
           });
-          console.log('[TOKEN_LOOP] ✅ Token renovado proativamente (background)');
         } else {
         }
       }
@@ -155,8 +152,6 @@ export const startTokenRefreshLoop = (
   // Verificações periódicas
   refreshIntervalId = setInterval(checkAndRefresh, CHECK_INTERVAL_MS);
 
-  console.log('[TOKEN_LOOP] 🚀 Loop de refresh iniciado (intervalo: 3 min)');
-
   return () => {
     clearTimeout(initialTimeout);
     stopTokenRefreshLoop();
@@ -170,7 +165,6 @@ export const stopTokenRefreshLoop = () => {
   if (refreshIntervalId !== null) {
     clearInterval(refreshIntervalId);
     refreshIntervalId = null;
-    console.log('[TOKEN_LOOP] 🛑 Loop de refresh parado');
   }
 };
 
@@ -190,7 +184,6 @@ export const forceTokenRefresh = async (): Promise<string | null> => {
       forceRefresh: true,
     });
 
-    console.log('[TOKEN] 🔄 Force refresh concluído');
     return response.accessToken;
   } catch (err: any) {
     console.error('[TOKEN] Force refresh falhou:', err.message);

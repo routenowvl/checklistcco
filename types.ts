@@ -60,6 +60,8 @@ export interface RouteDeparture {
   checklistMotorista?: string; // Dados do checklist: "DD/MM/AAAA - **% - motivos"
   retornoMotorista?: string; // Histórico de conversa entre bot e motorista
   causaRaiz?: string; // Causa raiz para rotas de Manutenção
+  tempoResposta?: string; // Tempo entre horário real e horário inserido pelo usuário (HH:MM:SS)
+  logTempoResposta?: string; // Log JSON de alterações no tempoResposta: [{hora, campo, de, para}]
   editingUser?: string; // E-mail do usuário editando esta linha (lock temporário)
   lockExpiresAt?: number; // Timestamp em ms quando o lock expira
 }
@@ -79,6 +81,7 @@ export interface RouteConfig {
   email: string;
   tolerancia: string;
   nomeExibicao: string;
+  plantId?: number | null;
   Conteudo?: string; // Snapshot JSON por operação (modo visualização)
   ConteudoNcoletas?: string; // Snapshot JSON de não coletas por operação (modo visualização)
   ultimoEnvioSaida?: string;
@@ -88,6 +91,7 @@ export interface RouteConfig {
   UltimoEnvioResumoSaida?: string; // Último envio de resumo
   StatusResumoSaida?: string; // Status do resumo: "OK", "Atualizar" ou vazio
   UltimoEnvioNcoletas?: string; // Último envio de não coletas
+  quantidadeNcoletasRegistrada?: number; // Quantidade de não coletas registrada (coluna separada)
   CodigoKmm?: string; // Código KMM da operação para busca de coletas previstas
 }
 

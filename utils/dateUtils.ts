@@ -22,6 +22,23 @@ export function getBrazilDate(): string {
 }
 
 /**
+ * Obtém a data/hora atual no fuso de Brasília no formato dd/MM/yyyy HH:mm:ss
+ * Ex: "22/05/2026 13:21:49"
+ */
+export function getBrazilLocaleDateTime(): string {
+  const now = new Date();
+  const datePart = now.toLocaleDateString('pt-BR', { timeZone: BRAZIL_TIMEZONE });
+  const timePart = now.toLocaleTimeString('pt-BR', {
+    timeZone: BRAZIL_TIMEZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  });
+  return `${datePart} ${timePart}`;
+}
+
+/**
  * Obtém a data/hora atual no fuso de Brasília no formato YYYY-MM-DDTHH:mm:ss
  * Ex: "2026-03-17T10:00:00"
  */

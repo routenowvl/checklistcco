@@ -8,6 +8,7 @@ import NonCollectionsView from './components/NonCollectionsView';
 import SendReportView from './components/SendReportView';
 import MotoristasView from './components/MotoristasView';
 import ViewerUsersView from './components/ViewerUsersView';
+import RouteWebLabView from './components/RouteWebLabView';
 import Login from './components/Login';
 import LoadingScreen from './components/LoadingScreen';
 import PWAInstallPrompt from './components/PWAInstallPrompt';
@@ -82,6 +83,7 @@ const AppContent = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [isViewerOnly, setIsViewerOnly] = useState(false);
+  const [isAllViewer, setIsAllViewer] = useState(false);
   const [collapsed, setCollapsed] = useState(true);
   const [collapsedCategories, setCollapsedCategories] = useState<string[]>([]);
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
@@ -185,7 +187,6 @@ const AppContent = () => {
         setUser(prev => prev ? { ...prev, accessToken: response.accessToken } : prev);
         setSessionExpired(false);
         lastTokenErrorRef.current = 0; // Reset debounce após renovação bem-sucedida
-        console.log('[APP] ✅ Sessão renovada com sucesso');
       }
     } catch (err: any) {
       console.error('[APP] Falha ao renovar sessão:', err.message);
@@ -226,7 +227,6 @@ const AppContent = () => {
       else restoreViewerConsole();
 
       if (viewerOnly && isViewerAuthConfigured() && getAuthMode() !== 'viewer') {
-        console.log('[APP] Perfil viewer detectado. Tentando migrar sessão para o App Registration de visualização...');
         const viewerToken = await ensureViewerAuthSession(user.email, { interactive: false });
 
         if (viewerToken) {
@@ -236,7 +236,6 @@ const AppContent = () => {
           // Revalida acesso com o novo token
           routeAccess = await SharePointService.getRouteConfigsByAccess(viewerToken, user.email, true);
           viewerOnly = routeAccess.configs.length > 0 && !routeAccess.canEdit;
-          console.log('[APP] ✅ Sessão viewer estabelecida com sucesso.');
         } else {
           console.warn('[APP] Não foi possível migrar para o App Registration viewer. Mantendo sessão atual.');
         }
@@ -253,9 +252,9 @@ const AppContent = () => {
       }
 
       setIsViewerOnly(viewerOnly);
+      setIsAllViewer(routeAccess.isAllViewer);
 
       if (viewerOnly) {
-        console.log('[APP] Perfil de visualização detectado. Checklist/Resumo/Histórico geral ocultos.');
         setTasks([]);
         setLocations([]);
         setTeamMembers([]);
@@ -314,7 +313,6 @@ const AppContent = () => {
         const autoSaveFlag = `auto_save_done_${safeEmail}_${todayBrazil}`;
 
         if (localStorage.getItem(autoSaveFlag) !== 'true') {
-          console.log(`[AUTO_SAVE] Executando às ${getBrazilHours()}:${String(getBrazilMinutes()).padStart(2, '0')} (Brasília)`);
           try {
             // Usa sempre o token mais fresco
             const token = await getValidToken() || currentUser.accessToken!;
@@ -326,7 +324,6 @@ const AppContent = () => {
               email: currentUser.email
             });
             localStorage.setItem(autoSaveFlag, 'true');
-            console.log('[AUTO_SAVE] Concluído com sucesso');
           } catch (e) {
             console.error("[AUTO_SAVE] Falha:", e);
           }
@@ -361,6 +358,7 @@ const AppContent = () => {
       stopRefreshLoopRef.current = null;
     }
     clearTokenState();
+    sessionStorage.removeItem('_rd_loaded');
 
     await msalLogout();
     setUser(null);
@@ -420,12 +418,16 @@ const AppContent = () => {
             <>
               <SidebarLink to="/departures" icon={Truck} label="Saídas" active={window.location.hash === '#/departures'} collapsed={collapsed} />
               <SidebarLink to="/nao-coletas" icon={Milk} label="Não Coletas" active={window.location.hash === '#/nao-coletas'} collapsed={collapsed} />
+              {isAllViewer && (
+                <SidebarLink to="/history" icon={History} label="Histórico" active={window.location.hash === '#/history'} collapsed={collapsed} />
+              )}
               {!isViewerOnly && (
                 <>
                   <SidebarLink to="/" icon={CheckSquare} label="Checklist" active={window.location.hash === '#/'} collapsed={collapsed} />
                   <SidebarLink to="/resumo" icon={TowerControl} label="Resumo" active={window.location.hash === '#/resumo'} collapsed={collapsed} />
                   <SidebarLink to="/history" icon={History} label="Histórico" active={window.location.hash === '#/history'} collapsed={collapsed} />
                   <SidebarLink to="/motoristas" icon={Users} label="Motoristas" active={window.location.hash === '#/motoristas'} collapsed={collapsed} />
+                  <SidebarLink to="/route-web" icon={Settings2} label="Route Web" active={window.location.hash === '#/route-web'} collapsed={collapsed} />
                   <SidebarLink to="/usuarios-visualizacao" icon={UserPlus} label="Usuários" active={window.location.hash === '#/usuarios-visualizacao'} collapsed={collapsed} />
                 </>
               )}
@@ -445,6 +447,14 @@ const AppContent = () => {
                    <Settings2 size={20} />
                  </button>
                )}
+               <button
+                 onClick={handleLogout}
+                 className="p-2 w-full flex items-center justify-center gap-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors"
+                 title="Sair"
+               >
+                 <LogOut size={20} />
+                 {!collapsed && <span className="text-sm font-medium">Sair</span>}
+               </button>
                <button onClick={() => setCollapsed(!collapsed)} className="p-2 w-full flex justify-center text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg">
                  {collapsed ? <ChevronRight size={20}/> : <ChevronLeft size={20}/>}
                </button>
@@ -463,9 +473,12 @@ const AppContent = () => {
                 <Route path="/" element={<Navigate to="/departures" replace />} />
                 <Route
                   path="/departures"
-                  element={<RouteDepartureView currentUser={currentUser} onLogout={handleLogout} />}
+                  element={<RouteDepartureView currentUser={currentUser} onLogout={handleLogout} isAllViewer={isAllViewer} />}
                 />
                 <Route path="/nao-coletas" element={<NonCollectionsView currentUser={currentUser} />} />
+                {isAllViewer && (
+                  <Route path="/history" element={<HistoryViewer currentUser={currentUser} viewerMode="saidas" />} />
+                )}
                 <Route path="*" element={<Navigate to="/departures" replace />} />
               </>
             ) : (
@@ -490,12 +503,14 @@ const AppContent = () => {
                     isConfigModalOpen={isConfigModalOpen}
                     setIsConfigModalOpen={setIsConfigModalOpen}
                     onLogout={handleLogout}
+                    isAllViewer={isAllViewer}
                   />
                 } />
                 <Route path="/nao-coletas" element={<NonCollectionsView currentUser={currentUser} />} />
                 <Route path="/resumo" element={<SendReportView currentUser={currentUser} />} />
                 <Route path="/history" element={<HistoryViewer currentUser={currentUser} />} />
                 <Route path="/motoristas" element={<MotoristasView currentUser={currentUser} />} />
+                <Route path="/route-web" element={<RouteWebLabView currentUser={currentUser} />} />
                 <Route path="/usuarios-visualizacao" element={<ViewerUsersView currentUser={currentUser} />} />
               </>
             )}

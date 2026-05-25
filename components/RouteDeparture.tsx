@@ -13,7 +13,7 @@ import {
   ChevronRight, Maximize2, Minimize2,
   Archive, Database, Save, LinkIcon,
   Layers, Trash2, Settings2, Check, Table, SortAsc,
-  Sun, Moon, AlertTriangle, Calendar, ArrowUpDown, MessageCircle, LogOut, Wrench
+  Sun, Moon, AlertTriangle, Calendar, ArrowUpDown, MessageCircle, LogOut, Wrench, Info
 } from 'lucide-react';
 
 const MOTIVOS = [
@@ -358,18 +358,26 @@ const EmailInput: React.FC<EmailInputProps> = ({
   );
 };
 
+const CELULA_EMAIL_MAP: Record<string, string> = {
+  'cco.logistica@viagroup.com.br': 'Célula 1',
+  'cco.logistica2@viagroup.com.br': 'Célula 2',
+  'cco.logistica3@viagroup.com.br': 'Célula 3',
+};
+
 const RouteDepartureView: React.FC<{
   currentUser: User;
   isConfigModalOpen?: boolean;
   setIsConfigModalOpen?: (open: boolean) => void;
   onLogout?: () => void;
-}> = ({ currentUser, isConfigModalOpen = false, setIsConfigModalOpen = () => {}, onLogout }) => {
+  isAllViewer?: boolean;
+}> = ({ currentUser, isConfigModalOpen = false, setIsConfigModalOpen = () => {}, onLogout, isAllViewer = false }) => {
+  const hasLoadedOnce = useRef(sessionStorage.getItem('_rd_loaded') === '1');
   const [routes, setRoutes] = useState<RouteDeparture[]>([]);
   const [userConfigs, setUserConfigs] = useState<RouteConfig[]>([]);
   const [canEditData, setCanEditData] = useState(true);
   const [routeMappings, setRouteMappings] = useState<RouteOperationMapping[]>([]);
   const [motoristas, setMotoristas] = useState<Motorista[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(() => !hasLoadedOnce.current);
   const [isSyncing, setIsSyncing] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [bulkStatus, setBulkStatus] = useState<{ active: boolean, current: number, total: number } | null>(null);
@@ -389,9 +397,15 @@ const RouteDepartureView: React.FC<{
 
   // Controla qual célula da coluna SAÍDA está sendo editada (para mostrar valor completo com data)
   const [editingSaidaCell, setEditingSaidaCell] = useState<string | null>(null);
+  const [saidaOriginalValue, setSaidaOriginalValue] = useState<string>('');
+  const [saidaEditingValue, setSaidaEditingValue] = useState<string>('');
 
   // Armazena os últimos checklists de motorista por operação
   const [lastMotoristaChecklist, setLastMotoristaChecklist] = useState<Record<string, { data: string, porcentagem: string }>>({});
+
+  // Dados de rotas do banco de dados (route_web_routes) para comparação de placa
+  const [dbRoutesMap, setDbRoutesMap] = useState<Record<string, { smartquestion_unloading_plate: string; placa: string; motorista: string; smartquestion_actual_start_time: string | null; roadmap_code: string }>>({});
+  const [dbRoutePopup, setDbRoutePopup] = useState<{ routeId: string; anchorRect: DOMRect } | null>(null);
 
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
   const [isMappingModalOpen, setIsMappingModalOpen] = useState(false);
@@ -505,6 +519,7 @@ const RouteDepartureView: React.FC<{
   const [archivedResults, setArchivedResults] = useState<RouteDeparture[]>([]);
   const [isSearchingArchive, setIsSearchingArchive] = useState(false);
   const [isHistoryFullscreen, setIsHistoryFullscreen] = useState(false);
+  const [historyCelulaFilter, setHistoryCelulaFilter] = useState<string>('todas');
   const archiveAbortRef = useRef<AbortController | null>(null);
   
   // Estado para edição em lote - armazena alterações pendentes
@@ -554,13 +569,24 @@ const RouteDepartureView: React.FC<{
   const [isSortByOperacao, setIsSortByOperacao] = useState(false);
 
   const [activeObsId, setActiveObsId] = useState<string | null>(null);
+  const [delayLogPopupId, setDelayLogPopupId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!delayLogPopupId) return;
+    const handleClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('[data-delay-log-popup]')) {
+        setDelayLogPopupId(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [delayLogPopupId]);
   const [activeMotoristaDropdownId, setActiveMotoristaDropdownId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [activeFilterCol, setActiveFilterCol] = useState<string | null>(null);
   const [colFilters, setColFilters] = useState<Record<string, string>>(() => {
     const saved = sessionStorage.getItem('route_departure_col_filters');
     if (saved) {
-        console.log('[ROUTE_DEPARTURE] Filtros de coluna restaurados:', JSON.parse(saved));
         return JSON.parse(saved);
     }
     return {};
@@ -568,7 +594,6 @@ const RouteDepartureView: React.FC<{
   const [selectedFilters, setSelectedFilters] = useState<Record<string, string[]>>(() => {
     const saved = sessionStorage.getItem('route_departure_selected_filters');
     if (saved) {
-        console.log('[ROUTE_DEPARTURE] Filtros selecionados restaurados:', JSON.parse(saved));
         return JSON.parse(saved);
     }
     return {};
@@ -576,7 +601,6 @@ const RouteDepartureView: React.FC<{
   const [isSortByTimeEnabled, setIsSortByTimeEnabled] = useState(() => {
     const saved = sessionStorage.getItem('route_departure_sort_by_time');
     if (saved) {
-        console.log('[ROUTE_DEPARTURE] Ordenação por horário restaurada:', JSON.parse(saved));
         return JSON.parse(saved);
     }
     return true; // Padrão: ativado ao abrir a tela
@@ -584,15 +608,13 @@ const RouteDepartureView: React.FC<{
   const [colWidths, setColWidths] = useState<Record<string, number>>(() => {
     const saved = sessionStorage.getItem('route_departure_col_widths');
     if (saved) {
-        console.log('[ROUTE_DEPARTURE] Larguras das colunas restauradas:', JSON.parse(saved));
         return JSON.parse(saved);
     }
-    return { rota: 140, data: 125, inicio: 95, motorista: 230, placa: 100, saida: 95, motivo: 170, observacao: 400, geral: 120, operacao: 140, status: 90, tempo: 90 };
+    return { rota: 140, data: 125, inicio: 95, motorista: 230, placa: 100, saida: 95, motivo: 170, observacao: 400, geral: 120, operacao: 140, status: 90, tempo: 90, tempoResposta: 130 };
   });
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(() => {
     const saved = sessionStorage.getItem('route_departure_hidden_cols');
     if (saved) {
-        console.log('[ROUTE_DEPARTURE] Colunas ocultas restauradas:', new Set(JSON.parse(saved)));
         return new Set(JSON.parse(saved));
     }
     return new Set();
@@ -601,10 +623,38 @@ const RouteDepartureView: React.FC<{
   const [checklistTooltip, setChecklistTooltip] = useState<{ routeId: string; content: string } | null>(null);
   const [copiedGeralStatus, setCopiedGeralStatus] = useState<string | null>(null);
   const [hoveredGeralCell, setHoveredGeralCell] = useState<string | null>(null);
+  const [celulaFilter, setCelulaFilter] = useState<string>('todas');
 
   const editableOperationKeys = useMemo(() => (
     new Set(userConfigs.map((cfg) => normalizeOperationKey(cfg.operacao)))
   ), [userConfigs]);
+
+  const celulaOptions = useMemo(() => {
+    if (!isAllViewer) return ['todas'];
+    // Mapeia cada config para sua célula pelo email
+    const celulas = new Set<string>();
+    userConfigs.forEach(c => {
+      const emailKey = (c.email || '').toLowerCase().trim();
+      if (CELULA_EMAIL_MAP[emailKey]) {
+        celulas.add(CELULA_EMAIL_MAP[emailKey]);
+      }
+    });
+    return ['todas', ...Array.from(celulas).sort()];
+  }, [userConfigs, isAllViewer]);
+
+  // Mapeia nome de célula -> set de operações que pertencem àquela célula
+  const celulaToOps = useMemo(() => {
+    const map = new Map<string, Set<string>>();
+    userConfigs.forEach(c => {
+      const emailKey = (c.email || '').toLowerCase().trim();
+      const celula = CELULA_EMAIL_MAP[emailKey];
+      if (celula && c.operacao) {
+        if (!map.has(celula)) map.set(celula, new Set());
+        map.get(celula)!.add(c.operacao);
+      }
+    });
+    return map;
+  }, [userConfigs]);
 
   const canEditOperation = (operacao: string): boolean => {
     if (!canEditData) return false;
@@ -794,6 +844,9 @@ const RouteDepartureView: React.FC<{
   const normalizeMaintenanceDate = (value: string): string => {
     const raw = String(value || '').trim();
     if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+    // Suporta DD/MM/AAAA
+    const brMatch = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (brMatch) return `${brMatch[3]}-${brMatch[2]}-${brMatch[1]}`;
     const parsed = new Date(raw);
     if (Number.isNaN(parsed.getTime())) return '';
     return parsed.toISOString().slice(0, 10);
@@ -917,8 +970,6 @@ const RouteDepartureView: React.FC<{
   // Analisa histórico dos últimos 7 dias e identifica rotas com problemas
   const analyzeRouteHistory = async (token: string) => {
     try {
-      console.log('[ROUTE_ALERT] Analisando histórico dos últimos 7 dias...');
-
       // Calcula data de 7 dias atrás
       const sevenDaysAgo = new Date();
       sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
@@ -928,22 +979,17 @@ const RouteDepartureView: React.FC<{
       // Busca histórico no SharePoint
       const history = await SharePointService.getArchivedDepartures(token, null, startDate, endDate);
 
-      console.log(`[ROUTE_ALERT] ${history.length} registros encontrados, filtrando status Atrasada/Adiantada...`);
-      
       // Log para depuração - verifica statusOp dos registros
       const statusCounts: Record<string, number> = {};
       history.forEach(r => {
         statusCounts[r.statusOp] = (statusCounts[r.statusOp] || 0) + 1;
       });
-      console.log('[ROUTE_ALERT] Status encontrados:', statusCounts);
 
       // Filtra apenas rotas com status "Atrasada/Atrasado" ou "Adiantada/Adiantado"
       const problemRoutes = history.filter(r =>
         r.statusOp === 'Atrasada' || r.statusOp === 'Atrasado' ||
         r.statusOp === 'Adiantada' || r.statusOp === 'Adiantado'
       );
-
-      console.log(`[ROUTE_ALERT] ${problemRoutes.length} registros com problemas`);
 
       // Agrupa por nome de rota
       const alerts: Record<string, { count: number; history: RouteDeparture[] }> = {};
@@ -965,12 +1011,10 @@ const RouteDepartureView: React.FC<{
       });
 
       setRouteAlerts(alerts);
-      console.log(`[ROUTE_ALERT] ✅ ${Object.keys(alerts).length} rotas com alertas de problemas`);
-      
+
       // Log para depuração - mostra primeiras 5 rotas com alertas
       const first5Routes = Object.keys(alerts).slice(0, 5);
       first5Routes.forEach(rota => {
-        console.log(`[ROUTE_ALERT] Rota: ${rota} -> ${alerts[rota].count} ocorrências`);
       });
     } catch (e: any) {
       console.error('[ROUTE_ALERT] Erro ao analisar histórico:', e.message);
@@ -978,11 +1022,9 @@ const RouteDepartureView: React.FC<{
   };
 
   // Analisa histórico dos últimos 30 dias e identifica motoristas com atrasos recorrentes por "Mão de obra"
-  const analyzeMotoristHistory = async (motoristaNome: string, token: string): Promise<{ count: number; history: RouteDeparture[] } | null> => {
+  const analyzeMotoristHistory = async (motoristaNome: string, token: string, motoristaOperacao?: string): Promise<{ count: number; history: RouteDeparture[] } | null> => {
     try {
       if (!motoristaNome || motoristaNome.trim() === '') return null;
-
-      console.log(`[MOTORIST_ALERT] Analisando histórico de "${motoristaNome}" nos últimos 30 dias...`);
 
       // Calcula data de 30 dias atrás
       const thirtyDaysAgo = new Date();
@@ -990,17 +1032,19 @@ const RouteDepartureView: React.FC<{
       const startDate = thirtyDaysAgo.toISOString().split('T')[0];
       const endDate = getBrazilDate();
 
+      // Operações que o usuário tem acesso
+      const userOps = new Set(userConfigs.map(c => c.operacao.trim().toLowerCase()));
+
       // Busca histórico no SharePoint (sem filtrar por operação para pegar todas as ocorrências do motorista)
       const history = await SharePointService.getArchivedDepartures(token, null, startDate, endDate);
 
-      // Filtra apenas registros com motivo "Mão de obra" E o motorista específico
+      // Filtra apenas registros com motivo "Mão de obra", o motorista específico E operações do usuário
       const maodeObraRecords = history.filter(r =>
         r.motivo === 'Mão de obra' &&
         r.motorista &&
-        r.motorista.toLowerCase().trim() === motoristaNome.toLowerCase().trim()
+        r.motorista.toLowerCase().trim() === motoristaNome.toLowerCase().trim() &&
+        r.operacao && userOps.has(r.operacao.trim().toLowerCase())
       );
-
-      console.log(`[MOTORIST_ALERT] ${maodeObraRecords.length} ocorrência(s) de "Mão de obra" para ${motoristaNome}`);
 
       if (maodeObraRecords.length === 0) return null;
 
@@ -1060,7 +1104,8 @@ const RouteDepartureView: React.FC<{
         return;
       }
 
-      console.log(`[MOTORIST_SCAN] ${motoristasWithMaDeObra.size} motorista(s) com "Mão de obra" na tabela:`, Array.from(motoristasWithMaDeObra));
+      // Operações que o usuário tem acesso
+      const userOps = new Set(userConfigs.map(c => c.operacao.trim().toLowerCase()));
 
       // Busca histórico dos últimos 30 dias UMA VEZ (compartilhado entre todos)
       const thirtyDaysAgo = new Date();
@@ -1070,8 +1115,12 @@ const RouteDepartureView: React.FC<{
 
       const history = await SharePointService.getArchivedDepartures(token, null, startDate, endDate);
 
-      // Filtra apenas "Mão de obra"
-      const maodeObraHistory = history.filter(r => r.motivo === 'Mão de obra' && r.motorista && r.motorista.trim() !== '');
+      // Filtra apenas "Mão de obra" E apenas das operações do usuário
+      const maodeObraHistory = history.filter(r =>
+        r.motivo === 'Mão de obra' &&
+        r.motorista && r.motorista.trim() !== '' &&
+        r.operacao && userOps.has(r.operacao.trim().toLowerCase())
+      );
 
       // Agrupa por motorista
       const alerts: Record<string, { count: number; history: RouteDeparture[] }> = {};
@@ -1086,7 +1135,6 @@ const RouteDepartureView: React.FC<{
       });
 
       setMotoristAlerts(alerts);
-      console.log(`[MOTORIST_SCAN] ✅ ${Object.keys(alerts).length} motorista(s) com alertas`);
     } catch (e: any) {
       console.error('[MOTORIST_SCAN] Erro ao escanear alertas:', e.message);
     }
@@ -1222,9 +1270,6 @@ const RouteDepartureView: React.FC<{
       c.operacao.toUpperCase() === operacaoParaBuscar.toUpperCase()
     );
     if (config) {
-      console.log(`[EMAIL_CONFIG] Carregando dados iniciais para ${selectedOperacaoConfig} (buscando: ${operacaoParaBuscar}):`);
-      console.log(`  Envio: ${config.Envio || '(vazio)'}`);
-      console.log(`  Copia: ${config.Copia || '(vazio)'}`);
       setConfigEnvio(config.Envio || '');
       setConfigCopia(config.Copia || '');
       emailConfigLoadedRef.current[selectedOperacaoConfig] = true;
@@ -1257,10 +1302,6 @@ const RouteDepartureView: React.FC<{
       if (isDeale && selectedOperacaoConfig === 'DEALE') {
         operacaoParaSalvar = getDealeAnchorOperation();
       }
-
-      console.log(`[EMAIL_CONFIG] Salvando configuração para ${operacaoParaSalvar} (selecionado: ${selectedOperacaoConfig})`);
-      console.log(`[EMAIL_CONFIG] Envio: ${configEnvio}`);
-      console.log(`[EMAIL_CONFIG] Copia: ${configCopia}`);
 
       await SharePointService.updateRouteConfigEmails(token, operacaoParaSalvar, configEnvio, configCopia);
 
@@ -1296,7 +1337,6 @@ const RouteDepartureView: React.FC<{
         const updated = prev.map(route => {
           // Se tem lock e expirou, remove
           if (route.lockExpiresAt && now > route.lockExpiresAt && route.editingUser) {
-            console.log(`[LOCK_CLEANUP] Lock expirado para ${route.id} (era de ${route.editingUser})`);
             hasChanges = true;
             return { ...route, editingUser: undefined, lockExpiresAt: undefined };
           }
@@ -1520,6 +1560,42 @@ const RouteDepartureView: React.FC<{
     return (parts[0] || 0) * 3600 + (parts[1] || 0) * 60 + (parts[2] || 0);
   };
 
+  /**
+   * Calcula o TempoResposta: diferença entre o horário atual (Brasília) e o horário de saída informado pelo usuário.
+   * Suporta saída no formato "HH:MM:SS" (mesmo dia) ou "DD/MM/AAAA HH:MM:SS" (dia anterior/diferente).
+   * Retorna string no formato "HH:MM:SS" ou "-" se não for possível calcular.
+   */
+  const calculateTempoResposta = (saida: string): string => {
+    if (!saida || saida.trim() === '' || saida.trim() === '-') return '';
+
+    try {
+      const nowBrazil = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+      let saidaMs: number;
+
+      const dateTimeMatch = saida.match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})$/);
+      if (dateTimeMatch) {
+        const [, day, month, year, hour, minute, second] = dateTimeMatch;
+        saidaMs = new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second)).getTime();
+      } else {
+        // Apenas HH:MM:SS - assume mesmo dia (data da rota ou hoje)
+        const [h, m, s] = saida.split(':').map(Number);
+        if (isNaN(h) || isNaN(m) || isNaN(s)) return '';
+        saidaMs = new Date(nowBrazil.getFullYear(), nowBrazil.getMonth(), nowBrazil.getDate(), h, m, s).getTime();
+      }
+
+      const diffMs = nowBrazil.getTime() - saidaMs;
+      if (diffMs < 0) return ''; // saída no futuro, não calcula
+
+      const totalSeconds = Math.floor(diffMs / 1000);
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+      return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    } catch {
+      return '';
+    }
+  };
+
   const secondsToTime = (totalSeconds: number): string => {
     const isNegative = totalSeconds < 0;
     const absSeconds = Math.abs(totalSeconds);
@@ -1547,7 +1623,15 @@ const RouteDepartureView: React.FC<{
     const today = new Date(todayY, todayM - 1, todayD);
     today.setHours(0, 0, 0, 0);
 
-    const [y, m, d] = routeDate.split('-').map(Number);
+    // Suporta ambos os formatos: DD/MM/AAAA e YYYY-MM-DD
+    let y: number, m: number, d: number;
+    const brMatch = routeDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (brMatch) {
+      d = Number(brMatch[1]); m = Number(brMatch[2]); y = Number(brMatch[3]);
+    } else {
+      const parts = routeDate.split('-').map(Number);
+      y = parts[0]; m = parts[1]; d = parts[2];
+    }
     const rDate = new Date(y, m - 1, d);
     rDate.setHours(0, 0, 0, 0);
 
@@ -1886,7 +1970,6 @@ const RouteDepartureView: React.FC<{
     }
 
     const causaRaizSanitizada = (causaRaiz || '').trim();
-    console.log('[CHECKLIST] Salvando:', { routeId, result, causaRaiz: causaRaizSanitizada });
 
     try {
       // Atualiza checklist e causa raiz em uma única operação para evitar sobrescrita por estado antigo.
@@ -1976,22 +2059,16 @@ const RouteDepartureView: React.FC<{
       return;
     }
 
-    // Só mostra loading se NÃO for refresh em segundo plano
-    if (!isBackgroundRefresh) {
+    // Só mostra loading se NÃO for refresh em segundo plano E não tem dados em cache
+    const hasCachedData = routes.length > 0;
+    if (!isBackgroundRefresh && !hasCachedData) {
       setIsLoading(true);
     }
 
     try {
-      console.log('[LOAD_DATA] Buscando dados atualizados...', isBackgroundRefresh ? '(segundo plano)' : '(inicial)');
-      console.log('[LOAD_DATA] Usuário logado:', currentUser.email);
-
-      const routeAccess = await SharePointService.getRouteConfigsByAccess(token, currentUser.email, true);
+      const routeAccess = await SharePointService.getRouteConfigsByAccess(token, currentUser.email, !isBackgroundRefresh);
       const configs = routeAccess.configs || [];
       setCanEditData(Boolean(routeAccess.canEdit));
-
-      console.log('[LOAD_DATA] Configurações carregadas:', configs?.length || 0);
-      console.log('[LOAD_DATA] Operações do usuário:', configs?.map(c => c.operacao));
-      console.log('[LOAD_DATA] Perfil de edição habilitado?', Boolean(routeAccess.canEdit));
 
       // Detecta se é usuário DEALE (para o modal de configurar emails)
       const deale = isDealeUser(configs || []);
@@ -1999,7 +2076,6 @@ const RouteDepartureView: React.FC<{
       setUserConfigs(configs || []);
 
       if (!routeAccess.canEdit) {
-        console.log('[LOAD_DATA] Modo visualização: carregando rotas a partir da coluna Conteudo.');
         setRouteMappings([]);
         setMotoristas([]);
 
@@ -2024,7 +2100,9 @@ const RouteDepartureView: React.FC<{
         });
 
         setRoutes(recalculatedRoutes);
-        await loadMaintenanceAlerts(recalculatedRoutes);
+        loadMaintenanceAlerts(recalculatedRoutes).catch(err =>
+          console.warn('[LOAD_DATA] Falha ao carregar alertas de manutenção:', err?.message || err)
+        );
 
         const motoristaRecords = recalculatedRoutes.filter(r => r.motorista && r.motorista.trim() !== '');
         const byOperation: Record<string, RouteDeparture[]> = {};
@@ -2048,30 +2126,26 @@ const RouteDepartureView: React.FC<{
           }
         });
         setLastMotoristaChecklist(resultChecklist);
-        console.log('[LOAD_DATA] Dados carregados via snapshot para visualização.');
+        setIsLoading(false);
+        hasLoadedOnce.current = true;
+        sessionStorage.setItem('_rd_loaded', '1');
         return;
       }
 
       const [mappings, spData, motoristasData] = await Promise.all([
         SharePointService.getRouteOperationMappings(token),
-        SharePointService.getDepartures(token, true), // force refresh
+        SharePointService.getDepartures(token, !isBackgroundRefresh), // force refresh only on first load
         SharePointService.getMotoristas(token, !isBackgroundRefresh)
       ]);
 
-      console.log('[LOAD_DATA] Total de rotas brutas do SharePoint:', spData?.length || 0);
       setRouteMappings(mappings || []);
       setMotoristas(motoristasData || []);
 
       // Filtra rotas APENAS das operações do usuário logado
       const myOps = new Set((configs || []).map(c => c.operacao));
 
-      // DEBUG: Log detalhe das operações para identificar problemas de comparação
-      console.log('[LOAD_DATA] Operações configuradas (myOps):', Array.from(myOps));
-      console.log('[LOAD_DATA] Total de rotas brutas do SharePoint:', spData?.length || 0);
-
       // Log das primeiras 5 operações únicas nas rotas brutas
       const uniqueOpsInRoutes = Array.from(new Set((spData || []).map(r => r.operacao)));
-      console.log('[LOAD_DATA] Operações únicas nas rotas brutas:', uniqueOpsInRoutes.slice(0, 10));
 
       const filteredByUser = (spData || []).filter(route => {
         // Sem operações configuradas, não retorna dados por segurança
@@ -2079,13 +2153,9 @@ const RouteDepartureView: React.FC<{
         const match = myOps.has(route.operacao);
         if (!match && myOps.size <= 3) {
           // Log apenas para poucos configs (debug)
-          console.log(`[LOAD_DATA] Rota "${route.rota}" NÃO match: operacao="${route.operacao}" não está em myOps`);
         }
         return match;
       });
-
-      console.log('[LOAD_DATA] Rotas filtradas por usuário:', filteredByUser.length);
-      console.log('[LOAD_DATA] Operações nas rotas filtradas:', Array.from(new Set(filteredByUser.map(r => r.operacao))));
 
       // Recalcula status e tempo para todas as rotas FILTRADAS
       const recalculatedRoutes = filteredByUser.map(route => {
@@ -2138,7 +2208,6 @@ const RouteDepartureView: React.FC<{
               }
             }
             if (!hasChanges) {
-              console.log('[LOAD_DATA] Nenhuma mudança detectada — mantendo estado atual');
               return prevRoutes; // Retorna mesma referência — React não re-renderiza
             }
           }
@@ -2159,7 +2228,6 @@ const RouteDepartureView: React.FC<{
             }
           }
 
-          console.log('[LOAD_DATA] Merge concluído —', merged.length, 'rotas');
           return merged;
         });
       } else {
@@ -2167,9 +2235,17 @@ const RouteDepartureView: React.FC<{
         setRoutes(recalculatedRoutes);
       }
 
-      await loadMaintenanceAlerts(recalculatedRoutes);
+      // ✅ Rotas já estão na tela — esconde loading IMEDIATAMENTE
+      setIsLoading(false);
+      hasLoadedOnce.current = true;
+      sessionStorage.setItem('_rd_loaded', '1');
 
-      console.log('[LOAD_DATA] Dados carregados com sucesso');
+      // ── Tudo abaixo roda em background após spinner sumir ──────────
+
+      // Manutenção: carrega em background
+      loadMaintenanceAlerts(recalculatedRoutes).catch(err =>
+        console.warn('[LOAD_DATA] Falha ao carregar alertas de manutenção:', err?.message || err)
+      );
 
       // Analisa histórico dos últimos 7 dias para alertas (apenas no carregamento inicial)
       if (!isBackgroundRefresh) {
@@ -2206,9 +2282,42 @@ const RouteDepartureView: React.FC<{
         setLastMotoristaChecklist(result);
       }
 
-      // Atualiza snapshot de visualização por operação (somente se houver mudança no Conteudo)
-      void syncViewerContentForDepartures(token, configs || [], recalculatedRoutes)
-        .catch((err) => console.error('[VIEWER_CACHE][SAIDAS] Falha ao sincronizar Conteudo:', err?.message || err));
+      // Busca dados de rotas do banco (route_web_routes) em background
+      (async () => {
+        try {
+          const dbDateRef = getBrazilDate();
+          const dbRes = await fetch('/api/route-web-db', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ entity: 'routes', dataReferencia: dbDateRef })
+          });
+          if (dbRes.ok) {
+            const dbJson = await dbRes.json();
+            if (dbJson.success && Array.isArray(dbJson.routes)) {
+              const map: Record<string, { placa: string; motorista: string; smartquestion_actual_start_time: string | null; roadmap_code: string }> = {};
+              for (const r of dbJson.routes) {
+                if (r.roadmap_code) {
+                  map[r.roadmap_code] = {
+                    placa: r.placa || '',
+                    smartquestion_unloading_plate: r.smartquestion_unloading_plate || '',
+                    motorista: r.motorista || '',
+                    smartquestion_actual_start_time: r.smartquestion_actual_start_time || null,
+                    roadmap_code: r.roadmap_code
+                  };
+                }
+              }
+              setDbRoutesMap(map);
+            }
+          }
+        } catch (dbErr: any) {
+          console.warn('[LOAD_DATA] Falha ao buscar DB routes:', dbErr?.message || dbErr);
+        }
+      })();
+
+      // Atualiza snapshot de visualização por operação em background
+      syncViewerContentForDepartures(token, configs || [], recalculatedRoutes).catch(err =>
+        console.error('[VIEWER_CACHE][SAIDAS] Falha ao sincronizar Conteudo:', (err as any)?.message || err)
+      );
     } catch (e: any) {
       console.error('[RouteDeparture] Erro ao carregar dados:', e.message);
       if (!isBackgroundRefresh && (e.message.includes('expired') || e.message.includes('401'))) {
@@ -2217,14 +2326,10 @@ const RouteDepartureView: React.FC<{
       } else if (!isBackgroundRefresh) {
         alert('Erro ao carregar dados: ' + e.message);
       }
-    } finally {
-      if (!isBackgroundRefresh) {
-        setIsLoading(false);
-      }
     }
   };
 
-  useEffect(() => { loadData(); }, [currentUser]);
+  useEffect(() => { loadData(routes.length > 0); }, [currentUser]);
 
   // Função para buscar histórico do SharePoint (usada no modal e no polling)
   const handleSearchArchive = async () => {
@@ -2250,10 +2355,9 @@ const RouteDepartureView: React.FC<{
 
     setIsSearchingArchive(true);
     setHistoryEditWarning(null);
+    setHistoryCelulaFilter('todas');
     try {
-        console.log('[SEARCH_ARCHIVE] Requesting history from SharePoint list {856bf9d5-6081-4360-bcad-e771cbabfda8}...');
         const results = await SharePointService.getArchivedDepartures(await getAccessToken(), null, histStart, histEnd, controller.signal);
-        console.log('[SEARCH_ARCHIVE] Results received:', results.length);
 
         // Só atualiza state se esta requisição não foi cancelada
         if (!controller.signal.aborted) {
@@ -2269,7 +2373,6 @@ const RouteDepartureView: React.FC<{
         }
     } catch (err: any) {
         if (err.name === 'AbortError') {
-          console.log('[SEARCH_ARCHIVE] Requisição cancelada.');
           return;
         }
         console.error('[SEARCH_ARCHIVE] Error during search:', err);
@@ -2289,11 +2392,8 @@ const RouteDepartureView: React.FC<{
     const refreshInterval = setInterval(() => {
       // Se o usuário está editando, NÃO faz polling para evitar lag
       if (isEditingCell) {
-        console.log('[POLLING_ROUTE_DEPARTURE] Pulando atualização (usuário editando)');
         return;
       }
-      console.log('[POLLING_ROUTE_DEPARTURE] Atualização automática de dados (segundo plano)');
-      console.log('[POLLING_ROUTE_DEPARTURE] Usuário:', currentUser.email);
       loadData(true); // true = segundo plano (sem loading, sem spinner)
     }, 30000);
 
@@ -2535,26 +2635,26 @@ const RouteDepartureView: React.FC<{
       let clearCount = 0;
 
       if (routesToArchive.length > 0) {
-        console.log(`[ARCHIVE] Movendo ${routesToArchive.length} itens para o histórico...`);
         const archiveResult = await SharePointService.moveDeparturesToHistory(token, routesToArchive);
         archiveSuccess = archiveResult.success;
         archiveFailed = archiveResult.failed;
-        console.log(`[ARCHIVE] Sucesso: ${archiveSuccess}, Falhas: ${archiveFailed}`);
 
-        // Limpa status de envio apenas das operações arquivadas
-        console.log('[ARCHIVE] Limpando status de envio nas configurações das operações arquivadas...');
-        const opsToClear = Array.from(new Set(routesToArchive.map(r => r.operacao).filter(Boolean)));
-        for (const operacao of opsToClear) {
-          try {
-            await SharePointService.updateUltimoEnvioSaida(token, operacao, '');
-            await SharePointService.updateStatusOperacao(token, operacao, '');
-            await SharePointService.updateUltimoEnvioResumoSaida(token, operacao, '');
-            await SharePointService.updateStatusResumoSaida(token, operacao, '');
-            clearCount++;
-            console.log(`[ARCHIVE] ✅ Status limpo para ${operacao}`);
-          } catch (e: any) {
-            console.error(`[ARCHIVE] Erro ao limpar status de ${operacao}:`, e.message);
+        // Limpa status de envio apenas das operações que foram arquivadas com sucesso
+        if (archiveSuccess > 0) {
+          const opsToClear = Array.from(new Set(routesToArchive.map(r => r.operacao).filter(Boolean)));
+          for (const operacao of opsToClear) {
+            try {
+              await SharePointService.updateUltimoEnvioSaida(token, operacao, '');
+              await SharePointService.updateStatusOperacao(token, operacao, '');
+              await SharePointService.updateUltimoEnvioResumoSaida(token, operacao, '');
+              await SharePointService.updateStatusResumoSaida(token, operacao, '');
+              clearCount++;
+            } catch (e: any) {
+              console.error(`[ARCHIVE] Erro ao limpar status de ${operacao}:`, e.message);
+            }
           }
+        } else {
+          console.warn('[ARCHIVE] Nenhuma rota arquivada com sucesso — mantendo status de envio atual');
         }
       }
 
@@ -2731,7 +2831,8 @@ const RouteDepartureView: React.FC<{
         statusOp: status,
         tempo: gap,
         createdAt: new Date().toISOString(),
-        causaRaiz: ''
+        causaRaiz: '',
+        tempoResposta: ''
       };
 
       const newId = await SharePointService.updateDeparture(token, newRoute);
@@ -2802,7 +2903,8 @@ const RouteDepartureView: React.FC<{
         const rotaName = pendingBulkRoutes[i];
         setBulkStatus((prev: any) => prev ? { ...prev, current: i + 1 } : null);
         const { status, gap } = calculateStatusWithTolerance(ghostRow.inicio || '', ghostRow.saida || '', config?.tolerancia || "00:00:00", ghostRow.data || "");
-        const payload: RouteDeparture = { ...ghostRow, id: '', rota: rotaName, operacao: operacao, statusOp: status, tempo: gap, createdAt: new Date().toISOString() } as RouteDeparture;
+        const tempoResposta = ghostRow.saida ? calculateTempoResposta(ghostRow.saida) : '';
+        const payload: RouteDeparture = { ...ghostRow, id: '', rota: rotaName, operacao: operacao, statusOp: status, tempo: gap, tempoResposta, createdAt: new Date().toISOString() } as RouteDeparture;
         try { const newId = await SharePointService.updateDeparture(token, payload); newRoutes.push({ ...payload, id: newId }); } catch (e) {}
     }
     setRoutes(prev => [...prev, ...newRoutes]);
@@ -2884,6 +2986,9 @@ const RouteDepartureView: React.FC<{
         const resolved = resolveStatusForOperation(updatedRoute.operacao || '', updatedRoute.statusOp || '', status, gap);
         updatedRoute.statusOp = resolved.status;
         updatedRoute.tempo = resolved.gap;
+        if (field === 'saida' && finalValue && finalValue !== '-') {
+            updatedRoute.tempoResposta = calculateTempoResposta(finalValue);
+        }
 
         try {
             await SharePointService.updateDeparture(token, updatedRoute);
@@ -2921,7 +3026,8 @@ const RouteDepartureView: React.FC<{
     id: string,
     field: keyof RouteDeparture,
     value: string,
-    extraUpdates: Partial<RouteDeparture> = {}
+    extraUpdates: Partial<RouteDeparture> = {},
+    isFinalUpdate: boolean = false
   ) => {
     if (!canEditData) return;
 
@@ -2936,7 +3042,6 @@ const RouteDepartureView: React.FC<{
         // Verifica se é campo 'rota' e se tem múltiplas linhas (paste)
         if (field === 'rota' && (value.includes('\n') || value.includes(';'))) {
             const lines = value.split(/[\n;]/).map(l => l.trim()).filter(Boolean);
-            console.log('[GHOST_ROTA] Múltiplas linhas detectadas:', lines);
             if (lines.length > 1) {
                 setPendingBulkRoutes(lines);
                 setIsBulkMappingModalOpen(true);
@@ -2949,8 +3054,7 @@ const RouteDepartureView: React.FC<{
 
         // Se é campo 'rota' e tem valor, abre popup de mapeamento SEMPRE
         if (field === 'rota' && value !== "" && value.trim() !== "") {
-            console.log('[GHOST_ROTA] Buscando mapeamento para:', value, 'Mappings disponíveis:', routeMappings.map(m => m.Title));
-            
+
             // BLOQUEIO: Não permite adicionar rota se há filtros ou ordenação ativos
             if (hasActiveFiltersOrSort) {
                 console.warn('[GHOST_ROTA] Bloqueado - filtros ou ordenação ativos');
@@ -2963,12 +3067,10 @@ const RouteDepartureView: React.FC<{
             const mapping = routeMappings.find(m => m.Title === value);
             if (mapping) {
                 // Já tem mapeamento, aplica diretamente
-                console.log('[GHOST_ROTA] Mapeamento encontrado:', mapping);
                 updatedGhost.operacao = mapping.OPERACAO;
                 setGhostRow(updatedGhost);
             } else {
                 // Não tem mapeamento, abre popup
-                console.log('[GHOST_ROTA] Sem mapeamento, abrindo modal para:', value);
                 // Primeiro atualiza o ghostRow para manter o valor da rota
                 setGhostRow(updatedGhost);
                 setPendingMappingRoute(value);
@@ -2993,7 +3095,8 @@ const RouteDepartureView: React.FC<{
                 const config = userConfigs.find(c => c.operacao === updatedGhost.operacao);
                 const { status, gap } = calculateStatusWithTolerance(updatedGhost.inicio || '', updatedGhost.saida || '', config?.tolerancia || "00:00:00", updatedGhost.data || "");
                 const resolved = resolveStatusForOperation(updatedGhost.operacao || '', updatedGhost.statusOp || '', status, gap);
-                const payload = { ...updatedGhost, statusOp: resolved.status, tempo: resolved.gap, createdAt: new Date().toISOString() } as RouteDeparture;
+                const tempoResposta = updatedGhost.saida ? calculateTempoResposta(updatedGhost.saida) : '';
+                const payload = { ...updatedGhost, statusOp: resolved.status, tempo: resolved.gap, tempoResposta, createdAt: new Date().toISOString() } as RouteDeparture;
                 const newId = await SharePointService.updateDeparture(await getAccessToken(), payload);
                 setRoutes(prev => [...prev, { ...payload, id: newId }]);
 
@@ -3088,6 +3191,27 @@ const RouteDepartureView: React.FC<{
     const resolved = resolveStatusForOperation(updatedRoute.operacao || '', updatedRoute.statusOp || '', status, gap);
     updatedRoute.statusOp = resolved.status;
     updatedRoute.tempo = resolved.gap;
+
+    // Calcula TempoResposta quando o campo saida for preenchido
+    if (field === 'saida' && value && value !== '-') {
+      updatedRoute.tempoResposta = calculateTempoResposta(value);
+    }
+
+    // Gera log de alteração do tempoResposta quando houver mudança real no campo saida (somente na finalização)
+    if (field === 'saida' && isFinalUpdate) {
+      const oldValue = saidaOriginalValue.trim();
+      const newValue = (value || '').trim();
+      if (oldValue !== newValue) {
+        try {
+          const nowBR = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+          const ts = `${String(nowBR.getDate()).padStart(2,'0')}/${String(nowBR.getMonth()+1).padStart(2,'0')}/${nowBR.getFullYear()} ${String(nowBR.getHours()).padStart(2,'0')}:${String(nowBR.getMinutes()).padStart(2,'0')}:${String(nowBR.getSeconds()).padStart(2,'0')}`;
+          const logEntry = { hora: ts, usuario: currentUser.email, campo: 'saida', de: oldValue || null, para: newValue || null, tempoResposta: updatedRoute.tempoResposta || '' };
+          const existingLogs = updatedRoute.logTempoResposta ? JSON.parse(updatedRoute.logTempoResposta) : [];
+          existingLogs.push(logEntry);
+          updatedRoute.logTempoResposta = JSON.stringify(existingLogs);
+        } catch { /* ignora erro de parse do log */ }
+      }
+    }
 
     // Limpa motivo e observação se o status não for de atraso/adiantamento e não for manutenção
     const effectiveStatus = updatedRoute.statusOp || '';
@@ -3229,7 +3353,6 @@ const RouteDepartureView: React.FC<{
     const editableIds = editIds.filter((id) => !blockedIds.includes(id));
     if (editableIds.length === 0) return;
 
-    console.log(`[HISTORY_BATCH_SAVE] Salvando ${editableIds.length} edições pendentes...`);
     setIsSyncing(true);
 
     let successCount = 0;
@@ -3267,7 +3390,6 @@ const RouteDepartureView: React.FC<{
           // Salva no SharePoint
           await SharePointService.updateArchivedDeparture(token, updatedRoute);
           successCount++;
-          console.log(`[HISTORY_SAVE] ✅ Rota ${id} atualizada com sucesso`);
         } catch (e: any) {
           errorCount++;
           console.error(`[HISTORY_SAVE] Erro ao atualizar ${id}:`, e.message);
@@ -3312,7 +3434,6 @@ const RouteDepartureView: React.FC<{
 
       // Feedback para o usuário
       if (errorCount === 0) {
-        console.log(`[HISTORY_SAVE] ✅ ${successCount} edições salvas com sucesso!`);
       } else {
         alert(`⚠️ ${successCount} edições salvas, ${errorCount} falharam.`);
       }
@@ -3388,6 +3509,14 @@ const RouteDepartureView: React.FC<{
   // Aplica filtros aos resultados do histórico e ordena por data/hora (da mais antiga para a mais recente)
   const filteredArchivedResults = useMemo(() => {
     let result = archivedResults;
+
+    // Filtro de célula
+    if (historyCelulaFilter !== 'todas') {
+      const opsDaCelula = celulaToOps.get(historyCelulaFilter);
+      if (opsDaCelula) {
+        result = result.filter(r => opsDaCelula.has(r.operacao));
+      }
+    }
 
     // Aplica os filtros selecionados
     if (hasHistoryActiveColFilters) {
@@ -3498,7 +3627,7 @@ const RouteDepartureView: React.FC<{
     }
 
     return sorted;
-  }, [archivedResults, historySelectedFilters, hasHistoryActiveColFilters, historySortByOperacao]);
+  }, [archivedResults, historySelectedFilters, hasHistoryActiveColFilters, historySortByOperacao, historyCelulaFilter, celulaToOps]);
 
   // Converte data YYYY-MM-DD para DD/MM/AAAA (parse manual para evitar fuso)
   const formatDateToBR = (dateString: string) => {
@@ -3794,6 +3923,10 @@ const RouteDepartureView: React.FC<{
     const myOps = new Set(userConfigs.map(c => c.operacao));
     let result = routes.filter(r => {
         if (myOps.size === 0) return false;
+        if (celulaFilter !== 'todas') {
+          const opsDaCelula = celulaToOps.get(celulaFilter);
+          if (!opsDaCelula || !opsDaCelula.has(r.operacao)) return false;
+        }
         return myOps.has(r.operacao);
     });
 
@@ -3816,7 +3949,8 @@ const RouteDepartureView: React.FC<{
             // Converte data + início em timestamp para comparação
             const getTimestamp = (route: RouteDeparture) => {
                 if (!route.data || !route.inicio) return 0;
-                const [year, month, day] = route.data.split('-').map(Number);
+                const brM = route.data.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+                const [year, month, day] = brM ? [Number(brM[3]), Number(brM[2]), Number(brM[1])] : route.data.split('-').map(Number);
                 const timeParts = route.inicio.split(':').map(Number);
                 const date = new Date(year, month - 1, day, timeParts[0] || 0, timeParts[1] || 0, timeParts[2] || 0);
                 return date.getTime();
@@ -3835,7 +3969,7 @@ const RouteDepartureView: React.FC<{
     }
 
     return result;
-  }, [routes, colFilters, selectedFilters, isSortByTimeEnabled, isSortByOperacao, userConfigs]);
+  }, [routes, colFilters, selectedFilters, isSortByTimeEnabled, isSortByOperacao, userConfigs, celulaFilter, celulaToOps]);
 
   // Cálculo dos indicadores GERAL e INTERNO - memoizado para evitar re-renderização desnecessária
   const [performanceIndicators, setPerformanceIndicators] = useState({ geral: '0.00', interno: '0.00' });
@@ -3845,6 +3979,10 @@ const RouteDepartureView: React.FC<{
     const myOps = new Set(userConfigs.map(c => c.operacao));
     const allUserRoutes = routes.filter(r => {
       if (myOps.size === 0) return false;
+      if (celulaFilter !== 'todas') {
+        const opsDaCelula = celulaToOps.get(celulaFilter);
+        if (!opsDaCelula || !opsDaCelula.has(r.operacao)) return false;
+      }
       return myOps.has(r.operacao);
     });
 
@@ -3876,16 +4014,75 @@ const RouteDepartureView: React.FC<{
       }
       return { geral, interno };
     });
-  }, [routes.length, userConfigs.length]); // Apenas quantidade importa para estabilidade
+  }, [routes.length, userConfigs.length, celulaFilter, celulaToOps]); // Apenas quantidade importa para estabilidade
 
   const tableColumns = [
     { id: 'rota', label: 'ROTA' }, { id: 'data', label: 'DATA' }, { id: 'inicio', label: 'INÍCIO' },
     { id: 'motorista', label: 'MOTORISTA' }, { id: 'placa', label: 'PLACA' }, { id: 'saida', label: 'SAÍDA' },
     { id: 'motivo', label: 'MOTIVO' }, { id: 'observacao', label: 'OBSERVAÇÃO' }, { id: 'geral', label: 'GERAL' },
-    { id: 'operacao', label: 'OPERAÇÃO' }, { id: 'status', label: 'STATUS' }, { id: 'tempo', label: 'TEMPO' }
+    { id: 'operacao', label: 'OPERAÇÃO' }, { id: 'status', label: 'STATUS' }, { id: 'tempo', label: 'TEMPO' }, { id: 'tempoResposta', label: 'DELAY DE MAPEAMENTO' }
   ];
 
-  if (isLoading) return <div className="h-full flex flex-col items-center justify-center text-primary-500 gap-4"><Loader2 size={48} className="animate-spin" /><p className="font-bold text-[10px] uppercase tracking-widest">Carregando Grid...</p></div>;
+  if (isLoading) {
+    // Primeira abertura do app (sessão): splash com logo VIA
+    if (!hasLoadedOnce.current) {
+      return (
+        <div className="splash-loading">
+          <div className="splash-bg-glow" />
+          <div className="splash-inner">
+            <img src="/logo.png" alt="VIA" className="splash-logo-anim" />
+            <div className="splash-dots-anim">
+              <span></span><span></span><span></span>
+            </div>
+          </div>
+          <style>{`
+            .splash-loading {
+              position: fixed; inset: 0; z-index: 99999;
+              display: flex; align-items: center; justify-content: center;
+              background: #05080f;
+            }
+            .splash-bg-glow {
+              position: absolute; inset: 0;
+              background: radial-gradient(ellipse at 50% 50%, rgba(0,212,255,0.08) 0%, transparent 70%);
+            }
+            .splash-inner {
+              position: relative; z-index: 1;
+              display: flex; flex-direction: column; align-items: center; gap: 32px;
+            }
+            .splash-logo-anim {
+              width: 220px; height: auto;
+              animation: splashFloat 3s ease-in-out infinite;
+              filter: drop-shadow(0 0 40px rgba(0,212,255,0.25));
+            }
+            @keyframes splashFloat {
+              0%, 100% { transform: translateY(0px); }
+              50% { transform: translateY(-18px); }
+            }
+            .splash-dots-anim {
+              display: flex; gap: 10px;
+            }
+            .splash-dots-anim span {
+              width: 8px; height: 8px; border-radius: 50%;
+              background: rgba(0,212,255,0.4);
+              animation: splashPulse 1.4s ease-in-out infinite;
+            }
+            .splash-dots-anim span:nth-child(2) { animation-delay: 0.2s; }
+            .splash-dots-anim span:nth-child(3) { animation-delay: 0.4s; }
+            @keyframes splashPulse {
+              0%, 80%, 100% { transform: scale(0.6); opacity: 0.3; background: rgba(0,212,255,0.3); }
+              40% { transform: scale(1.2); opacity: 1; background: rgba(0,212,255,0.9); }
+            }
+          `}</style>
+        </div>
+      );
+    }
+    // Navegação entre telas: spinner simples
+    return (
+      <div className="flex items-center justify-center h-full">
+        <Loader2 size={36} className="animate-spin text-blue-500" />
+      </div>
+    );
+  }
 
   return (
     <div className={`flex flex-col h-full p-4 overflow-hidden select-none font-sans animate-fade-in relative ${isDarkMode ? 'bg-[#020617]' : 'bg-gradient-to-br from-white via-slate-50/50 to-slate-50'}`}>
@@ -3934,6 +4131,27 @@ const RouteDepartureView: React.FC<{
               </div>
               <div className="w-2 h-2 bg-purple-500 rounded-full animate-pulse shrink-0"></div>
             </div>
+            <div className={`flex items-center gap-3 px-6 py-3 rounded-2xl min-w-[140px] ${isDarkMode ? 'bg-amber-900/30 border border-amber-700/50' : 'bg-amber-100 border border-amber-300'}`}>
+              <div className="text-center flex-1">
+                <p className={`text-[9px] font-black uppercase tracking-wider mb-1 ${isDarkMode ? 'text-amber-400' : 'text-amber-700'}`}>Delay Verificação</p>
+                <p className={`text-2xl font-black leading-none ${isDarkMode ? 'text-amber-400' : 'text-amber-700'}`}>{filteredRoutes.filter(r => { if (!r.tempoResposta) return false; const h = parseInt(r.tempoResposta.split(':')[0], 10); return h >= 1; }).length}</p>
+              </div>
+              <div className="w-2 h-2 bg-amber-500 rounded-full animate-pulse shrink-0"></div>
+            </div>
+            {/* Filtro de Célula */}
+            {isAllViewer && celulaOptions.length > 1 && (
+              <select
+                value={celulaFilter}
+                onChange={(e) => setCelulaFilter(e.target.value)}
+                className={`ml-3 px-3 py-2 rounded-xl text-[10px] font-bold uppercase outline-none cursor-pointer ${isDarkMode ? 'bg-slate-800 text-slate-200 border border-slate-700' : 'bg-white text-slate-700 border border-slate-300'}`}
+              >
+                {celulaOptions.map(op => (
+                  <option key={op} value={op}>
+                    {op === 'todas' ? 'Todas as Células' : op}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
         </div>
         <div className="flex gap-2 items-center">
@@ -4337,10 +4555,8 @@ const RouteDepartureView: React.FC<{
 
                       // Extrai apenas o horário para exibição se houver data completa, senão mostra o valor completo
                       const displayValue = (() => {
+                        if (isEditing) return saidaEditingValue;
                         if (!route.saida || route.saida === '-') return route.saida || '';
-                        // Se está editando, mostra o valor completo (com data)
-                        if (isEditing) return route.saida;
-                        // Se não está editando e tem data completa, mostra apenas horário
                         const dateTimeMatch = route.saida.match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})$/);
                         if (dateTimeMatch) {
                           return `${dateTimeMatch[4]}:${dateTimeMatch[5]}:${dateTimeMatch[6]}`;
@@ -4348,32 +4564,47 @@ const RouteDepartureView: React.FC<{
                         return route.saida;
                       })();
 
+                      // Verifica divergência de placa com o banco de dados
+                      const dbRouteInfo = route.rota ? dbRoutesMap[route.rota] : undefined;
+                      const hasSmartPlate = dbRouteInfo && dbRouteInfo.smartquestion_unloading_plate && dbRouteInfo.smartquestion_unloading_plate.trim() !== '';
+                      const hasPlacaMismatch = hasSmartPlate
+                        && route.placa
+                        && route.placa.trim() !== ''
+                        && dbRouteInfo.smartquestion_unloading_plate.trim() !== ''
+                        && route.placa.trim().toUpperCase() !== dbRouteInfo.smartquestion_unloading_plate.trim().toUpperCase();
+
                       return (
-                        <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
+                        <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px', position: 'relative' }}>
                           <input
                             type="text"
                             value={displayValue}
                             placeholder="--:--:--"
-                            onFocus={() => setEditingSaidaCell(route.id!)}
+                            onFocus={() => {
+                              const raw = route.saida || '';
+                              setEditingSaidaCell(route.id!);
+                              setSaidaOriginalValue(raw.trim());
+                              setSaidaEditingValue(raw);
+                            }}
                             onBlur={(e) => {
                                 setEditingSaidaCell(null);
                                 const val = e.target.value;
+                                // Determina o valor final formatado
+                                let finalVal: string;
                                 if (val === '-') {
-                                    updateCell(route.id!, 'saida', '-');
+                                    finalVal = '-';
                                 } else if (!val.trim()) {
-                                    // Campo vazio - limpa
-                                    updateCell(route.id!, 'saida', '');
+                                    finalVal = '';
                                 } else {
-                                    // Verifica se usuário digitou data completa (DD/MM/AAAA HH:MM:SS)
                                     const fullDateTimeMatch = val.match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})$/);
                                     if (fullDateTimeMatch) {
-                                        // Salva data e hora completas
-                                        updateCell(route.id!, 'saida', val);
+                                        finalVal = val;
                                     } else {
-                                        // Apenas horário - formata como HH:MM:SS
-                                        const formatted = formatTimeInput(val);
-                                        updateCell(route.id!, 'saida', formatted);
+                                        finalVal = formatTimeInput(val);
                                     }
+                                }
+                                // Só atualiza se houve mudança real em relação ao valor original (antes da digitação)
+                                if (finalVal !== saidaOriginalValue) {
+                                    updateCell(route.id!, 'saida', finalVal, {}, true);
                                 }
                             }}
                             onKeyDown={(e) => {
@@ -4382,15 +4613,7 @@ const RouteDepartureView: React.FC<{
                                 }
                             }}
                             onChange={(e) => {
-                                const val = e.target.value;
-                                // Permite digitação livre sem formatação automática
-                                // A formatação só ocorre no onBlur
-                                if (val === '-') {
-                                    updateCell(route.id!, 'saida', '-');
-                                } else {
-                                    // Atualiza diretamente para permitir digitação fluida
-                                    updateCell(route.id!, 'saida', val);
-                                }
+                                setSaidaEditingValue(e.target.value);
                             }}
                             onPaste={(e: any) => {
                                 const pastedText = e.clipboardData.getData('text').trim();
@@ -4400,12 +4623,28 @@ const RouteDepartureView: React.FC<{
                                 if (pastedText.includes('\n')) {
                                     handleMultilinePaste('saida', rowIndex, pastedText);
                                 } else {
-                                    // Paste de valor único - insere diretamente
-                                    updateCell(route.id!, 'saida', pastedText);
+                                    // Paste de valor único - insere no estado local de edição
+                                    setSaidaEditingValue(pastedText);
                                 }
                             }}
                             className={`${inputClass} font-mono text-center`}
                           />
+                          {hasSmartPlate && (
+                            <span
+                              className="absolute right-0.5 top-0.5 cursor-pointer z-10"
+                              title={hasPlacaMismatch ? "Divergência de placa — clique para ver dados do Smart" : "Dados do Smart — clique para ver"}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const rect = (e.target as HTMLElement).getBoundingClientRect();
+                                setDbRoutePopup({ routeId: route.id!, anchorRect: rect });
+                              }}
+                            >
+                              {hasPlacaMismatch
+                                ? <AlertTriangle size={13} className="text-amber-500 dark:text-amber-400" />
+                                : <Info size={12} className="text-blue-400 dark:text-blue-500 hover:text-blue-600 dark:hover:text-blue-400 transition-colors" />
+                              }
+                            </span>
+                          )}
                         </td>
                       );
                     }
@@ -4677,6 +4916,54 @@ const RouteDepartureView: React.FC<{
                       );
                     }
 
+                    if (col.id === 'tempoResposta') {
+                      const isDelayOver1h = route.tempoResposta && parseInt(route.tempoResposta.split(':')[0], 10) >= 1;
+                      const hasLogs = route.logTempoResposta && route.logTempoResposta !== '[]';
+                      const showPopup = delayLogPopupId === route.id;
+                      let parsedLogs: any[] = [];
+                      if (hasLogs) { try { parsedLogs = JSON.parse(route.logTempoResposta!); } catch {} }
+                      return (
+                        <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px', position: 'relative' }}>
+                          <div className={`w-full flex items-center justify-center gap-1 text-[10px] font-bold ${isDelayOver1h ? 'px-2 py-0.5' : ''}`}>
+                            <span className={isDelayOver1h ? `inline-block px-2 py-0.5 rounded-full text-[10px] font-black ${isDarkMode ? 'bg-red-900/60 text-red-300' : 'bg-red-100 text-red-700'}` : ''}>
+                              {route.tempoResposta || '---'}
+                            </span>
+                            {hasLogs && (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setDelayLogPopupId(showPopup ? null : route.id!); }}
+                                className={`shrink-0 p-0.5 rounded-full transition-colors ${showPopup ? (isDarkMode ? 'text-primary-400 bg-primary-500/20' : 'text-primary-600 bg-primary-100') : (isDarkMode ? 'text-slate-500 hover:text-primary-400' : 'text-slate-400 hover:text-primary-600')}`}
+                              >
+                                <Info size={12} />
+                              </button>
+                            )}
+                          </div>
+                          {showPopup && hasLogs && (
+                            <div data-delay-log-popup className={`absolute z-[200] left-1/2 -translate-x-1/2 top-full mt-1 w-[300px] rounded-lg shadow-2xl border ${isDarkMode ? 'bg-slate-800 border-slate-600' : 'bg-white border-slate-300'}`} style={{ overflow: 'hidden' }}>
+                              <div className={`flex items-center justify-between px-3 py-2 border-b ${isDarkMode ? 'border-slate-700 bg-slate-900/50' : 'border-slate-200 bg-slate-50'}`}>
+                                <span className={`text-[9px] font-black uppercase tracking-wider ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Log de Alterações</span>
+                                <button onClick={() => setDelayLogPopupId(null)} className={`p-0.5 rounded ${isDarkMode ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600'}`}><X size={12} /></button>
+                              </div>
+                              <div className="max-h-[200px] overflow-y-auto">
+                                {parsedLogs.map((l: any, idx: number) => (
+                                  <div key={idx} className={`px-3 py-1.5 border-b last:border-b-0 ${isDarkMode ? 'border-slate-700/50' : 'border-slate-100'}`}>
+                                    <p className={`text-[9px] font-mono font-bold ${isDarkMode ? 'text-primary-400' : 'text-primary-600'}`}>Data/Hora: {l.hora || '---'}</p>
+                                    <p className={`text-[9px] ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                                      Alteração: <span className="font-semibold">{l.de || 'vazio'}</span> → <span className="font-semibold">{l.para || 'vazio'}</span>
+                                    </p>
+                                    {l.tempoResposta && <p className={`text-[8px] font-mono mt-0.5 ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>Delay ajustado: {l.tempoResposta}</p>}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </td>
+                      );
+                    }
+
+                    if (col.id === 'logTempoResposta') {
+                      return null;
+                    }
+
                     return null;
                   })}
                   <td className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} flex items-center justify-center gap-1`} style={{ verticalAlign: 'middle', minHeight: '48px' }}>
@@ -4939,11 +5226,15 @@ const RouteDepartureView: React.FC<{
                               }}
                               onBlur={(e) => {
                                   const val = e.target.value;
+                                  const originalVal = (route.saida || '').trim();
+                                  let finalVal: string;
                                   if (val === '-') {
-                                      updateCell(route.id!, 'saida', '-');
+                                      finalVal = '-';
                                   } else {
-                                      const formatted = formatTimeInput(val);
-                                      updateCell(route.id!, 'saida', formatted);
+                                      finalVal = formatTimeInput(val);
+                                  }
+                                  if (finalVal !== originalVal) {
+                                      updateCell(route.id!, 'saida', finalVal, {}, true);
                                   }
                               }}
                               className={`${inputClass} font-mono text-center`}
@@ -5007,6 +5298,54 @@ const RouteDepartureView: React.FC<{
                           </div>
                         </td>
                       );
+                    }
+
+                    if (col.id === 'tempoResposta') {
+                      const isDelayOver1h = route.tempoResposta && parseInt(route.tempoResposta.split(':')[0], 10) >= 1;
+                      const hasLogs = route.logTempoResposta && route.logTempoResposta !== '[]';
+                      const showPopup = delayLogPopupId === route.id;
+                      let parsedLogs: any[] = [];
+                      if (hasLogs) { try { parsedLogs = JSON.parse(route.logTempoResposta!); } catch {} }
+                      return (
+                        <td key={cellKey} className={`p-0 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}`} style={{ verticalAlign: 'middle', minHeight: '48px', position: 'relative' }}>
+                          <div className={`w-full flex items-center justify-center gap-1 text-[10px] font-bold ${isDelayOver1h ? 'px-2 py-0.5' : ''}`}>
+                            <span className={isDelayOver1h ? `inline-block px-2 py-0.5 rounded-full text-[10px] font-black ${isDarkMode ? 'bg-red-900/60 text-red-300' : 'bg-red-100 text-red-700'}` : ''}>
+                              {route.tempoResposta || '---'}
+                            </span>
+                            {hasLogs && (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setDelayLogPopupId(showPopup ? null : route.id!); }}
+                                className={`shrink-0 p-0.5 rounded-full transition-colors ${showPopup ? (isDarkMode ? 'text-primary-400 bg-primary-500/20' : 'text-primary-600 bg-primary-100') : (isDarkMode ? 'text-slate-500 hover:text-primary-400' : 'text-slate-400 hover:text-primary-600')}`}
+                              >
+                                <Info size={12} />
+                              </button>
+                            )}
+                          </div>
+                          {showPopup && hasLogs && (
+                            <div data-delay-log-popup className={`absolute z-[200] left-1/2 -translate-x-1/2 top-full mt-1 w-[300px] rounded-lg shadow-2xl border ${isDarkMode ? 'bg-slate-800 border-slate-600' : 'bg-white border-slate-300'}`} style={{ overflow: 'hidden' }}>
+                              <div className={`flex items-center justify-between px-3 py-2 border-b ${isDarkMode ? 'border-slate-700 bg-slate-900/50' : 'border-slate-200 bg-slate-50'}`}>
+                                <span className={`text-[9px] font-black uppercase tracking-wider ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Log de Alterações</span>
+                                <button onClick={() => setDelayLogPopupId(null)} className={`p-0.5 rounded ${isDarkMode ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600'}`}><X size={12} /></button>
+                              </div>
+                              <div className="max-h-[200px] overflow-y-auto">
+                                {parsedLogs.map((l: any, idx: number) => (
+                                  <div key={idx} className={`px-3 py-1.5 border-b last:border-b-0 ${isDarkMode ? 'border-slate-700/50' : 'border-slate-100'}`}>
+                                    <p className={`text-[9px] font-mono font-bold ${isDarkMode ? 'text-primary-400' : 'text-primary-600'}`}>Data/Hora: {l.hora || '---'}</p>
+                                    <p className={`text-[9px] ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                                      Alteração: <span className="font-semibold">{l.de || 'vazio'}</span> → <span className="font-semibold">{l.para || 'vazio'}</span>
+                                    </p>
+                                    {l.tempoResposta && <p className={`text-[8px] font-mono mt-0.5 ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>Delay ajustado: {l.tempoResposta}</p>}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </td>
+                      );
+                    }
+
+                    if (col.id === 'logTempoResposta') {
+                      return null;
                     }
 
                     return null;
@@ -5291,75 +5630,124 @@ const RouteDepartureView: React.FC<{
         </div>
       )}
 
+      {dbRoutePopup && (() => {
+        const dbRoute = routes.find(rt => rt.id === dbRoutePopup.routeId);
+        const dbInfo = dbRoute?.rota ? dbRoutesMap[dbRoute.rota] : null;
+        if (!dbInfo) { setDbRoutePopup(null); return null; }
+        const hasMismatch = dbRoute?.placa && dbRoute.placa.trim() !== '' && dbInfo.smartquestion_unloading_plate.trim() !== '' && dbRoute.placa.trim().toUpperCase() !== dbInfo.smartquestion_unloading_plate.trim().toUpperCase();
+        const rect = dbRoutePopup.anchorRect;
+        const popupLeft = Math.min(rect.left, window.innerWidth - 260);
+        const popupTop = rect.bottom + 4;
+        const formatSmartTime = (isoStr: string) => {
+          const match = isoStr.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/);
+          if (!match) return isoStr;
+          const [, y, mo, d, hh, mm, ss] = match;
+          const timeOnly = `${hh}:${mm}:${ss}`;
+          if (dbRoute?.data) {
+            const dbBr = dbRoute.data.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+            const [rd, rm, ry] = dbBr ? [Number(dbBr[1]), Number(dbBr[2]), Number(dbBr[3])] : dbRoute.data.split('-').map(Number);
+            if (Number(d) !== rd || Number(mo) !== rm || Number(y) !== ry) {
+              return `${d}/${mo} ${timeOnly}`;
+            }
+          }
+          return timeOnly;
+        };
+        return (
+          <div
+            className="fixed inset-0 z-[150]"
+            onClick={() => setDbRoutePopup(null)}
+          >
+            <div
+              className={`fixed z-[151] rounded-lg shadow-xl border text-[11px] font-medium select-text ${isDarkMode ? 'bg-slate-800 border-slate-600 text-slate-100' : 'bg-white border-slate-300 text-slate-800'}`}
+              style={{ left: popupLeft, top: popupTop, minWidth: '220px', padding: '10px 12px' }}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-1.5 mb-2">
+                {hasMismatch
+                  ? <AlertTriangle size={13} className="text-amber-500" />
+                  : <Info size={13} className="text-blue-400" />
+                }
+                <span className={`font-bold text-[10px] ${hasMismatch ? 'text-amber-600 dark:text-amber-400' : 'text-blue-500 dark:text-blue-400'}`}>Informações Smartquestion</span>
+              </div>
+              <div className="space-y-1">
+                <div className="flex justify-between gap-3">
+                  <span className="text-slate-500 dark:text-slate-400">Placa:</span>
+                  <span className="font-bold font-mono">{dbInfo.smartquestion_unloading_plate || dbInfo.placa || '—'}</span>
+                </div>
+                {/* Motorista oculto — será ativado com campo do smartquestion */}
+                {false && dbInfo.motorista && (
+                <div className="flex justify-between gap-3">
+                  <span className="text-slate-500 dark:text-slate-400">Motorista:</span>
+                  <span className="font-bold">{dbInfo.motorista}</span>
+                </div>
+                )}
+                {dbInfo.smartquestion_actual_start_time && (
+                  <div className="flex justify-between gap-3">
+                    <span className="text-slate-500 dark:text-slate-400">Saída:</span>
+                    <span className="font-bold font-mono">{formatSmartTime(dbInfo.smartquestion_actual_start_time)}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {isHistoryModalOpen && (
           <div className={`fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[200] flex items-center justify-center p-4 ${isHistoryFullscreen ? 'p-0' : ''}`}>
-              <div className={`bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-[2.5rem] shadow-2xl w-full flex flex-col ${isHistoryFullscreen ? 'max-w-none w-full h-full rounded-none' : 'max-w-7xl max-h-[90vh]'}`}>
-                  <div className="bg-[#1e293b] p-6 flex justify-between items-center text-white shrink-0">
-                      <div className="flex items-center gap-4">
-                          <Database size={24} />
-                          <h3 className="font-black uppercase tracking-widest text-base">Histórico Definitivo</h3>
-                          {archivedResults.length > 0 && (
-                              <span className="text-[10px] font-bold text-slate-400 bg-slate-800 px-3 py-1 rounded-full">
-                                  {archivedResults.length} registro(s)
-                              </span>
-                          )}
-                          {/* Indicador de edições pendentes */}
-                          {Object.keys(pendingHistoryEdits).length > 0 && (
-                              <span className="text-[10px] font-black uppercase tracking-widest text-amber-400 bg-amber-900/30 px-3 py-1 rounded-full border border-amber-600 animate-pulse">
-                                  {Object.keys(pendingHistoryEdits).length} alteração(ões) pendente(s) - Pressione ENTER para salvar
-                              </span>
-                          )}
-                      </div>
-                      <div className="flex items-center gap-2">
-                          {/* Botão de salvar edições pendentes */}
-                          {canEditData && Object.keys(pendingHistoryEdits).length > 0 && (
-                              <button
-                                  onClick={savePendingHistoryEdits}
-                                  disabled={isSyncing}
-                                  className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black uppercase text-[10px] rounded-xl shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
-                                  title="Salvar alterações (Enter)"
-                              >
-                                  {isSyncing ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-                                  SALVAR ({Object.keys(pendingHistoryEdits).length})
-                              </button>
-                          )}
-                          <button
-                              onClick={() => setIsHistoryFullscreen(!isHistoryFullscreen)}
-                              className="p-2 hover:bg-slate-700 rounded-lg transition-colors"
-                              title={isHistoryFullscreen ? 'Sair da tela cheia' : 'Tela cheia'}
-                          >
-                              {isHistoryFullscreen ? <Minimize2 size={20} /> : <Maximize2 size={20} />}
-                          </button>
-                          <button onClick={() => { setIsHistoryModalOpen(false); setHistoryEditWarning(null); setEditingHistoryId(null); setEditingHistoryField(null); setPendingHistoryEdits({}); }} className="p-2 hover:bg-slate-700 rounded-lg transition-colors">
-                              <X size={28} />
-                          </button>
-                      </div>
-                  </div>
+              <div className={`bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-[2.5rem] shadow-2xl w-full flex flex-col ${isHistoryFullscreen ? 'max-w-none w-full h-full rounded-none' : 'max-w-7xl max-h-[94vh]'}`}>
                   {historyEditWarning && (
-                      <div className="mx-6 mt-4 mb-2 px-4 py-3 rounded-xl border border-amber-300 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-700 text-amber-800 dark:text-amber-200 text-[11px] font-bold flex items-start gap-2">
+                      <div className="mx-5 mt-2 mb-1 px-3 py-2 rounded-xl border border-amber-300 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-700 text-amber-800 dark:text-amber-200 text-[10px] font-bold flex items-start gap-2">
                           <AlertTriangle size={16} className="mt-0.5 shrink-0" />
                           <span>{historyEditWarning}</span>
                       </div>
                   )}
-                  <div className="p-6 bg-slate-50 dark:bg-slate-900 border-b dark:border-slate-800 grid grid-cols-4 gap-4 shrink-0">
-                      <input type="date" value={histStart} onChange={e => setHistStart(e.target.value)} className="p-3 border dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-[11px] font-bold outline-none dark:text-white" />
-                      <input type="date" value={histEnd} onChange={e => setHistEnd(e.target.value)} className="p-3 border dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-[11px] font-bold outline-none dark:text-white" />
-                      <button onClick={handleSearchArchive} disabled={isSearchingArchive} className="py-3 bg-primary-600 text-white font-black uppercase text-[11px] rounded-xl flex items-center justify-center gap-2 hover:bg-primary-700 shadow-lg">
+                  <div className="px-4 py-2 bg-slate-50 dark:bg-slate-900 border-b dark:border-slate-800 shrink-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                      <input type="date" value={histStart} onChange={e => setHistStart(e.target.value)} className="px-3 py-2 border dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-[11px] font-bold outline-none dark:text-white" />
+                      <input type="date" value={histEnd} onChange={e => setHistEnd(e.target.value)} className="px-3 py-2 border dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-[11px] font-bold outline-none dark:text-white" />
+                      <button onClick={handleSearchArchive} disabled={isSearchingArchive} className="px-4 py-2 min-w-[128px] bg-primary-600 text-white font-black uppercase text-[11px] rounded-xl flex items-center justify-center gap-2 whitespace-nowrap hover:bg-primary-700 shadow-lg">
                           {isSearchingArchive ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />} BUSCAR
                       </button>
                       {archivedResults.length > 0 && (
                           <button
                               onClick={handleExportToExcel}
-                              className="py-3 bg-emerald-600 text-white font-black uppercase text-[11px] rounded-xl flex items-center justify-center gap-2 hover:bg-emerald-700 shadow-lg"
+                              className="px-4 py-2 min-w-[116px] bg-emerald-600 text-white font-black uppercase text-[11px] rounded-xl flex items-center justify-center gap-2 whitespace-nowrap hover:bg-emerald-700 shadow-lg"
                               title="Exportar para Excel (.xlsx)"
                           >
                               <Table size={16} /> EXCEL
                           </button>
                       )}
+                      {canEditData && Object.keys(pendingHistoryEdits).length > 0 && (
+                          <button
+                              onClick={savePendingHistoryEdits}
+                              disabled={isSyncing}
+                              className="flex items-center gap-2 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black uppercase text-[10px] rounded-xl shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                              title="Salvar alterações (Enter)"
+                          >
+                              {isSyncing ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                              SALVAR ({Object.keys(pendingHistoryEdits).length})
+                          </button>
+                      )}
+                      <span className="ml-auto text-[10px] font-bold text-slate-500 dark:text-slate-400">
+                          {archivedResults.length} registro(s)
+                      </span>
+                      <button
+                          onClick={() => setIsHistoryFullscreen(!isHistoryFullscreen)}
+                          className="p-1.5 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors"
+                          title={isHistoryFullscreen ? 'Sair da tela cheia' : 'Tela cheia'}
+                      >
+                          {isHistoryFullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
+                      </button>
+                      <button onClick={() => { setIsHistoryModalOpen(false); setHistoryEditWarning(null); setEditingHistoryId(null); setEditingHistoryField(null); setPendingHistoryEdits({}); }} className="p-1.5 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors">
+                          <X size={20} />
+                      </button>
+                      </div>
                   </div>
                   {/* Cards de Desempenho (FILTRADO) - Atualizam conforme filtros aplicados */}
                   {filteredArchivedResults.length > 0 && (
-                      <div className="px-6 py-4 bg-slate-100 dark:bg-slate-800/50 border-b dark:border-slate-800 flex items-center gap-4 shrink-0">
+                      <div className="px-5 py-2 bg-slate-100 dark:bg-slate-800/50 border-b dark:border-slate-800 flex items-center gap-3 shrink-0">
                           <div className="flex items-center gap-2">
                               <Database size={18} className="text-slate-400" />
                               <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">Desempenho do Período</span>
@@ -5368,12 +5756,26 @@ const RouteDepartureView: React.FC<{
                                       FILTRADO ({filteredArchivedResults.length} de {archivedResults.length})
                                   </span>
                               )}
+                              {/* Filtro de Célula no Histórico */}
+                              {isAllViewer && celulaOptions.length > 1 && (
+                                <select
+                                  value={historyCelulaFilter}
+                                  onChange={(e) => setHistoryCelulaFilter(e.target.value)}
+                                  className={`px-2 py-1 rounded-lg text-[9px] font-bold uppercase outline-none cursor-pointer ${isDarkMode ? 'bg-slate-900 text-slate-200 border border-slate-700' : 'bg-white text-slate-700 border border-slate-300'}`}
+                                >
+                                  {celulaOptions.map(op => (
+                                    <option key={op} value={op}>
+                                      {op === 'todas' ? 'Todas as Células' : op}
+                                    </option>
+                                  ))}
+                                </select>
+                              )}
                           </div>
-                          <div className="flex items-center gap-3 ml-auto">
-                              <div className={`flex items-center gap-3 px-5 py-2 rounded-xl min-w-[130px] ${isDarkMode ? 'bg-emerald-900/30 border border-emerald-700/50' : 'bg-emerald-100 border border-emerald-300'}`}>
+                          <div className="flex items-center gap-2 ml-auto">
+                              <div className={`flex items-center gap-2 px-4 py-1.5 rounded-xl min-w-[120px] ${isDarkMode ? 'bg-emerald-900/30 border border-emerald-700/50' : 'bg-emerald-100 border border-emerald-300'}`}>
                                 <div className="text-center flex-1">
                                   <p className={`text-[8px] font-black uppercase tracking-wider mb-0.5 ${isDarkMode ? 'text-emerald-400' : 'text-emerald-700'}`}>Geral</p>
-                                  <p className={`text-xl font-black leading-none ${isDarkMode ? 'text-emerald-400' : 'text-emerald-700'}`}>{
+                                  <p className={`text-base font-black leading-none ${isDarkMode ? 'text-emerald-400' : 'text-emerald-700'}`}>{
                                     (() => {
                                       const total = filteredArchivedResults.length;
                                       const okPrevistoCount = filteredArchivedResults.filter(r => r.statusOp === 'OK' || r.statusOp === 'Previsto').length;
@@ -5383,10 +5785,10 @@ const RouteDepartureView: React.FC<{
                                 </div>
                                 <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full shrink-0"></div>
                               </div>
-                              <div className={`flex items-center gap-3 px-5 py-2 rounded-xl min-w-[130px] ${isDarkMode ? 'bg-blue-900/30 border border-blue-700/50' : 'bg-blue-100 border border-blue-300'}`}>
+                              <div className={`flex items-center gap-2 px-4 py-1.5 rounded-xl min-w-[120px] ${isDarkMode ? 'bg-blue-900/30 border border-blue-700/50' : 'bg-blue-100 border border-blue-300'}`}>
                                 <div className="text-center flex-1">
                                   <p className={`text-[8px] font-black uppercase tracking-wider mb-0.5 ${isDarkMode ? 'text-blue-400' : 'text-blue-700'}`}>Interno</p>
-                                  <p className={`text-xl font-black leading-none ${isDarkMode ? 'text-blue-400' : 'text-blue-700'}`}>{
+                                  <p className={`text-base font-black leading-none ${isDarkMode ? 'text-blue-400' : 'text-blue-700'}`}>{
                                     (() => {
                                       const total = filteredArchivedResults.length;
                                       const justificativas = ['Manutenção', 'Mão de obra', 'Logística'];
@@ -5675,6 +6077,7 @@ const RouteDepartureView: React.FC<{
                                               )}
                                           </th>
                                           <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center">Tempo</th>
+                                          <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center">Delay de Mapeamento</th>
                                       </tr>
                                   </thead>
                                   <tbody>
@@ -5720,6 +6123,8 @@ const RouteDepartureView: React.FC<{
                                                       >
                                                           {(() => {
                                                             if (!r.data) return '';
+                                                            // Se já está em DD/MM/AAAA, retorna direto
+                                                            if (/^\d{2}\/\d{2}\/\d{4}$/.test(r.data)) return r.data;
                                                             // Converte de AAAA-MM-DD para DD/MM/AAAA
                                                             const [ano, mes, dia] = r.data.split('-');
                                                             return `${dia}/${mes}/${ano}`;
@@ -5729,10 +6134,6 @@ const RouteDepartureView: React.FC<{
                                               </td>
                                               <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} relative">
                                                   {(() => {
-                                                    // Debug: log para verificar se routeAlerts está acessível
-                                                    if (r.rota && routeAlerts[r.rota] && routeAlerts[r.rota].count > 0 && Math.random() < 0.01) {
-                                                      console.log(`[ROUTE_CELL_DEBUG] Rota ${r.rota} tem ${routeAlerts[r.rota].count} alertas`);
-                                                    }
                                                     return (
                                                       <>
                                                   {editingHistoryId === r.id && editingHistoryField === 'rota' ? (
@@ -5898,6 +6299,11 @@ const RouteDepartureView: React.FC<{
                                               <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center font-mono font-bold">
                                                   {r.tempo}
                                               </td>
+                                              <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center font-mono font-bold">
+                                                  <span className={r.tempoResposta && parseInt(r.tempoResposta.split(':')[0], 10) >= 1 ? `inline-block px-2 py-0.5 rounded-full ${isDarkMode ? 'bg-red-900/60 text-red-300' : 'bg-red-100 text-red-700'}` : ''}>
+                                                      {r.tempoResposta || '---'}
+                                                  </span>
+                                              </td>
                                           </tr>
                                           );
                                       })}
@@ -5919,11 +6325,6 @@ const RouteDepartureView: React.FC<{
                               )}
                           </div>
                       )}
-                  </div>
-                  <div className="p-4 bg-slate-100 dark:bg-slate-800 border-t dark:border-slate-700 shrink-0">
-                      <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 text-center">
-                          💡 Clique em qualquer célula para editar • Os dados são sincronizados com o SharePoint
-                      </p>
                   </div>
               </div>
           </div>
