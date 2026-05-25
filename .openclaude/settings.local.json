@@ -40,7 +40,9 @@
       "Bash(sed -i \"s|pathname === ''/api/route-web-routes''|pathname === ''/api/route-web''|g\" vite.config.ts)",
       "Bash(sed -i \"s|pathname === ''/api/route-web-route-events''|pathname === ''/api/route-web''|g\" vite.config.ts)",
       "Bash(sed -i \"s|pathname === ''/api/route-web-events''|pathname === ''/api/route-web-db''|g\" vite.config.ts)",
-      "Bash(echo \"EXIT: $?\")"
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(vercel logs:*)",
+      "Bash(npx vercel:*)"
     ]
   }
 }

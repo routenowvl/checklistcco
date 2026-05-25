@@ -16,7 +16,7 @@ import {
   insertNonCollection,
   updateNonCollection,
   deleteNonCollection
-} from '../utils/checklistDb';
+} from './_checklistDb';
 
 const validateToken = async (authHeader: string | undefined): Promise<boolean> => {
   if (!authHeader) return false;

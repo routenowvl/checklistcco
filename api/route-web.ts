@@ -8,7 +8,7 @@ import {
   requestRouteWebToken,
   appendQueryToUrl,
   getRouteWebTokenUrl
-} from '../utils/routeWebServer.js';
+} from './_routeWebServer.js';
 
 /**
  * Endpoint consolidado Route Web.
