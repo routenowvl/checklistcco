@@ -1205,6 +1205,10 @@ export const SharePointService = {
       const formatTimeFromPg = (v: any): string => {
         if (!v) return '';
         const s = String(v).trim();
+        // TIMESTAMP completo "YYYY-MM-DD HH:MM:SS" → "DD/MM/YYYY HH:MM:SS"
+        const tsMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}:\d{2}:\d{2})$/);
+        if (tsMatch) return `${tsMatch[3]}/${tsMatch[2]}/${tsMatch[1]} ${tsMatch[4]}`;
+        // Apenas hora "HH:MM:SS" ou "HH:MM"
         const m = s.match(/^(\d{2}):(\d{2}):?(\d{2})?/);
         return m ? `${m[1]}:${m[2]}:${m[3] || '00'}` : s;
       };
