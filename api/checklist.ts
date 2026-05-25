@@ -181,6 +181,17 @@ const formatISOtoBR = (iso: any): string => {
   return m ? `${m[3]}/${m[2]}/${m[1]}` : s;
 };
 
+/** Converte "DD/MM/YYYY HH:MM:SS" → "YYYY-MM-DDTHH:MM:SS" ou retorna null */
+const brDatetimeToISO = (v: any): string | null => {
+  if (!v) return null;
+  const s = String(v).trim();
+  const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}:\d{2}:\d{2})$/);
+  if (m) return `${m[3]}-${m[2]}-${m[1]}T${m[4]}`;
+  // Já é ISO?
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s;
+  return null;
+};
+
 const parseUltimoEnvioNcoletas = (raw: any): { datetime: string | null; quantidade: number } => {
   if (!raw) return { datetime: null, quantidade: 0 };
   const s = String(raw).trim();
@@ -225,10 +236,14 @@ const getColumnMapping = async (siteId: string, listId: string, token: string): 
 const formatTime = (v: any): string => {
   if (!v) return '';
   const s = String(v).trim();
+  if (s === '-') return '';
+  // BR datetime "DD/MM/YYYY HH:MM:SS" → extrai hora
+  const brMatch = s.match(/(\d{2}:\d{2}):\d{2}$/);
+  if (brMatch) return brMatch[1] + ':00';
   const dtMatch = s.match(/T(\d{2}:\d{2})/);
   if (dtMatch) return dtMatch[1] + ':00';
   const tMatch = s.match(/^(\d{2}:\d{2})/);
-  return tMatch ? tMatch[1] + ':00' : s;
+  return tMatch ? tMatch[1] + ':00' : '';
 };
 
 const handleMigrateConfig = async (_action: string, _body: any, res: VercelResponse) => {
@@ -277,19 +292,19 @@ const handleMigrateConfig = async (_action: string, _body: any, res: VercelRespo
         tolerancia: String(f[resolveField(mapping, 'TOLERANCIA')] || '00:00:00'),
         nome_exibicao: String(f[resolveField(mapping, 'NomeExibicao')] || operacao),
         plant_id: plantId,
-        ultimo_envio_saida: f[resolveField(mapping, 'UltimoEnvioSaida')] || null,
+        ultimo_envio_saida: brDatetimeToISO(f[resolveField(mapping, 'UltimoEnvioSaida')]),
         status: String(f[resolveField(mapping, 'Status')] || ''),
         envio: String(f[resolveField(mapping, 'Envio')] || ''),
         copia: String(f[resolveField(mapping, 'Copia')] || ''),
-        ultimo_envio_resumo_saida: f[resolveField(mapping, 'UltimoEnvioResumoSaida')] || null,
+        ultimo_envio_resumo_saida: brDatetimeToISO(f[resolveField(mapping, 'UltimoEnvioResumoSaida')]),
         status_resumo_saida: String(f[resolveField(mapping, 'StatusResumoSaida')] || ''),
-        ultimo_envio_ncoleta: ncoleta.datetime,
+        ultimo_envio_ncoleta: brDatetimeToISO(ncoleta.datetime),
         quantidade_ncoletas_registrada: ncoleta.quantidade,
         conteudo: String(f[resolveField(mapping, 'Conteudo')] || ''),
         conteudo_ncoletas: String(f[resolveField(mapping, 'ConteudoNcoletas')] || ''),
         lock_envio: f[resolveField(mapping, 'LockEnvio')] || null,
         lock_user: String(f[resolveField(mapping, 'LockUser')] || ''),
-        lock_timestamp: f[resolveField(mapping, 'LockTimestamp')] || null,
+        lock_timestamp: brDatetimeToISO(f[resolveField(mapping, 'LockTimestamp')]),
       };
       await insertConfig(row);
       upserted++;
