@@ -462,7 +462,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(400).json({ success: false, error: `Domínio desconhecido: ${domain}` });
     }
   } catch (error: any) {
-    console.error('[CHECKLIST] Erro:', error?.message || error);
-    return res.status(500).json({ success: false, error: 'Erro ao processar operação' });
+    console.error('[CHECKLIST] Erro:', error?.message || error, error?.stack || '');
+    return res.status(500).json({ success: false, error: error?.message || 'Erro ao processar operação' });
   }
 }
