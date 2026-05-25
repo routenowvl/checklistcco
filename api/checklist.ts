@@ -1,3 +1,4 @@
+// Endpoint consolidado Checklist (config, departures, non-collections)
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import {
   getAllConfigs,
