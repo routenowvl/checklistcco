@@ -20,11 +20,22 @@ const getPool = (): pg.Pool => {
     ssl: ssl === 'true' || ssl === '1' ? { rejectUnauthorized: false } : undefined,
     max: 4,
     idleTimeoutMillis: 15_000,
-    connectionTimeoutMillis: 8_000
+    connectionTimeoutMillis: 15_000,
+    keepAlive: true,
+    keepAliveInitialDelayMillis: 10_000,
+    allowExitOnIdle: false
   });
 
   pool.on('connect', (client) => {
     client.query(`SET search_path TO ${schema}`);
+  });
+
+  pool.on('error', (err) => {
+    console.error('[CHECKLIST_DB] Pool error (idle connection):', err.message);
+  });
+
+  pool.on('remove', (client) => {
+    console.log('[CHECKLIST_DB] Connection removed from pool');
   });
 
   return pool;
@@ -438,6 +449,45 @@ export const updateNonCollection = async (nc: Record<string, unknown>): Promise<
 export const deleteNonCollection = async (id: number): Promise<void> => {
   const client = getPool();
   await client.query('DELETE FROM non_collections WHERE id = $1', [id]);
+};
+
+/**
+ * Corrige a coluna rota do PostgreSQL cruzando operacao + codigo com os dados do SharePoint.
+ * spItems = array de { operacao, codigo, rota } vindos do SharePoint.
+ * Só atualiza se encontrar match de operacao+codigo E se o SharePoint tiver rota preenchida.
+ */
+export const fixNonCollectionsRoutes = async (
+  spItems: { operacao: string; codigo: string; rota: string }[]
+): Promise<{ updated: number; skipped: number; details: string[] }> => {
+  const client = getPool();
+  let updated = 0;
+  let skipped = 0;
+  const details: string[] = [];
+
+  for (const item of spItems) {
+    const rota = item.rota.trim();
+    if (!rota) { skipped++; continue; }
+
+    const operacao = item.operacao.trim();
+    const codigo = item.codigo.trim();
+    if (!operacao || !codigo) { skipped++; continue; }
+
+    const result = await client.query(
+      `UPDATE non_collections SET rota = $1, atualizado_em = NOW()
+       WHERE operacao = $2 AND codigo = $3 AND (rota IS NULL OR rota = '' OR rota != $1)
+       RETURNING id`,
+      [rota, operacao, codigo]
+    );
+
+    if (result.rowCount && result.rowCount > 0) {
+      updated += result.rowCount;
+      details.push(`operacao="${operacao}" codigo="${codigo}" -> rota="${rota}" (${result.rowCount} rows)`);
+    } else {
+      skipped++;
+    }
+  }
+
+  return { updated, skipped, details };
 };
 
 // ---------------------------------------------------------------------------

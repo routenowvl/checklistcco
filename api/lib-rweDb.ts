@@ -20,11 +20,18 @@ const getPool = (): pg.Pool => {
     ssl: ssl === 'true' || ssl === '1' ? { rejectUnauthorized: false } : undefined,
     max: 4,
     idleTimeoutMillis: 15_000,
-    connectionTimeoutMillis: 8_000
+    connectionTimeoutMillis: 15_000,
+    keepAlive: true,
+    keepAliveInitialDelayMillis: 10_000,
+    allowExitOnIdle: false
   });
 
   pool.on('connect', (client) => {
     client.query(`SET search_path TO ${schema}`);
+  });
+
+  pool.on('error', (err) => {
+    console.error('[RWE_DB] Pool error (idle connection):', err.message);
   });
 
   return pool;

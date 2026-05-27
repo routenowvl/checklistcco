@@ -24,7 +24,7 @@ import {
   getLockStatus, acquireLock, releaseLock,
   getDepartures, upsertDeparture, deleteDeparture,
   getNonCollections, insertNonCollection, updateNonCollection, deleteNonCollection,
-  insertConfig
+  insertConfig, fixNonCollectionsRoutes
 } from './utils/checklistDb';
 import { queryMaintenanceEvents } from './utils/maintenanceDb';
 
@@ -1110,6 +1110,29 @@ const routeWebDevPlugin = (mode: string) => ({
           }
           return writeJson(res, 200, { success: true, total: allItems.length, upserted, errors: errors.length > 0 ? errors.slice(0, 20) : undefined });
         } catch (error: any) { return writeJson(res, 500, { success: false, error: error?.message || 'Erro migrate-non-collections' }); }
+      }
+
+      if (_clDomain === 'fix-nc-routes') {
+        try {
+          const LIST_ID = '83e8cfb9-1982-47ae-b515-3fec112da457';
+          const appToken = await getGraphAppToken();
+          const siteData = await graphFetch(`/sites/${SITE_PATH}`, appToken);
+          const siteId = siteData.id;
+          const mapping = await getColumnMapping(siteId, LIST_ID, appToken);
+          let allItems: any[] = [], nextUrl: string | null = `/sites/${siteId}/lists/${LIST_ID}/items?expand=fields&$top=100`;
+          while (nextUrl) { const d = await graphFetch(nextUrl, appToken); allItems = allItems.concat(d.value || []); nextUrl = d['@odata.nextLink'] || null; }
+          const spItems: { operacao: string; codigo: string; rota: string }[] = [];
+          for (const item of allItems) {
+            const f = item.fields || {};
+            const operacao = String(f[resolveField(mapping, 'Operacao')] || '').trim();
+            const codigo = String(f[resolveField(mapping, 'Codigo')] || '').trim();
+            const rota = String(f[resolveField(mapping, 'Rota')] || '').trim();
+            if (operacao && codigo && rota) { spItems.push({ operacao, codigo, rota }); }
+          }
+          console.log(`[FIX-NC-ROUTES][DEV] ${spItems.length} itens com rota válida (total SP: ${allItems.length})`);
+          const result = await fixNonCollectionsRoutes(spItems);
+          return writeJson(res, 200, { success: true, spTotal: allItems.length, spWithRota: spItems.length, updated: result.updated, skipped: result.skipped, details: result.details.slice(0, 50) });
+        } catch (error: any) { return writeJson(res, 500, { success: false, error: error?.message || 'Erro fix-nc-routes' }); }
       }
       } // end /api/checklist
 

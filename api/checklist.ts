@@ -17,7 +17,8 @@ import {
   insertNonCollection,
   updateNonCollection,
   deleteNonCollection,
-  insertConfig
+  insertConfig,
+  fixNonCollectionsRoutes
 } from './lib-checklistDb.js';
 import { getGraphAppToken } from './lib-graphAppAuth.js';
 
@@ -431,6 +432,55 @@ const handleMigrateNonCollections = async (_action: string, _body: any, res: Ver
   return res.status(200).json({ success: true, total: allItems.length, upserted, errors: errors.length > 0 ? errors.slice(0, 20) : undefined });
 };
 
+/**
+ * Corrige a coluna rota no PostgreSQL cruzando com os dados do SharePoint.
+ * Busca Operação, Código e Rota da lista Dados_Não_Coletas no SharePoint,
+ * e atualiza a coluna rota no PG onde operacao+codigo batem.
+ */
+const handleFixNonCollectionsRoutes = async (_action: string, _body: any, res: VercelResponse) => {
+  const LIST_ID = '83e8cfb9-1982-47ae-b515-3fec112da457';
+  const appToken = await getGraphAppToken();
+  const siteData = await graphFetch(`/sites/${SITE_PATH}`, appToken);
+  const siteId = siteData.id;
+
+  const mapping = await getColumnMapping(siteId, LIST_ID, appToken);
+
+  let allItems: any[] = [];
+  let nextUrl: string | null = `/sites/${siteId}/lists/${LIST_ID}/items?expand=fields&$top=100`;
+  while (nextUrl) {
+    const data = await graphFetch(nextUrl, appToken);
+    allItems = allItems.concat(data.value || []);
+    nextUrl = data['@odata.nextLink'] || null;
+  }
+
+  // Monta lista de { operacao, codigo, rota } do SharePoint
+  const spItems: { operacao: string; codigo: string; rota: string }[] = [];
+  for (const item of allItems) {
+    const f = item.fields || {};
+    const operacao = String(f[resolveField(mapping, 'Operacao')] || f['Opera_x00e7__x00e3_o'] || '').trim();
+    const codigo = String(f[resolveField(mapping, 'Codigo')] || f['C_x00f3_digo'] || '').trim();
+    // Rota é campo separado no SharePoint — usa resolveField com fallback 'Rota'
+    const rota = String(f[resolveField(mapping, 'Rota')] || '').trim();
+
+    if (operacao && codigo && rota) {
+      spItems.push({ operacao, codigo, rota });
+    }
+  }
+
+  console.log(`[FIX-NC-ROUTES] ${spItems.length} itens com rota válida do SharePoint (total SP: ${allItems.length})`);
+
+  const result = await fixNonCollectionsRoutes(spItems);
+
+  return res.status(200).json({
+    success: true,
+    spTotal: allItems.length,
+    spWithRota: spItems.length,
+    updated: result.updated,
+    skipped: result.skipped,
+    details: result.details.slice(0, 50)
+  });
+};
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ success: false, error: 'Method not allowed' });
@@ -475,6 +525,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (domain === 'migrate-config') return await handleMigrateConfig(action, req.body, res);
     if (domain === 'migrate-departures') return await handleMigrateDepartures(action, req.body, res);
     if (domain === 'migrate-non-collections') return await handleMigrateNonCollections(action, req.body, res);
+    if (domain === 'fix-nc-routes') return await handleFixNonCollectionsRoutes(action, req.body, res);
 
     // Domains normais exigem auth
     const isAuthenticated = await validateToken(req.headers.authorization);

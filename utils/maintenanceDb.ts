@@ -47,7 +47,14 @@ const getPool = (): pg.Pool => {
     ssl: sslEnabled ? { rejectUnauthorized: false } : undefined,
     max: 3,
     idleTimeoutMillis: 15000,
-    connectionTimeoutMillis: 10000
+    connectionTimeoutMillis: 15000,
+    keepAlive: true,
+    keepAliveInitialDelayMillis: 10_000,
+    allowExitOnIdle: false
+  });
+
+  holder.__maintenanceDbPool.on('error', (err) => {
+    console.error('[MAINT_DB] Pool error (idle connection):', err.message);
   });
 
   return holder.__maintenanceDbPool;
