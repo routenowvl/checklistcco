@@ -436,6 +436,37 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(405).json({ success: false, error: 'Method not allowed' });
   }
 
+  // Diagnóstico rápido — action=ping testa conectividade com o banco
+  if (req.body?.action === 'ping') {
+    try {
+      const dbUrl = String(process.env.CHECKLIST_DB_URL || '').trim();
+      const dbSsl = String(process.env.CHECKLIST_DB_SSL || 'true').trim();
+      const hasUrl = !!dbUrl;
+      // mascara a senha na URL para o log
+      const safeUrl = dbUrl.replace(/\/\/[^:]+:([^@]+)@/, '//*:***@');
+      console.log(`[PING] CHECKLIST_DB_URL set=${hasUrl} url=${safeUrl} ssl=${dbSsl}`);
+      if (!hasUrl) {
+        return res.status(200).json({ success: false, error: 'CHECKLIST_DB_URL não configurada', ssl: dbSsl });
+      }
+      const pg = await import('pg');
+      const testPool = new pg.Pool({
+        connectionString: dbUrl,
+        ssl: dbSsl === 'true' || dbSsl === '1' ? { rejectUnauthorized: false } : undefined,
+        max: 1,
+        connectionTimeoutMillis: 10_000,
+      });
+      const start = Date.now();
+      const client = await testPool.connect();
+      const result = await client.query('SELECT 1 AS ok');
+      client.release();
+      await testPool.end();
+      const elapsed = Date.now() - start;
+      return res.status(200).json({ success: true, pong: true, elapsed_ms: elapsed, row: result.rows[0], ssl: dbSsl });
+    } catch (err: any) {
+      return res.status(200).json({ success: false, error: err?.message || String(err), code: err?.code, ssl: String(process.env.CHECKLIST_DB_SSL || 'true') });
+    }
+  }
+
   try {
     const { domain, action } = req.body;
     if (!domain) return res.status(400).json({ success: false, error: 'domain é obrigatório' });
