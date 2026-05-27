@@ -1713,18 +1713,29 @@ export const SharePointService = {
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'Erro ao buscar non-collections');
 
+      // Converte data ISO/YYYY-MM-DD vinda do PostgreSQL para DD/MM/YYYY
+      const pgDateToBR = (v: any): string => {
+        if (!v) return '';
+        const s = String(v).trim();
+        if (/^\d{2}\/\d{2}\/\d{4}$/.test(s)) return s;
+        // ISO com T: "2026-05-28T15:00:00Z" ou "1970-01-01T00:00:00.000Z"
+        const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (iso) return `${iso[3]}/${iso[2]}/${iso[1]}`;
+        return s;
+      };
+
       return (data.nonCollections || []).map((row: any): NonCollection => ({
         id: String(row.id),
         semana: String(row.semana || ''),
         rota: String(row.rota || ''),
-        data: String(row.data || row.data_operacao || ''),
+        data: pgDateToBR(row.data || row.data_operacao),
         codigo: String(row.codigo || ''),
         produtor: String(row.produtor || ''),
         motivo: String(row.motivo || ''),
         observacao: String(row.observacao || ''),
         acao: String(row.acao || ''),
-        dataAcao: String(row.data_acao || ''),
-        ultimaColeta: String(row.ultima_coleta || ''),
+        dataAcao: pgDateToBR(row.data_acao),
+        ultimaColeta: pgDateToBR(row.ultima_coleta),
         Culpabilidade: String(row.culpabilidade || ''),
         operacao: String(row.operacao || ''),
         causaRaiz: String(row.causa_raiz || '')
