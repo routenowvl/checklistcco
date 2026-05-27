@@ -252,18 +252,38 @@ export const upsertDeparture = async (d: Record<string, unknown>): Promise<numbe
   const celular_motorista = String(d.contato || d.celular_motorista || '');
   const hora_prevista_raw = String(d.inicio || d.hora_prevista || '').trim();
   const hora_saida_raw = String(d.saida || d.hora_saida || '').trim();
-  // Campos time/date: envia null se vazio
-  const hora_prevista = hora_prevista_raw || null;
-  const hora_saida = hora_saida_raw || null;
+  // Converte "DD/MM/AAAA HH:MM:SS" → "YYYY-MM-DD HH:MM:SS" para TIMESTAMP do PostgreSQL
+  const toTimestamp = (raw: string): string | null => {
+    if (!raw) return null;
+    const trimmed = raw.replace(/\s+/g, ' ').trim();
+    // DD/MM/AAAA HH:MM:SS → YYYY-MM-DD HH:MM:SS
+    const m = trimmed.match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}:\d{2}:\d{2})$/);
+    if (m) return `${m[3]}-${m[2]}-${m[1]} ${m[4]}`;
+    // DD/MM/AAAA → YYYY-MM-DD 00:00:00
+    const dm = trimmed.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (dm) return `${dm[3]}-${dm[2]}-${dm[1]} 00:00:00`;
+    // Já ISO (YYYY-MM-DD HH:MM:SS)
+    if (/^\d{4}-\d{2}-\d{2}(\s+\d{2}:\d{2}:\d{2})?$/.test(trimmed)) return trimmed;
+    // Valor simples (HH:MM:SS) retorna como está
+    return trimmed || null;
+  };
+  const hora_prevista = toTimestamp(hora_prevista_raw);
+  const hora_saida = toTimestamp(hora_saida_raw);
   const status_saida = String(d.statusGeral || d.status_saida || '');
   const motivo_atraso = String(d.motivo || d.motivo_atraso || '');
   const observacao = String(d.observacao || '');
   const data_operacao_raw = String(d.data || d.data_operacao || '').trim();
-  // Converte DD/MM/AAAA -> AAAA-MM-DD para o PostgreSQL
+  // Converte DD/MM/AAAA ou DD/MM/AAAA HH:MM:SS -> formato ISO para o PostgreSQL
   let data_operacao: string | null = null;
   if (data_operacao_raw) {
-    const dm = data_operacao_raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-    data_operacao = dm ? `${dm[3]}-${dm[2]}-${dm[1]}` : data_operacao_raw;
+    const dm = data_operacao_raw.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+    if (dm) {
+      data_operacao = `${dm[3]}-${dm[2]}-${dm[1]}`;
+    } else if (/^\d{4}-\d{2}-\d{2}/.test(data_operacao_raw)) {
+      data_operacao = data_operacao_raw.slice(0, 10);
+    } else {
+      data_operacao = data_operacao_raw;
+    }
   }
   const status_rota = String(d.statusOp || d.status_rota || 'Previsto');
   const checklist_motorista = String(d.checklistMotorista || d.checklist_motorista || '');
@@ -273,7 +293,7 @@ export const upsertDeparture = async (d: Record<string, unknown>): Promise<numbe
   const log_tempo_resposta = String(d.logTempoResposta || d.log_tempo_resposta || '');
 
   if (id && Number.isFinite(id) && id > 0) {
-    await client.query(
+    const updResult = await client.query(
       `UPDATE departures SET operacao=$1, rota=$2, motorista=$3, placa_veiculo=$4,
        celular_motorista=$5, hora_prevista=$6, hora_saida=$7, status_saida=$8,
        motivo_atraso=$9, observacao=$10, data_operacao=$11, status_rota=$12,
@@ -285,7 +305,12 @@ export const upsertDeparture = async (d: Record<string, unknown>): Promise<numbe
        checklist_motorista, retorno_motorista, causa_raiz, tempo_resposta,
        log_tempo_resposta, id]
     );
-    return id;
+    if ((updResult.rowCount ?? 0) > 0) {
+      console.log(`[upsertDeparture] UPDATE OK id=${id}, rowCount=${updResult.rowCount}, hora_saida=${hora_saida}`);
+      return id;
+    }
+    // ID não existe no PostgreSQL (provavelmente ID do SharePoint) — faz INSERT
+    console.log(`[upsertDeparture] UPDATE matched 0 rows for id=${id}, falling back to INSERT`);
   }
 
   const result = await client.query(

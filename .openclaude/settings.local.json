@@ -44,7 +44,11 @@
       "Bash(vercel logs:*)",
       "Bash(npx vercel:*)",
       "WebFetch(domain:checklistcco.vercel.app)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(tasklist)",
+      "Bash(dir \"C:\\\\Projetos\\\\checklistcco\\\\src\" /b)",
+      "Bash(find /c/Projetos/checklistcco/src -maxdepth 3 -type f -name *.ts -o -name *.tsx)",
+      "Bash(find . -name *.tsx -type f)"
     ]
   }
 }

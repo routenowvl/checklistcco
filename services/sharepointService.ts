@@ -1204,9 +1204,23 @@ export const SharePointService = {
       };
       const formatTimeFromPg = (v: any): string => {
         if (!v) return '';
+        // Se o pg driver retornou um objeto Date, extrai no fuso de São Paulo
+        if (v instanceof Date) {
+          const br = new Date(v.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+          const dd = String(br.getDate()).padStart(2, '0');
+          const mm = String(br.getMonth() + 1).padStart(2, '0');
+          const yyyy = br.getFullYear();
+          const hh = String(br.getHours()).padStart(2, '0');
+          const mi = String(br.getMinutes()).padStart(2, '0');
+          const ss = String(br.getSeconds()).padStart(2, '0');
+          return `${dd}/${mm}/${yyyy} ${hh}:${mi}:${ss}`;
+        }
         const s = String(v).trim();
+        // ISO com T: "2026-05-24T23:48:20.000Z" ou "2026-05-24T23:48:20"
+        const isoMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/);
+        if (isoMatch) return `${isoMatch[3]}/${isoMatch[2]}/${isoMatch[1]} ${isoMatch[4]}:${isoMatch[5]}:${isoMatch[6]}`;
         // TIMESTAMP completo "YYYY-MM-DD HH:MM:SS" → "DD/MM/YYYY HH:MM:SS"
-        const tsMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}:\d{2}:\d{2})$/);
+        const tsMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}:\d{2}:\d{2})/);
         if (tsMatch) return `${tsMatch[3]}/${tsMatch[2]}/${tsMatch[1]} ${tsMatch[4]}`;
         // Apenas hora "HH:MM:SS" ou "HH:MM"
         const m = s.match(/^(\d{2}):(\d{2}):?(\d{2})?/);

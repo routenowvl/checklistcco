@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { RouteDeparture, User, RouteOperationMapping, RouteConfig, Motorista } from '../types';
 import { SharePointService } from '../services/sharepointService';
 import { getValidToken } from '../services/tokenService';
+import { useWriteBehind } from '../hooks/useWriteBehind';
 import * as XLSX from 'xlsx';
 import { getBrazilDate, getBrazilHours, getBrazilMinutes, toBrazilDate, getWeekString, getRouteDateForCurrentTime } from '../utils/dateUtils';
 import { isDealeUser, getDealeFilteredConfigs, getDealeAnchorOperation, getDealeRealOperations } from '../utils/dealeUtils';
@@ -688,6 +689,9 @@ const RouteDepartureView: React.FC<{
     throw new Error('Sessão expirada. Por favor, renove sua sessão.');
   };
 
+  // Write-behind cache: atualiza local imediatamente, sincroniza com API em background
+  const writeBehind = useWriteBehind(getAccessToken);
+
   const parseViewerSnapshotDepartures = (raw: string): RouteDeparture[] => {
     const source = String(raw || '').trim();
     if (!source) return [];
@@ -1140,65 +1144,7 @@ const RouteDepartureView: React.FC<{
     }
   };
 
-  // Sistema de Lock Temporário para Edição de Linhas
-  const LOCK_TIMEOUT = 30 * 1000; // 30 segundos
-
-  /**
-   * Tenta adquirir lock para editar uma linha
-   * Retorna true se conseguiu, false se outra pessoa está editando
-   */
-  const tryAcquireLock = (routeId: string): boolean => {
-    const route = routes.find(r => r.id === routeId);
-    if (!route) return false;
-
-    const now = Date.now();
-    
-    // Verifica se já tem lock válido de outro usuário
-    if (route.editingUser && route.lockExpiresAt && now < route.lockExpiresAt) {
-      if (route.editingUser !== currentUser.email) {
-        console.warn(`[LOCK_BLOCKED] Linha ${routeId} está sendo editada por ${route.editingUser}`);
-        return false;
-      }
-    }
-
-    // Adquire o lock (ou renova se já era do usuário atual)
-    setRoutes(prev => prev.map(r => {
-      if (r.id === routeId) {
-        return {
-          ...r,
-          editingUser: currentUser.email,
-          lockExpiresAt: now + LOCK_TIMEOUT
-        };
-      }
-      return r;
-    }));
-
-    return true;
-  };
-
-  /**
-   * Libera o lock de uma linha
-   */
-  const releaseLock = (routeId: string) => {
-    setRoutes(prev => prev.map(r => {
-      if (r.id === routeId && r.editingUser === currentUser.email) {
-        return { ...r, editingUser: undefined, lockExpiresAt: undefined };
-      }
-      return r;
-    }));
-  };
-
-  /**
-   * Libera todos os locks do usuário atual (ao sair da tela ou desmontar)
-   */
-  const releaseAllLocks = () => {
-    setRoutes(prev => prev.map(r => {
-      if (r.editingUser === currentUser.email) {
-        return { ...r, editingUser: undefined, lockExpiresAt: undefined };
-      }
-      return r;
-    }));
-  };
+  // Sistema de Lock Temporário REMOVIDO — substituído por write-behind cache
 
   // ⚠️ checkOperationAllOK REMOVIDA — só era usada pelo envio automático desabilitado
   // const checkOperationAllOK = (operacao: string): boolean => { ... };
@@ -1325,31 +1271,9 @@ const RouteDepartureView: React.FC<{
     }
   };
 
-  // Cleanup automático de locks expirados (timeout de 30 segundos)
+  // Cleanup: flush pendências do write-behind ao desmontar
   useEffect(() => {
-    const LOCK_TIMEOUT = 30 * 1000; // 30 segundos
-    
-    const cleanupExpiredLocks = () => {
-      const now = Date.now();
-      let hasChanges = false;
-      
-      setRoutes(prev => {
-        const updated = prev.map(route => {
-          // Se tem lock e expirou, remove
-          if (route.lockExpiresAt && now > route.lockExpiresAt && route.editingUser) {
-            hasChanges = true;
-            return { ...route, editingUser: undefined, lockExpiresAt: undefined };
-          }
-          return route;
-        });
-        return hasChanges ? updated : prev;
-      });
-    };
-
-    // Verifica a cada 5 segundos
-    const interval = setInterval(cleanupExpiredLocks, 5000);
-    
-    return () => clearInterval(interval);
+    return () => { writeBehind.cancelAll(); };
   }, []);
 
   // ⚠️ ENVIO AUTOMÁTICO DESABILITADO — O envio agora é feito apenas manualmente pela tela "Resumo" (SendReportView)
@@ -2718,6 +2642,9 @@ const RouteDepartureView: React.FC<{
   };
 
   const handleArchiveAll = async () => {
+    // Flush pendências do write-behind antes de arquivar
+    await writeBehind.flushAll();
+
     if (!canEditData) {
       alert('Esta conta possui acesso somente visualização.');
       return;
@@ -2950,22 +2877,7 @@ const RouteDepartureView: React.FC<{
         return;
     }
 
-    // VALIDAÇÃO CRÍTICA 2: Verifica se alguma linha está com lock de outro usuário
-    const now = Date.now();
-    const lockedRoutes = targetRoutes.filter(r =>
-      r.editingUser &&
-      r.lockExpiresAt &&
-      now < r.lockExpiresAt &&
-      r.editingUser !== currentUser.email
-    );
-
-    if (lockedRoutes.length > 0) {
-        console.error(`[PASTE_BLOCKED] ${lockedRoutes.length} linhas estão sendo editadas por outros usuários.`);
-        const lockedBy = lockedRoutes.map(r => `${r.rota} (${r.editingUser})`).join(', ');
-        alert(`🔒 Paste bloqueado: ${lockedRoutes.length} linha(s) estão sendo editadas por outros usuários.\n\nLinhas bloqueadas: ${lockedBy}`);
-        setIsSyncing(false);
-        return;
-    }
+    // VALIDAÇÃO CRÍTICA 2: (lock de outro usuário removido — write-behind resolve concorrência)
 
     // Todas as linhas são válidas, prossegue com o paste
     const updatePromises = targetRoutes.map(async (route, i) => {
@@ -3126,15 +3038,7 @@ const RouteDepartureView: React.FC<{
         return;
     }
 
-    // VALIDAÇÃO CRÍTICA 2: Verifica se outra pessoa está editando esta linha (lock temporário)
-    const now = Date.now();
-    if (route.editingUser && route.lockExpiresAt && now < route.lockExpiresAt) {
-      if (route.editingUser !== currentUser.email) {
-        console.warn(`[UPDATE_BLOCKED] Linha ${id} está sendo editada por ${route.editingUser} (lock até ${new Date(route.lockExpiresAt).toLocaleTimeString()})`);
-        alert(`🔒 Esta linha está sendo editada por ${route.editingUser}.\n\nAguarde alguns segundos e tente novamente.`);
-        return;
-      }
-    }
+    // VALIDAÇÃO CRÍTICA 2: (lock de outro usuário removido — write-behind resolve concorrência)
 
     // Exceção: em MONTES CLAROS, permite ajuste manual do status (OK/Atrasada/Adiantada)
     if (field === 'statusOp') {
@@ -3159,19 +3063,12 @@ const RouteDepartureView: React.FC<{
       value = normalizedValue;
     }
 
-    // Tenta adquirir o lock para esta edição
-    if (!tryAcquireLock(id)) {
-      console.error('[UPDATE_BLOCKED] Não foi possível adquirir lock para', id);
-      return;
-    }
-
     let updatedRoute = { ...route, [field]: value, ...extraUpdates };
 
     // Validação específica para MONTES CLAROS + FÁBRICA quando editar observação
     if (field === 'observacao' && value) {
       const valid = validateDescargaTime(updatedRoute, value);
       if (!valid) {
-        releaseLock(id);
         return; // Cancela a atualização
       }
     }
@@ -3224,15 +3121,11 @@ const RouteDepartureView: React.FC<{
     }
 
     setRoutes(prev => prev.map(r => r.id === id ? updatedRoute : r));
-    setIsSyncing(true);
 
-    try {
-        await SharePointService.updateDeparture(await getAccessToken(), updatedRoute);
-    } catch (e) {
-        console.error('[UPDATE] Error:', e);
-    } finally {
-        releaseLock(id);
-        setIsSyncing(false);
+    // Write-behind: agenda sync em background (debounce 500ms por rota)
+    const numericId = typeof updatedRoute.id === 'string' ? parseInt(String(updatedRoute.id), 10) : Number(updatedRoute.id);
+    if (numericId && Number.isFinite(numericId)) {
+      writeBehind.enqueue(numericId, updatedRoute);
     }
   };
 
