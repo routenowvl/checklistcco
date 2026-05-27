@@ -1728,7 +1728,7 @@ export const SharePointService = {
         id: String(row.id),
         semana: String(row.semana || ''),
         rota: String(row.rota || ''),
-        data: pgDateToBR(row.data || row.data_operacao),
+        data: pgDateToBR(row.data_operacao || row.data),
         codigo: String(row.codigo || ''),
         produtor: String(row.produtor || ''),
         motivo: String(row.motivo || ''),
