@@ -2115,9 +2115,8 @@ export const SharePointService = {
 
     for (const item of items) {
       try {
-        const semana = item.semana || getWeekString(item.data);
         const fieldMap: Record<string, any> = {
-          Semana: semana, Rota: item.rota, Data: safeToISO(item.data),
+          Semana: item.rota, Rota: item.rota, Data: safeToISO(item.data),
           'Código': item.codigo, Produtor: item.produtor, Motivo: item.motivo,
           'Observação': item.observacao, Observacao: item.observacao, 'Observa_x00e7__x00e3_o': item.observacao,
           Ação: item.acao, 'DataAção': safeToISO(item.dataAcao), 'ÚltimaColeta': safeToISO(item.ultimaColeta),
