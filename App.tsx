@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { HashRouter as Router, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
-import { CheckSquare, History, Truck, LogOut, ChevronLeft, ChevronRight, Loader2, TowerControl, RefreshCw, AlertTriangle, Settings2, Milk, Users, UserPlus } from 'lucide-react';
+import { CheckSquare, Truck, LogOut, ChevronLeft, ChevronRight, Loader2, TowerControl, RefreshCw, AlertTriangle, Settings2, Milk, Users, UserPlus } from 'lucide-react';
 import TaskManager from './components/TaskManager';
 import HistoryViewer from './components/HistoryViewer';
 import RouteDepartureView from './components/RouteDeparture';
@@ -418,14 +418,10 @@ const AppContent = () => {
             <>
               <SidebarLink to="/departures" icon={Truck} label="Saídas" active={window.location.hash === '#/departures'} collapsed={collapsed} />
               <SidebarLink to="/nao-coletas" icon={Milk} label="Não Coletas" active={window.location.hash === '#/nao-coletas'} collapsed={collapsed} />
-              {isAllViewer && (
-                <SidebarLink to="/history" icon={History} label="Histórico" active={window.location.hash === '#/history'} collapsed={collapsed} />
-              )}
               {!isViewerOnly && (
                 <>
                   <SidebarLink to="/" icon={CheckSquare} label="Checklist" active={window.location.hash === '#/'} collapsed={collapsed} />
                   <SidebarLink to="/resumo" icon={TowerControl} label="Resumo" active={window.location.hash === '#/resumo'} collapsed={collapsed} />
-                  <SidebarLink to="/history" icon={History} label="Histórico" active={window.location.hash === '#/history'} collapsed={collapsed} />
                   <SidebarLink to="/motoristas" icon={Users} label="Motoristas" active={window.location.hash === '#/motoristas'} collapsed={collapsed} />
                   <SidebarLink to="/route-web" icon={Settings2} label="Route Web" active={window.location.hash === '#/route-web'} collapsed={collapsed} />
                   <SidebarLink to="/usuarios-visualizacao" icon={UserPlus} label="Usuários" active={window.location.hash === '#/usuarios-visualizacao'} collapsed={collapsed} />

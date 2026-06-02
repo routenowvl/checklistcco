@@ -12,6 +12,7 @@ import {
   requestRouteWebToken
 } from './utils/routeWebServer';
 import { getGraphAppToken } from './utils/graphAppAuth';
+import { getShiftApiBaseUrl, getShiftToken, getTokenPreview as getShiftTokenPreview } from './utils/shiftApi';
 import {
   getRouteWebEventsByDateAndPlants,
   getRouteWebRoutesByDateAndPlants,
@@ -1135,6 +1136,93 @@ const routeWebDevPlugin = (mode: string) => ({
         } catch (error: any) { return writeJson(res, 500, { success: false, error: error?.message || 'Erro fix-nc-routes' }); }
       }
       } // end /api/checklist
+
+      // Shift API — Escala de Motoristas (dev proxy)
+      if (req.method === 'POST' && pathname === '/api/shift') {
+        try {
+          const _shiftBody = await readJsonBody(req);
+          const _shiftAction = String(_shiftBody?.action || '').trim();
+          const _shiftBaseUrl = getShiftApiBaseUrl();
+
+          if (_shiftAction === 'schedules') {
+            const _plantId = Number(_shiftBody?.plant_id);
+            const _code = String(_shiftBody?.code || '').trim();
+            const _perPage = Number(_shiftBody?.per_page) || 100;
+            if (!_plantId || !_code) return writeJson(res, 400, { success: false, error: 'plant_id e code são obrigatórios' });
+
+            const _token = await getShiftToken();
+            const _upstreamUrl = `${_shiftBaseUrl}/api/schedules?plant_id=${_plantId}&code=${encodeURIComponent(_code)}&per_page=${_perPage}`;
+            console.log(`[SHIFT][DEV][SCHEDULES] GET ${_upstreamUrl}`);
+            console.log(`[SHIFT][DEV][SCHEDULES] plant_id=${_plantId}, code=${_code}, token=${getShiftTokenPreview(_token)}`);
+            const _resp = await fetch(_upstreamUrl, {
+              method: 'GET',
+              headers: {
+                Authorization: `Bearer ${_token}`,
+                'Content-Type': 'application/json',
+                Accept: 'application/json, text/plain, */*',
+                'X-Requested-With': 'XMLHttpRequest',
+                'x-requested_with': 'XLMHttpRequest'
+              }
+            });
+            const _rawBody = await _resp.text();
+            let _parsed: any;
+            try { _parsed = JSON.parse(_rawBody); } catch { _parsed = _rawBody; }
+            console.log(`[SHIFT][DEV][SCHEDULES] Response: status=${_resp.status}, body=${String(_rawBody).slice(0, 500)}`);
+            return writeJson(res, 200, { success: _resp.ok, upstreamStatus: _resp.status, upstreamUrl: _upstreamUrl, tokenPreview: getShiftTokenPreview(_token), baseUrl: _shiftBaseUrl, plantId: _plantId, code: _code, data: _parsed, raw: typeof _parsed === 'string' ? _parsed : JSON.stringify(_parsed) });
+          }
+
+          if (_shiftAction === 'consolidation') {
+            const _scheduleId = String(_shiftBody?.schedule_id || '').trim();
+            if (!_scheduleId) return writeJson(res, 400, { success: false, error: 'schedule_id é obrigatório' });
+
+            const _token = await getShiftToken();
+            const _upstreamUrl = `${_shiftBaseUrl}/api/schedules/${encodeURIComponent(_scheduleId)}/consolidation`;
+            console.log(`[SHIFT][DEV][CONSOLIDATION] GET ${_upstreamUrl}, token=${getShiftTokenPreview(_token)}`);
+            const _resp = await fetch(_upstreamUrl, {
+              method: 'GET',
+              headers: {
+                Authorization: `Bearer ${_token}`,
+                'Content-Type': 'application/json',
+                Accept: 'application/json, text/plain, */*',
+                'X-Requested-With': 'XMLHttpRequest',
+                'x-requested_with': 'XLMHttpRequest'
+              }
+            });
+            const _raw = await _resp.text();
+            let _parsed: any;
+            try { _parsed = JSON.parse(_raw); } catch { _parsed = _raw; }
+
+            const resultado: any[] = [];
+            if (_parsed?.data?.shifts) {
+              for (const shift of _parsed.data.shifts) {
+                if (!shift?.drivers) continue;
+                for (const driver of shift.drivers) {
+                  if (!driver?.days) continue;
+                  for (const [data, infoDia] of Object.entries(driver.days)) {
+                    const dayInfo = infoDia as any;
+                    if (dayInfo?.status === 'WORKING' && dayInfo?.routePlan) {
+                      resultado.push({
+                        motoristaId: driver.id, motorista: driver.name, data,
+                        rotaId: dayInfo.routePlan.id, rota: dayInfo.routePlan.code,
+                        inicioPrevisto: dayInfo.routePlan.expectedStart,
+                        fimPrevisto: dayInfo.routePlan.expectedEnd,
+                        operacao: _parsed.data.plantId
+                      });
+                    }
+                  }
+                }
+              }
+            }
+
+            return writeJson(res, 200, { success: _resp.ok, upstreamStatus: _resp.status, upstreamUrl: _upstreamUrl, tokenPreview: getShiftTokenPreview(_token), resultado, data: _parsed, raw: _raw });
+          }
+
+          return writeJson(res, 400, { success: false, error: `Action desconhecida: ${_shiftAction}` });
+        } catch (error: any) {
+          console.error('[SHIFT][DEV] Erro:', error?.message || error);
+          return writeJson(res, 500, { success: false, error: error?.message || 'Erro na Shift API' });
+        }
+      }
 
       // Maintenance events endpoint (dev proxy)
       if (req.method === 'POST' && pathname === '/api/maintenance-events') {

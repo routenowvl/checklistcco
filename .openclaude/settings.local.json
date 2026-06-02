@@ -48,7 +48,9 @@
       "Bash(tasklist)",
       "Bash(dir \"C:\\\\Projetos\\\\checklistcco\\\\src\" /b)",
       "Bash(find /c/Projetos/checklistcco/src -maxdepth 3 -type f -name *.ts -o -name *.tsx)",
-      "Bash(find . -name *.tsx -type f)"
+      "Bash(find . -name *.tsx -type f)",
+      "Bash(find /c/Projetos/checklistcco -maxdepth 4 -name *cron* -o -name *sync* -o -name *schedule*)",
+      "Bash(find /c/Projetos/checklistcco/utils -name rweDb* -o -name *db* -not -path */node_modules/*)"
     ]
   }
 }

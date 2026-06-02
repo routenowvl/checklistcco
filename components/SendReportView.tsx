@@ -1310,19 +1310,26 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
   };
 
   const getRelativeTime = (dateStr: string) => {
-    if (!dateStr) return "Nunca enviado";
+    if (!dateStr) return "Não enviado";
     const date = parseConfigDateTime(dateStr);
     if (!date) return "há -- horas";
-    const now = Date.now();
-    const diffMs = now - date.getTime();
+    const now = new Date();
+    const tz = 'America/Sao_Paulo';
+    const nowBrazil = new Date(now.toLocaleString('en-US', { timeZone: tz }));
+    const diffMs = nowBrazil.getTime() - date.getTime();
     const diffHours = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60)));
+    if (diffHours === 0) {
+      const diffMin = Math.max(0, Math.floor(diffMs / (1000 * 60)));
+      return `há ${diffMin} min`;
+    }
     return `há ${diffHours} horas`;
   };
 
-  // Função auxiliar para formatar data/hora para exibição
+  // Função auxiliar para formatar data/hora para exibição (sempre em fuso de Brasília)
   const formatarDataHora = (dataISO: string) => {
     try {
       let date: Date;
+      const temZ = dataISO.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(dataISO);
       if (dataISO.includes('T')) {
         date = new Date(dataISO);
       } else if (dataISO.includes('/')) {
@@ -1336,9 +1343,20 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
       if (isNaN(date.getTime())) return "Data inválida";
 
-      const dataFormatada = date.toLocaleDateString('pt-BR');
-      const horaFormatada = date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-      return `${dataFormatada} ${horaFormatada}`;
+      // Se tem Z/sufixo de timezone, converte para horário de SP; se não, já é horário local
+      if (temZ) {
+        const tz = 'America/Sao_Paulo';
+        const dataFormatada = date.toLocaleDateString('pt-BR', { timeZone: tz });
+        const horaFormatada = date.toLocaleTimeString('pt-BR', { timeZone: tz, hour: '2-digit', minute: '2-digit' });
+        return `${dataFormatada} ${horaFormatada}`;
+      } else {
+        const dia = String(date.getDate()).padStart(2, '0');
+        const mes = String(date.getMonth() + 1).padStart(2, '0');
+        const ano = date.getFullYear();
+        const hora = String(date.getHours()).padStart(2, '0');
+        const minuto = String(date.getMinutes()).padStart(2, '0');
+        return `${dia}/${mes}/${ano} ${hora}:${minuto}`;
+      }
     } catch {
       return "Data inválida";
     }
@@ -1379,14 +1397,19 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
           const now = new Date();
           const diffMs = now.getTime() - parsedDate.getTime();
           const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-          relativeTime = `há ${diffHours} horas`;
+          if (diffHours === 0) {
+            const diffMin = Math.max(0, Math.floor(diffMs / (1000 * 60)));
+            relativeTime = `há ${diffMin} min`;
+          } else {
+            relativeTime = `há ${diffHours} horas`;
+          }
         } else {
           timestamp = new Date().toISOString();
           relativeTime = "há -- horas";
         }
       } else {
         timestamp = new Date().toISOString();
-        relativeTime = "Nunca enviado";
+        relativeTime = "Não enviado";
       }
 
       let status = "PREVISTO";
@@ -1469,14 +1492,19 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
           const now = new Date();
           const diffMs = now.getTime() - parsedDate.getTime();
           const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-          relativeTime = `há ${diffHours} horas`;
+          if (diffHours === 0) {
+            const diffMin = Math.max(0, Math.floor(diffMs / (1000 * 60)));
+            relativeTime = `há ${diffMin} min`;
+          } else {
+            relativeTime = `há ${diffHours} horas`;
+          }
         } else {
           timestamp = new Date().toISOString();
           relativeTime = "há -- horas";
         }
       } else {
         timestamp = new Date().toISOString();
-        relativeTime = "Nunca enviado";
+        relativeTime = "Não enviado";
       }
 
       let status = "PREVISTO";
@@ -1551,7 +1579,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
         id: op,
         operacao: op,
         timestamp: parsedUltimoEnvio ? parsedUltimoEnvio.toISOString() : new Date().toISOString(),
-        relativeTime: ultimoEnvioNC ? getRelativeTime(ultimoEnvioNC) : "Nunca enviado",
+        relativeTime: ultimoEnvioNC ? getRelativeTime(ultimoEnvioNC) : "Não enviado",
         status: ncCount > 0 ? `${ncCount} NÃO COLETAS` : "TODOS COLETADOS",
         statusColor: ncCount > 0 ? "bg-red-500 text-white" : "bg-emerald-500 text-white"
       };
@@ -1568,7 +1596,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
         id: 'DEALE',
         operacao: 'DEALE',
         timestamp: parsedUltimoEnvioDeale ? parsedUltimoEnvioDeale.toISOString() : new Date().toISOString(),
-        relativeTime: ultimoEnvioDealeNC ? getRelativeTime(ultimoEnvioDealeNC) : "Nunca enviado",
+        relativeTime: ultimoEnvioDealeNC ? getRelativeTime(ultimoEnvioDealeNC) : "Não enviado",
         status: dealeNcCount > 0 ? `${dealeNcCount} NÃO COLETAS` : "TODOS COLETADOS",
         statusColor: dealeNcCount > 0 ? "bg-red-500 text-white" : "bg-emerald-500 text-white"
       });
@@ -1758,9 +1786,6 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
                     <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${isAtualizacao ? 'left-5' : 'left-0.5'}`}></div>
                   </div>
                 </label>
-                <span className={`text-[9px] font-black uppercase ${isAtualizacao ? 'text-green-600' : 'text-slate-400'}`}>
-                  {isAtualizacao ? 'SIM' : 'NÃO'}
-                </span>
              </div>
           </div>
         </div>

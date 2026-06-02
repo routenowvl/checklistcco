@@ -1961,9 +1961,6 @@ const NonCollectionsView: React.FC<{
               <h1 className="text-2xl font-black uppercase text-slate-800 dark:text-white tracking-tight">
                 Não coletas
               </h1>
-              <p className="text-xs font-bold text-slate-500 dark:text-slate-400 mt-1 uppercase tracking-widest">
-                Acompanhamento de ocorrências
-              </p>
               {!canEditData && (
                 <span className={`inline-flex mt-2 text-[9px] font-black uppercase tracking-widest px-2 py-1 rounded-full border ${isDarkMode ? 'text-amber-300 border-amber-500/60 bg-amber-500/10' : 'text-amber-700 border-amber-500 bg-amber-50'}`}>
                   Somente visualização
@@ -2105,14 +2102,6 @@ const NonCollectionsView: React.FC<{
               <Database size={16} /> Histórico
             </button>
           )}
-
-          <button
-            onClick={loadData}
-            className="p-3 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-sm hover:shadow-md transition-all"
-            title="Recarregar"
-          >
-            <RefreshCw size={20} className="text-slate-600 dark:text-slate-400" />
-          </button>
 
           <button
             onClick={() => setIsDarkMode(!isDarkMode)}

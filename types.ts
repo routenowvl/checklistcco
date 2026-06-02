@@ -82,6 +82,7 @@ export interface RouteConfig {
   tolerancia: string;
   nomeExibicao: string;
   plantId?: number | null;
+  datalakePlantId?: number | null;
   Conteudo?: string; // Snapshot JSON por operação (modo visualização)
   ConteudoNcoletas?: string; // Snapshot JSON de não coletas por operação (modo visualização)
   ultimoEnvioSaida?: string;

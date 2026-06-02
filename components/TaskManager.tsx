@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Task, OperationStatus, User } from '../types';
 import { SharePointService, DailyWarning } from '../services/sharepointService';
 import { getValidToken } from '../services/tokenService';
@@ -9,7 +10,7 @@ import {
   ShieldCheck, AlertCircle, RefreshCw, CheckCircle,
   CheckSquare, Lock, CheckCircle2, PaintBucket,
   HelpCircle, X, LogOut, ChevronDown, ChevronRight,
-  RotateCcw, Save, UserCheck, Bell, MessageSquarePlus, Megaphone,
+  RotateCcw, Save, UserCheck, Bell, MessageSquarePlus, History, Megaphone,
   Clock, Check
 } from 'lucide-react';
 
@@ -47,6 +48,7 @@ const TaskManager: React.FC<TaskManagerProps> = ({
   onLogout,
   teamMembers
 }) => {
+  const navigate = useNavigate();
   const [activeTool, setActiveTool] = useState<OperationStatus | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
   const [compact, setCompact] = useState(true);
@@ -446,13 +448,13 @@ const TaskManager: React.FC<TaskManagerProps> = ({
           </div>
 
           <div className="flex items-center gap-1">
-            <button 
-              onClick={() => setIsCreateWarningModalOpen(true)}
+            <button
+              onClick={() => navigate('/history')}
               className="flex items-center gap-2 px-3 py-2 bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-xl hover:bg-blue-100 dark:hover:bg-blue-900/50 transition-all border border-blue-100 dark:border-blue-800 shadow-sm"
-              title="Adicionar Aviso Operacional"
+              title="Histórico Digital"
             >
-              <MessageSquarePlus size={18} />
-              <span className="text-xs font-bold hidden sm:inline">Aviso</span>
+              <History size={18} />
+              <span className="text-xs font-bold hidden sm:inline">Histórico</span>
             </button>
 
             <button 

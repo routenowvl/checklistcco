@@ -51,6 +51,7 @@ export type ConfigRow = {
   tolerancia: string;
   nome_exibicao: string;
   plant_id: number | null;
+  datalake_plant_id: number | null;
   conteudo: string;
   conteudo_ncoletas: string;
   ultimo_envio_saida: string | null;

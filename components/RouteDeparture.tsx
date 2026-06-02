@@ -14,7 +14,7 @@ import {
   ChevronRight, Maximize2, Minimize2,
   Archive, Database, Save, LinkIcon,
   Layers, Trash2, Settings2, Check, Table, SortAsc,
-  Sun, Moon, AlertTriangle, Calendar, ArrowUpDown, MessageCircle, LogOut, Wrench, Info
+  Sun, Moon, AlertTriangle, Calendar, CalendarDays, ArrowUpDown, MessageCircle, LogOut, Wrench, Info
 } from 'lucide-react';
 
 const MOTIVOS = [
@@ -545,6 +545,14 @@ const RouteDepartureView: React.FC<{
   const [selectedRouteAlert, setSelectedRouteAlert] = useState<{ rota: string; history: RouteDeparture[] } | null>(null);
   const [maintenanceAlerts, setMaintenanceAlerts] = useState<Record<string, MaintenanceEventInfo[]>>({});
   const [selectedMaintenanceAlert, setSelectedMaintenanceAlert] = useState<{ route: RouteDeparture; events: MaintenanceEventInfo[] } | null>(null);
+
+  // Estados para modal de visualização de escala (Shift API)
+  const [isShiftModalOpen, setIsShiftModalOpen] = useState(false);
+  const [shiftDate, setShiftDate] = useState('');
+  const [isShiftLoading, setIsShiftLoading] = useState(false);
+  const [shiftResults, setShiftResults] = useState<any[]>([]);
+  const [shiftError, setShiftError] = useState<string | null>(null);
+  const [shiftFilterOperacao, setShiftFilterOperacao] = useState<string>('');
 
   // Estado para alertas de motoristas com atrasos recorrentes por "Mão de obra"
   const [motoristAlerts, setMotoristAlerts] = useState<Record<string, { count: number; history: RouteDeparture[] }>>({});
@@ -2784,6 +2792,114 @@ const RouteDepartureView: React.FC<{
     }
   };
 
+  // ─── Shift API: Consultar Escala ──────────────────────────────────────
+  const handleFetchShift = async () => {
+    if (!shiftDate) {
+      setShiftError('Selecione uma data para buscar.');
+      return;
+    }
+
+    setIsShiftLoading(true);
+    setShiftError(null);
+    setShiftResults([]);
+
+    try {
+      // Extrai YYYYMM da data selecionada (formato: YYYY-MM-DD)
+      const dateParts = shiftDate.split('-');
+      const code = `${dateParts[0]}${dateParts[1]}`;
+      const selectedDay = shiftDate; // YYYY-MM-DD
+
+      // Busca plant_ids (Shift API) das operações do usuário
+      const plantIds = userConfigs
+        .map(c => c.plantId)
+        .filter((id): id is number => id != null);
+
+      if (plantIds.length === 0) {
+        setShiftError('Nenhuma operação com plant_id configurado encontrado.');
+        setIsShiftLoading(false);
+        return;
+      }
+
+      const allResults: any[] = [];
+
+      // Para cada plant_id, busca escala e consolidação
+      for (const plantId of plantIds) {
+        // Passo 1: Buscar schedules do mês
+        const schedRes = await fetch('/api/shift', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'schedules', plant_id: plantId, code })
+        });
+        const schedData = await schedRes.json();
+
+        if (!schedData.success) {
+          console.warn(`[SHIFT] Falha schedules plant_id ${plantId}:`, {
+            error: schedData.error,
+            upstreamStatus: schedData.upstreamStatus,
+            url: schedData.upstreamUrl,
+            raw: String(schedData.raw || '').slice(0, 300)
+          });
+          // Mostra o primeiro erro no modal para ajudar no debug
+          if (!shiftError && schedData.upstreamStatus) {
+            setShiftError(`API retornou status ${schedData.upstreamStatus} para plant_id ${plantId}. Verifique o console para detalhes.`);
+          }
+          continue;
+        }
+
+        // Extrai schedule_id da resposta paginada do Laravel
+        // Estrutura: schedData.data = { "data": { "data": [...schedules...], "current_page": 1, "total": N } }
+        let rawSchedules: any[] = [];
+        const d = schedData.data;
+        if (Array.isArray(d)) {
+          rawSchedules = d;
+        } else if (d?.data) {
+          if (Array.isArray(d.data)) {
+            rawSchedules = d.data;
+          } else if (d.data?.data && Array.isArray(d.data.data)) {
+            // Laravel paginated: { data: { data: [...], current_page, total, ... } }
+            rawSchedules = d.data.data;
+          }
+        }
+
+        // Filtra apenas schedules válidos com id
+        const schedules = rawSchedules.filter((s: any) => s && s.id != null);
+        console.log(`[SHIFT] plant_id=${plantId}, schedules encontrados: ${schedules.length}, total bruto: ${rawSchedules.length}`);
+        if (schedules.length === 0) continue;
+        const scheduleId = schedules[0].id;
+
+        // Passo 2: Buscar consolidação
+        const consRes = await fetch('/api/shift', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'consolidation', schedule_id: scheduleId })
+        });
+        const consData = await consRes.json();
+
+        if (!consData.success) {
+          console.warn(`[SHIFT] Falha consolidation schedule ${scheduleId}:`, consData.error || consData.upstreamStatus, consData);
+          continue;
+        }
+
+        // Filtra pelo dia selecionado
+        const dayResults = (consData.resultado || []).filter((r: any) => r.data === selectedDay);
+        allResults.push(...dayResults);
+      }
+
+      if (allResults.length === 0) {
+        setShiftError('Nenhuma escala encontrada para a data selecionada.');
+      } else {
+        // Ordena por horário previsto
+        allResults.sort((a, b) => (a.inicioPrevisto || '').localeCompare(b.inicioPrevisto || ''));
+        setShiftResults(allResults);
+      }
+    } catch (e: any) {
+      console.error('[SHIFT] Erro:', e.message);
+      setShiftError(`Erro ao buscar escala: ${e.message}`);
+    } finally {
+      setIsShiftLoading(false);
+    }
+  };
+
   const toggleSelection = (id: string) => {
     setSelectedIds(prev => {
       const next = new Set(prev);
@@ -4064,6 +4180,8 @@ const RouteDepartureView: React.FC<{
           <button onClick={() => setIsDarkMode(!isDarkMode)} className={`p-2 rounded-lg font-bold border transition-all shadow-sm ${isDarkMode ? 'bg-slate-800 text-yellow-400 border-slate-700 hover:bg-slate-700' : 'bg-white text-slate-700 border-slate-400 hover:bg-slate-50 hover:border-slate-500'}`} title={isDarkMode ? 'Modo Claro' : 'Modo Escuro'}>
             {isDarkMode ? <Sun size={18} /> : <Moon size={18} />}
           </button>
+          {/* Botão ESCALA oculto temporariamente */}
+          {/* <button onClick={() => { setShiftResults([]); setShiftError(null); setShiftDate(''); setShiftFilterOperacao(''); setIsShiftModalOpen(true); }} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] tracking-wide transition-all shadow-sm ${isDarkMode ? 'bg-slate-800 text-slate-300 hover:bg-slate-700 border-slate-700' : 'bg-white text-slate-800 hover:bg-slate-50 hover:border-slate-500 border-slate-400'}`} title="Consultar Escala de Motoristas"><CalendarDays size={16} /> Escala</button> */}
           <button onClick={() => setIsSortByTimeEnabled(!isSortByTimeEnabled)} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] transition-all shadow-sm ${isSortByTimeEnabled ? 'bg-primary-600 text-white border-primary-600' : isDarkMode ? 'bg-slate-800 text-slate-300 border-slate-700' : 'bg-white text-slate-800 border-slate-400 hover:bg-slate-50 hover:border-slate-500'}`}><SortAsc size={16} /> Horário</button>
           {canEditData && (
             <button
@@ -4223,7 +4341,7 @@ const RouteDepartureView: React.FC<{
                                                   e.stopPropagation();
                                                   setSelectedRouteAlert({ rota: route.rota, history: routeAlerts[route.rota].history });
                                                 }}
-                                                className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 bg-red-500 hover:bg-red-600 text-white text-[9px] font-black rounded-full cursor-pointer transition-colors z-10"
+                                                className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 bg-red-700/80 hover:bg-red-700 text-white text-[9px] font-black rounded-full cursor-pointer transition-colors z-10"
                                                 title={`${routeAlerts[route.rota].count} ocorrência(s) de atraso/adiantamento nos últimos 7 dias. Clique para ver histórico.`}
                                               >
                                                 {routeAlerts[route.rota].count}
@@ -5589,7 +5707,7 @@ const RouteDepartureView: React.FC<{
 
       {isHistoryModalOpen && (
           <div className={`fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[200] flex items-center justify-center p-4 ${isHistoryFullscreen ? 'p-0' : ''}`}>
-              <div className={`bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-[2.5rem] shadow-2xl w-full flex flex-col ${isHistoryFullscreen ? 'max-w-none w-full h-full rounded-none' : 'max-w-7xl max-h-[94vh]'}`}>
+              <div className={`bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-2xl w-full flex flex-col overflow-hidden ${isHistoryFullscreen ? 'max-w-none w-full h-full rounded-none' : 'max-w-7xl max-h-[94vh]'}`}>
                   {historyEditWarning && (
                       <div className="mx-5 mt-2 mb-1 px-3 py-2 rounded-xl border border-amber-300 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-700 text-amber-800 dark:text-amber-200 text-[10px] font-bold flex items-start gap-2">
                           <AlertTriangle size={16} className="mt-0.5 shrink-0" />
@@ -5698,11 +5816,11 @@ const RouteDepartureView: React.FC<{
                   )}
                   <div className="flex-1 overflow-auto bg-slate-50 dark:bg-slate-950 p-4">
                       {archivedResults.length > 0 ? (
-                          <div className="bg-white dark:bg-slate-900 rounded-2xl border dark:border-slate-800 overflow-hidden">
+                          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 overflow-hidden">
                               <table className="w-full border-collapse text-[10px]">
-                                  <thead className="sticky top-0 bg-slate-200 dark:bg-slate-800 text-slate-600 font-black uppercase z-10">
+                                  <thead className="sticky top-0 bg-slate-100 dark:bg-slate-800/80 z-10">
                                       <tr>
-                                          <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center relative group">
+                                          <th className="p-2 border-b border-r border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 font-bold text-center relative group">
                                               <div className="flex items-center justify-center gap-1">
                                                   <span>Semana</span>
                                                   <button
@@ -5738,8 +5856,8 @@ const RouteDepartureView: React.FC<{
                                                 />
                                               )}
                                           </th>
-                                          <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center">Data</th>
-                                          <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-left relative group">
+                                          <th className="p-2 border-b border-r border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 font-bold text-center">Data</th>
+                                          <th className="p-2 border-b border-r border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 font-bold text-left relative group">
                                               <div className="flex items-center justify-between">
                                                   <span>Rota</span>
                                                   <button
@@ -5775,8 +5893,8 @@ const RouteDepartureView: React.FC<{
                                                 />
                                               )}
                                           </th>
-                                          <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center">Início</th>
-                                          <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-left relative group">
+                                          <th className="p-2 border-b border-r border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 font-bold text-center">Início</th>
+                                          <th className="p-2 border-b border-r border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 font-bold text-left relative group">
                                               <div className="flex items-center justify-between">
                                                   <span>Motorista</span>
                                                   <button
@@ -5812,7 +5930,7 @@ const RouteDepartureView: React.FC<{
                                                 />
                                               )}
                                           </th>
-                                          <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center relative group">
+                                          <th className="p-2 border-b border-r border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 font-bold text-center relative group">
                                               <div className="flex items-center justify-center gap-1">
                                                   <span>Placa</span>
                                                   <button
@@ -5848,8 +5966,8 @@ const RouteDepartureView: React.FC<{
                                                 />
                                               )}
                                           </th>
-                                          <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center">Saída</th>
-                                          <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-left relative group">
+                                          <th className="p-2 border-b border-r border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 font-bold text-center">Saída</th>
+                                          <th className="p-2 border-b border-r border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 font-bold text-left relative group">
                                               <div className="flex items-center justify-between">
                                                   <span>Motivo</span>
                                                   <button
@@ -5885,8 +6003,8 @@ const RouteDepartureView: React.FC<{
                                                 />
                                               )}
                                           </th>
-                                          <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-left">Observação</th>
-                                          <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center relative group">
+                                          <th className="p-2 border-b border-r border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 font-bold text-left">Observação</th>
+                                          <th className="p-2 border-b border-r border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 font-bold text-center relative group">
                                               <div className="flex items-center justify-center gap-1">
                                                   <span>Operação</span>
                                                   <button
@@ -5933,7 +6051,7 @@ const RouteDepartureView: React.FC<{
                                                 />
                                               )}
                                           </th>
-                                          <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center relative group">
+                                          <th className="p-2 border-b border-r border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 font-bold text-center relative group">
                                               <div className="flex items-center justify-center gap-1">
                                                   <span>Status</span>
                                                   <button
@@ -5969,8 +6087,8 @@ const RouteDepartureView: React.FC<{
                                                 />
                                               )}
                                           </th>
-                                          <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center">Tempo</th>
-                                          <th className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center">Delay de Mapeamento</th>
+                                          <th className="p-2 border-b border-r border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 font-bold text-center">Tempo</th>
+                                          <th className="p-2 border-b border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 font-bold text-center">Delay de Mapeamento</th>
                                       </tr>
                                   </thead>
                                   <tbody>
@@ -5979,8 +6097,8 @@ const RouteDepartureView: React.FC<{
                                           const pendingEdits = pendingHistoryEdits[r.id!];
                                           
                                           return (
-                                              <tr key={i} className={`hover:bg-slate-50 dark:hover:bg-slate-800 border-b border-slate-200 dark:border-slate-800 group ${pendingEdits ? 'bg-amber-50 dark:bg-amber-900/10' : ''}`}>
-                                              <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center font-mono">
+                                              <tr key={i} className={`hover:bg-slate-50 dark:hover:bg-slate-800/50 border-b border-slate-100 dark:border-slate-800 group ${pendingEdits ? 'bg-amber-50 dark:bg-amber-900/10' : ''}`}>
+                                              <td className="p-2 border-r border-slate-100 dark:border-slate-800 text-center font-mono text-slate-700 dark:text-slate-300">
                                                   {editingHistoryId === r.id && editingHistoryField === 'semana' ? (
                                                       <input
                                                           type="text"
@@ -5999,7 +6117,7 @@ const RouteDepartureView: React.FC<{
                                                       </div>
                                                   )}
                                               </td>
-                                              <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center">
+                                              <td className="p-2 border-r border-slate-100 dark:border-slate-800 text-center text-slate-700 dark:text-slate-300">
                                                   {editingHistoryId === r.id && editingHistoryField === 'data' ? (
                                                       <input
                                                           type="date"
@@ -6025,7 +6143,7 @@ const RouteDepartureView: React.FC<{
                                                       </div>
                                                   )}
                                               </td>
-                                              <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} relative">
+                                              <td className="p-2 border-r border-slate-100 dark:border-slate-800 text-slate-700 dark:text-slate-300">
                                                   {(() => {
                                                     return (
                                                       <>
@@ -6041,7 +6159,7 @@ const RouteDepartureView: React.FC<{
                                                   ) : (
                                                       <div
                                                           onClick={() => startHistoryCellEdit(r, 'rota')}
-                                                          className="font-bold text-primary-700 dark:text-primary-400 cursor-pointer hover:bg-primary-50 dark:hover:bg-primary-900/20 rounded px-1"
+                                                          className="font-bold text-slate-700 dark:text-slate-300 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 rounded px-1"
                                                       >
                                                           {r.rota}
                                                       </div>
@@ -6050,7 +6168,7 @@ const RouteDepartureView: React.FC<{
                                                     );
                                                   })()}
                                               </td>
-                                              <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center font-mono">
+                                              <td className="p-2 border-r border-slate-100 dark:border-slate-800 text-center font-mono text-slate-700 dark:text-slate-300">
                                                   {editingHistoryId === r.id && editingHistoryField === 'inicio' ? (
                                                       <input
                                                           type="text"
@@ -6069,7 +6187,7 @@ const RouteDepartureView: React.FC<{
                                                       </div>
                                                   )}
                                               </td>
-                                              <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}">
+                                              <td className="p-2 border-r border-slate-100 dark:border-slate-800 text-slate-700 dark:text-slate-300">
                                                   {editingHistoryId === r.id && editingHistoryField === 'motorista' ? (
                                                       <input
                                                           type="text"
@@ -6088,7 +6206,7 @@ const RouteDepartureView: React.FC<{
                                                       </div>
                                                   )}
                                               </td>
-                                              <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center font-mono">
+                                              <td className="p-2 border-r border-slate-100 dark:border-slate-800 text-center font-mono text-slate-700 dark:text-slate-300">
                                                   {editingHistoryId === r.id && editingHistoryField === 'placa' ? (
                                                       <input
                                                           type="text"
@@ -6110,7 +6228,7 @@ const RouteDepartureView: React.FC<{
                                                       </div>
                                                   )}
                                               </td>
-                                              <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center font-mono">
+                                              <td className="p-2 border-r border-slate-100 dark:border-slate-800 text-center font-mono text-slate-700 dark:text-slate-300">
                                                   {editingHistoryId === r.id && editingHistoryField === 'saida' ? (
                                                       <input
                                                           type="text"
@@ -6129,7 +6247,7 @@ const RouteDepartureView: React.FC<{
                                                       </div>
                                                   )}
                                               </td>
-                                              <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'}">
+                                              <td className="p-2 border-r border-slate-100 dark:border-slate-800 text-slate-700 dark:text-slate-300">
                                                   {editingHistoryId === r.id && editingHistoryField === 'motivo' ? (
                                                       <select
                                                           defaultValue={r.motivo}
@@ -6150,7 +6268,7 @@ const RouteDepartureView: React.FC<{
                                                       </div>
                                                   )}
                                               </td>
-                                              <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} max-w-xs">
+                                              <td className="p-2 border-r border-slate-100 dark:border-slate-800 text-slate-700 dark:text-slate-300 max-w-xs">
                                                   {editingHistoryId === r.id && editingHistoryField === 'observacao' ? (
                                                       <textarea
                                                           defaultValue={r.observacao}
@@ -6174,10 +6292,10 @@ const RouteDepartureView: React.FC<{
                                                       </div>
                                                   )}
                                               </td>
-                                              <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center font-black">
+                                              <td className="p-2 border-r border-slate-100 dark:border-slate-800 text-center font-bold text-slate-600 dark:text-slate-400">
                                                   {r.operacao}
                                               </td>
-                                              <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center">
+                                              <td className="p-2 border-r border-slate-100 dark:border-slate-800 text-center">
                                                   <span className={`px-2 py-0.5 rounded-full text-[8px] font-black border ${
                                                       r.statusOp === 'OK' ? 'bg-emerald-100 border-emerald-400 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400' :
                                                       r.statusOp === 'Atrasada' ? 'bg-yellow-100 border-yellow-400 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400' :
@@ -6189,10 +6307,10 @@ const RouteDepartureView: React.FC<{
                                                       {r.statusOp}
                                                   </span>
                                               </td>
-                                              <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center font-mono font-bold">
+                                              <td className="p-2 border-r border-slate-100 dark:border-slate-800 text-center font-mono text-slate-600 dark:text-slate-400">
                                                   {r.tempo}
                                               </td>
-                                              <td className="p-2 border ${isDarkMode ? 'border-slate-700' : 'border-slate-400'} text-center font-mono font-bold">
+                                              <td className="p-2 border-r border-slate-100 dark:border-slate-800 text-center font-mono text-slate-600 dark:text-slate-400">
                                                   <span className={r.tempoResposta && parseInt(r.tempoResposta.split(':')[0], 10) >= 1 ? `inline-block px-2 py-0.5 rounded-full ${isDarkMode ? 'bg-red-900/60 text-red-300' : 'bg-red-100 text-red-700'}` : ''}>
                                                       {r.tempoResposta || '---'}
                                                   </span>
@@ -6237,62 +6355,47 @@ const RouteDepartureView: React.FC<{
           const todayEvents = eventsByDate[routeDate] || [];
           const futureDates = sortedDates.filter(d => d > routeDate);
 
+          const renderEvent = (event: MaintenanceEventInfo, keyPrefix: string, idx: number) => (
+            <div key={`${keyPrefix}-${idx}`} className="px-4 py-3 bg-slate-50 dark:bg-slate-800/50 rounded-lg border border-slate-200 dark:border-slate-700">
+              <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-2 text-[10px]">
+                <div><span className="font-semibold text-slate-500 dark:text-slate-400">Tipo:</span> <span className="text-slate-800 dark:text-slate-200">{event.tipo || '---'}</span></div>
+                <div><span className="font-semibold text-slate-500 dark:text-slate-400">Título:</span> <span className="text-slate-800 dark:text-slate-200">{event.titulo || '---'}</span></div>
+                <div><span className="font-semibold text-slate-500 dark:text-slate-400">Categoria:</span> <span className="text-slate-800 dark:text-slate-200">{event.categoria || '---'}</span></div>
+                <div><span className="font-semibold text-slate-500 dark:text-slate-400">Área:</span> <span className="text-slate-800 dark:text-slate-200">{event.area || '---'}</span></div>
+                <div><span className="font-semibold text-slate-500 dark:text-slate-400">Status:</span> <span className="text-slate-800 dark:text-slate-200">{event.status || '---'}</span></div>
+              </div>
+            </div>
+          );
+
           return (
           <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[300] flex items-center justify-center p-4" onClick={() => setSelectedMaintenanceAlert(null)}>
-              <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] shadow-2xl w-full max-w-2xl border dark:border-slate-800 overflow-hidden" onClick={(e) => e.stopPropagation()}>
-                  <div className="bg-amber-600 p-6 flex justify-between items-center text-white">
-                      <div className="flex items-center gap-4">
-                          <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center">
-                              <Wrench size={26} />
+              <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-2xl border border-slate-200 dark:border-slate-700 overflow-hidden" onClick={(e) => e.stopPropagation()}>
+                  <div className="bg-slate-800 dark:bg-slate-800 p-5 flex justify-between items-center text-white">
+                      <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-slate-700 dark:bg-slate-600 rounded-xl flex items-center justify-center">
+                              <Wrench size={20} className="text-slate-300" />
                           </div>
                           <div>
-                              <h3 className="font-black uppercase tracking-widest text-lg">Eventos de Manutenção</h3>
-                              <p className="text-[10px] font-bold text-white/85 uppercase tracking-wide">
-                                Rota: {selectedMaintenanceAlert.route.rota || '---'} • Placa: {selectedMaintenanceAlert.route.placa || '---'}
-                              </p>
+                              <h3 className="font-bold uppercase tracking-wider text-sm text-slate-100">Eventos de Manutenção</h3>
+                              <p className="text-[10px] font-medium text-slate-400">Rota: {selectedMaintenanceAlert.route.rota || '---'} &bull; Placa: {selectedMaintenanceAlert.route.placa || '---'}</p>
                           </div>
                       </div>
-                      <button onClick={() => setSelectedMaintenanceAlert(null)} className="p-2 hover:bg-white/20 rounded-xl transition-colors">
-                          <X size={28} />
+                      <button onClick={() => setSelectedMaintenanceAlert(null)} className="p-1.5 hover:bg-slate-700 rounded-lg transition-colors">
+                          <X size={20} className="text-slate-400" />
                       </button>
                   </div>
-                  <div className="p-6 max-h-[60vh] overflow-y-auto scrollbar-thin">
+                  <div className="p-4 max-h-[60vh] overflow-y-auto scrollbar-thin">
                       {/* Card: Manutenções do Dia */}
                       {todayEvents.length > 0 && (
-                        <div className="mb-5">
-                          <div className="mb-3 flex items-center gap-2">
-                            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-black uppercase border-2 bg-amber-100 border-amber-400 text-amber-800 dark:bg-amber-900/40 dark:border-amber-700 dark:text-amber-300">
-                              <Calendar size={12} /> Hoje — {formatDateToBR(routeDate)}
+                        <div className="mb-4">
+                          <div className="mb-2 flex items-center gap-2">
+                            <span className="text-[10px] font-semibold text-slate-600 dark:text-slate-300 uppercase">
+                              Hoje — {formatDateToBR(routeDate)}
                             </span>
-                            <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500">{todayEvents.length} evento(s)</span>
+                            <span className="text-[10px] text-slate-400">{todayEvents.length} evento(s)</span>
                           </div>
-                          <div className="space-y-3">
-                            {todayEvents.map((event, idx) => (
-                              <div key={`today-${idx}`} className="p-4 bg-white dark:bg-slate-900 rounded-2xl border-2 border-amber-300 dark:border-amber-800 shadow-sm">
-                                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
-                                      <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
-                                          <p className="text-[9px] font-black uppercase text-slate-500 dark:text-slate-400 mb-1">Tipo</p>
-                                          <p className="text-[11px] font-bold text-slate-800 dark:text-slate-200">{event.tipo || '---'}</p>
-                                      </div>
-                                      <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
-                                          <p className="text-[9px] font-black uppercase text-slate-500 dark:text-slate-400 mb-1">Título</p>
-                                          <p className="text-[11px] font-bold text-slate-800 dark:text-slate-200">{event.titulo || '---'}</p>
-                                      </div>
-                                      <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
-                                          <p className="text-[9px] font-black uppercase text-slate-500 dark:text-slate-400 mb-1">Categoria</p>
-                                          <p className="text-[11px] font-bold text-slate-800 dark:text-slate-200">{event.categoria || '---'}</p>
-                                      </div>
-                                      <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
-                                          <p className="text-[9px] font-black uppercase text-slate-500 dark:text-slate-400 mb-1">Área</p>
-                                          <p className="text-[11px] font-bold text-slate-800 dark:text-slate-200">{event.area || '---'}</p>
-                                      </div>
-                                      <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
-                                          <p className="text-[9px] font-black uppercase text-slate-500 dark:text-slate-400 mb-1">Status</p>
-                                          <p className="text-[11px] font-bold text-slate-800 dark:text-slate-200">{event.status || '---'}</p>
-                                      </div>
-                                  </div>
-                              </div>
-                            ))}
+                          <div className="space-y-2">
+                            {todayEvents.map((event, idx) => renderEvent(event, 'today', idx))}
                           </div>
                         </div>
                       )}
@@ -6300,47 +6403,22 @@ const RouteDepartureView: React.FC<{
                       {/* Cards: Manutenções Futuras (D+1 a D+3) */}
                       {futureDates.length > 0 && (
                         <div className="mb-2">
-                          <div className="mb-3 flex items-center gap-2">
-                            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-black uppercase border-2 bg-blue-100 border-blue-400 text-blue-800 dark:bg-blue-900/40 dark:border-blue-700 dark:text-blue-300">
-                              <Calendar size={12} /> Programado
+                          <div className="mb-2 flex items-center gap-2">
+                            <span className="text-[10px] font-semibold text-slate-600 dark:text-slate-300 uppercase">
+                              Programado
                             </span>
-                            <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500">{futureDates.reduce((sum, d) => sum + eventsByDate[d].length, 0)} evento(s)</span>
+                            <span className="text-[10px] text-slate-400">{futureDates.reduce((sum, d) => sum + eventsByDate[d].length, 0)} evento(s)</span>
                           </div>
-                          <div className="space-y-4">
+                          <div className="space-y-3">
                             {futureDates.map(date => (
                               <div key={date}>
-                                <div className="flex items-center gap-2 mb-2">
-                                  <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-[10px] font-black uppercase bg-blue-50 text-blue-700 border border-blue-200 dark:bg-blue-950 dark:text-blue-400 dark:border-blue-800">
+                                <div className="mb-1.5">
+                                  <span className="text-[10px] font-medium text-slate-500 dark:text-slate-400">
                                     {formatDateToBR(date)}
                                   </span>
                                 </div>
-                                <div className="space-y-3">
-                                  {eventsByDate[date].map((event, idx) => (
-                                    <div key={`future-${date}-${idx}`} className="p-4 bg-white dark:bg-slate-900 rounded-2xl border-2 border-blue-200 dark:border-blue-900 shadow-sm">
-                                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
-                                            <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
-                                                <p className="text-[9px] font-black uppercase text-slate-500 dark:text-slate-400 mb-1">Tipo</p>
-                                                <p className="text-[11px] font-bold text-slate-800 dark:text-slate-200">{event.tipo || '---'}</p>
-                                            </div>
-                                            <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
-                                                <p className="text-[9px] font-black uppercase text-slate-500 dark:text-slate-400 mb-1">Título</p>
-                                                <p className="text-[11px] font-bold text-slate-800 dark:text-slate-200">{event.titulo || '---'}</p>
-                                            </div>
-                                            <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
-                                                <p className="text-[9px] font-black uppercase text-slate-500 dark:text-slate-400 mb-1">Categoria</p>
-                                                <p className="text-[11px] font-bold text-slate-800 dark:text-slate-200">{event.categoria || '---'}</p>
-                                            </div>
-                                            <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
-                                                <p className="text-[9px] font-black uppercase text-slate-500 dark:text-slate-400 mb-1">Área</p>
-                                                <p className="text-[11px] font-bold text-slate-800 dark:text-slate-200">{event.area || '---'}</p>
-                                            </div>
-                                            <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
-                                                <p className="text-[9px] font-black uppercase text-slate-500 dark:text-slate-400 mb-1">Status</p>
-                                                <p className="text-[11px] font-bold text-slate-800 dark:text-slate-200">{event.status || '---'}</p>
-                                            </div>
-                                        </div>
-                                    </div>
-                                  ))}
+                                <div className="space-y-2">
+                                  {eventsByDate[date].map((event, idx) => renderEvent(event, `future-${date}`, idx))}
                                 </div>
                               </div>
                             ))}
@@ -6350,8 +6428,8 @@ const RouteDepartureView: React.FC<{
 
                       {/* Mensagem quando não há eventos */}
                       {todayEvents.length === 0 && futureDates.length === 0 && (
-                        <div className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-200 dark:border-slate-700">
-                          <p className="text-[11px] font-bold text-slate-500 dark:text-slate-400 text-center">Nenhum evento de manutenção encontrado para esta placa.</p>
+                        <div className="py-4">
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 text-center">Nenhum evento de manutenção encontrado para esta placa.</p>
                         </div>
                       )}
                   </div>
@@ -6363,75 +6441,49 @@ const RouteDepartureView: React.FC<{
       {/* Modal de Alerta de Rota com Histórico de Problemas */}
       {selectedRouteAlert && (
           <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[300] flex items-center justify-center p-4" onClick={() => setSelectedRouteAlert(null)}>
-              <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] shadow-2xl w-full max-w-2xl border dark:border-slate-800 overflow-hidden" onClick={(e) => e.stopPropagation()}>
-                  <div className="bg-red-600 p-6 flex justify-between items-center text-white">
-                      <div className="flex items-center gap-4">
-                          <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center">
-                              <AlertTriangle size={28} />
+              <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-2xl border border-slate-200 dark:border-slate-700 overflow-hidden" onClick={(e) => e.stopPropagation()}>
+                  <div className="bg-slate-800 dark:bg-slate-800 p-5 flex justify-between items-center text-white">
+                      <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-slate-700 dark:bg-slate-600 rounded-xl flex items-center justify-center">
+                              <AlertTriangle size={20} className="text-slate-300" />
                           </div>
                           <div>
-                              <h3 className="font-black uppercase tracking-widest text-lg">Histórico de Problemas</h3>
-                              <p className="text-[10px] font-bold text-white/80 uppercase tracking-wide">Rota: {selectedRouteAlert.rota}</p>
+                              <h3 className="font-bold uppercase tracking-wider text-sm text-slate-100">Histórico de Problemas</h3>
+                              <p className="text-[10px] font-medium text-slate-400">Rota: {selectedRouteAlert.rota}</p>
                           </div>
                       </div>
-                      <button onClick={() => setSelectedRouteAlert(null)} className="p-2 hover:bg-white/20 rounded-xl transition-colors">
-                          <X size={28} />
+                      <button onClick={() => setSelectedRouteAlert(null)} className="p-1.5 hover:bg-slate-700 rounded-lg transition-colors">
+                          <X size={20} className="text-slate-400" />
                       </button>
                   </div>
-                  <div className="p-6 max-h-[60vh] overflow-y-auto scrollbar-thin">
-                      <div className="mb-4 p-4 bg-red-50 dark:bg-red-900/20 rounded-2xl border border-red-200 dark:border-red-800">
-                          <p className="text-[11px] font-black uppercase text-red-700 dark:text-red-400 text-center">
-                              ⚠️ {selectedRouteAlert.history.length} ocorrência(s) de atraso/adiantamento nos últimos 7 dias
-                          </p>
-                      </div>
-                      <div className="space-y-3">
+                  <div className="p-4 max-h-[60vh] overflow-y-auto scrollbar-thin">
+                      <p className="text-[10px] font-semibold text-slate-500 dark:text-slate-400 text-center mb-3">
+                          {selectedRouteAlert.history.length} ocorrência(s) nos últimos 7 dias
+                      </p>
+                      <div className="space-y-2">
                           {selectedRouteAlert.history.map((item, idx) => (
-                              <div key={idx} className="p-5 bg-white dark:bg-slate-900 rounded-2xl border-2 border-slate-200 dark:border-slate-700 shadow-sm hover:shadow-md transition-all">
-                                  {/* Cabeçalho: Status + Data */}
-                                  <div className="flex items-center gap-2 mb-3">
-                                      {/* Badge de Status com ícone */}
-                                      <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-black uppercase border-2 ${
+                              <div key={idx} className="px-4 py-3 bg-slate-50 dark:bg-slate-800/50 rounded-lg border border-slate-200 dark:border-slate-700">
+                                  <div className="flex items-center justify-between mb-1.5">
+                                      <span className={`text-[10px] font-semibold uppercase ${
                                           item.statusOp === 'Atrasada' || item.statusOp === 'Atrasado'
-                                            ? 'bg-red-100 border-red-400 text-red-800 dark:bg-red-900/40 dark:border-red-700 dark:text-red-300'
-                                            : 'bg-blue-100 border-blue-400 text-blue-800 dark:bg-blue-900/40 dark:border-blue-700 dark:text-blue-300'
+                                            ? 'text-red-600 dark:text-red-400'
+                                            : 'text-blue-600 dark:text-blue-400'
                                       }`}>
-                                          {item.statusOp === 'Atrasada' || item.statusOp === 'Atrasado' ? (
-                                              <><AlertTriangle size={12} /> ATRASADA</>
-                                          ) : (
-                                              <><Clock size={12} /> ADIANTADA</>
-                                          )}
+                                          {item.statusOp === 'Atrasada' || item.statusOp === 'Atrasado' ? 'Atrasada' : 'Adiantada'}
                                       </span>
-                                      {/* Data com ícone */}
-                                      <span className="inline-flex items-center gap-1.5 text-[10px] font-bold text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 px-3 py-1.5 rounded-full">
-                                          <Calendar size={12} />
+                                      <span className="text-[10px] font-medium text-slate-500 dark:text-slate-400">
                                           {new Date(item.data).toLocaleDateString('pt-BR')}
                                       </span>
                                   </div>
-                                  {/* Motivo em destaque */}
                                   {item.motivo && (
-                                      <div className="mb-3 p-3 bg-amber-50 dark:bg-amber-900/20 rounded-xl border border-amber-200 dark:border-amber-800">
-                                          <div className="flex items-start gap-2">
-                                              <span className="text-[10px] font-black uppercase text-amber-700 dark:text-amber-400 whitespace-nowrap mt-0.5">
-                                                  📌 Motivo:
-                                              </span>
-                                              <p className="text-[11px] font-bold text-amber-900 dark:text-amber-200 leading-relaxed">
-                                                  {item.motivo}
-                                              </p>
-                                          </div>
-                                      </div>
+                                      <p className="text-[11px] text-slate-700 dark:text-slate-300 leading-relaxed">
+                                          {item.motivo}
+                                      </p>
                                   )}
-                                  {/* Observação em destaque */}
                                   {item.observacao && (
-                                      <div className="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-200 dark:border-slate-700">
-                                          <div className="flex items-start gap-2">
-                                              <span className="text-[10px] font-black uppercase text-slate-500 dark:text-slate-400 whitespace-nowrap mt-0.5">
-                                                  📝 Observação:
-                                              </span>
-                                              <p className="text-[10px] font-normal text-slate-700 dark:text-slate-300 leading-relaxed whitespace-pre-wrap">
-                                                  {item.observacao}
-                                              </p>
-                                          </div>
-                                      </div>
+                                      <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed whitespace-pre-wrap mt-1">
+                                          {item.observacao}
+                                      </p>
                                   )}
                               </div>
                           ))}
@@ -6827,85 +6879,58 @@ const RouteDepartureView: React.FC<{
       {/* Modal de Alerta de Motorista com Histórico de Atrasos "Mão de obra" */}
       {selectedMotoristAlert && (
           <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[300] flex items-center justify-center p-4" onClick={() => setSelectedMotoristAlert(null)}>
-              <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] shadow-2xl w-full max-w-2xl border dark:border-slate-800 overflow-hidden" onClick={(e) => e.stopPropagation()}>
-                  <div className="bg-orange-600 p-6 flex justify-between items-center text-white">
-                      <div className="flex items-center gap-4">
-                          <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center">
-                              <AlertTriangle size={28} />
+              <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-2xl border border-slate-200 dark:border-slate-700 overflow-hidden" onClick={(e) => e.stopPropagation()}>
+                  <div className="bg-slate-800 dark:bg-slate-800 p-5 flex justify-between items-center text-white">
+                      <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-slate-700 dark:bg-slate-600 rounded-xl flex items-center justify-center">
+                              <AlertTriangle size={20} className="text-slate-300" />
                           </div>
                           <div>
-                              <h3 className="font-black uppercase tracking-widest text-lg">Histórico de Atrasos — Mão de Obra</h3>
-                              <p className="text-[10px] font-bold text-white/80 uppercase tracking-wide">Motorista: {selectedMotoristAlert.motorista}</p>
+                              <h3 className="font-bold uppercase tracking-wider text-sm text-slate-100">Histórico de Atrasos — Mão de Obra</h3>
+                              <p className="text-[10px] font-medium text-slate-400">Motorista: {selectedMotoristAlert.motorista}</p>
                           </div>
                       </div>
-                      <button onClick={() => setSelectedMotoristAlert(null)} className="p-2 hover:bg-white/20 rounded-xl transition-colors">
-                          <X size={28} />
+                      <button onClick={() => setSelectedMotoristAlert(null)} className="p-1.5 hover:bg-slate-700 rounded-lg transition-colors">
+                          <X size={20} className="text-slate-400" />
                       </button>
                   </div>
-                  <div className="p-6 max-h-[60vh] overflow-y-auto scrollbar-thin">
-                      <div className="mb-4 p-4 bg-orange-50 dark:bg-orange-900/20 rounded-2xl border border-orange-200 dark:border-orange-800">
-                          <p className="text-[11px] font-black uppercase text-orange-700 dark:text-orange-400 text-center">
-                              ⚠️ {selectedMotoristAlert.count} ocorrência(s) de atraso por "Mão de obra" nos últimos 30 dias
-                          </p>
-                      </div>
-                      <div className="space-y-3">
+                  <div className="p-4 max-h-[60vh] overflow-y-auto scrollbar-thin">
+                      <p className="text-[10px] font-semibold text-slate-500 dark:text-slate-400 text-center mb-3">
+                          {selectedMotoristAlert.count} ocorrência(s) nos últimos 30 dias
+                      </p>
+                      <div className="space-y-2">
                           {selectedMotoristAlert.history.map((item, idx) => (
-                              <div key={idx} className="p-5 bg-white dark:bg-slate-900 rounded-2xl border-2 border-slate-200 dark:border-slate-700 shadow-sm hover:shadow-md transition-all">
-                                  {/* Cabeçalho: Data + Operação */}
-                                  <div className="flex items-center gap-2 mb-3">
-                                      <span className="inline-flex items-center gap-1.5 text-[10px] font-bold text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 px-3 py-1.5 rounded-full">
-                                          <Calendar size={12} />
-                                          {new Date(item.data).toLocaleDateString('pt-BR')}
-                                      </span>
-                                      {item.operacao && (
-                                          <span className="inline-flex items-center gap-1.5 text-[10px] font-bold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 px-3 py-1.5 rounded-full border border-blue-200 dark:border-blue-800">
-                                              {item.operacao}
+                              <div key={idx} className="px-4 py-3 bg-slate-50 dark:bg-slate-800/50 rounded-lg border border-slate-200 dark:border-slate-700">
+                                  <div className="flex items-center justify-between mb-1">
+                                      <div className="flex items-center gap-2">
+                                          <span className="text-[10px] font-medium text-slate-500 dark:text-slate-400">
+                                              {new Date(item.data).toLocaleDateString('pt-BR')}
                                           </span>
-                                      )}
-                                      {item.rota && (
-                                          <span className="inline-flex items-center gap-1.5 text-[10px] font-bold text-slate-600 dark:text-slate-300 bg-slate-50 dark:bg-slate-800 px-3 py-1.5 rounded-full border border-slate-200 dark:border-slate-700">
-                                              Rota: {item.rota}
-                                          </span>
-                                      )}
-                                  </div>
-                                  {/* Observação em destaque */}
-                                  {item.observacao && (
-                                      <div className="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-200 dark:border-slate-700">
-                                          <div className="flex items-start gap-2">
-                                              <span className="text-[10px] font-black uppercase text-slate-500 dark:text-slate-400 whitespace-nowrap mt-0.5">
-                                                  📝 Observação:
-                                              </span>
-                                              <p className="text-[10px] font-normal text-slate-700 dark:text-slate-300 leading-relaxed whitespace-pre-wrap">
-                                                  {item.observacao}
-                                              </p>
-                                          </div>
+                                          {item.operacao && (
+                                              <span className="text-[10px] text-slate-600 dark:text-slate-300">{item.operacao}</span>
+                                          )}
+                                          {item.rota && (
+                                              <span className="text-[10px] text-slate-500 dark:text-slate-400">Rota: {item.rota}</span>
+                                          )}
                                       </div>
+                                  </div>
+                                  {item.observacao && (
+                                      <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed whitespace-pre-wrap">
+                                          {item.observacao}
+                                      </p>
                                   )}
-                                  {/* Informações adicionais */}
-                                  <div className="mt-3 flex flex-wrap gap-3 text-[10px] text-slate-500 dark:text-slate-400">
-                                      {item.inicio && (
-                                          <span className="flex items-center gap-1">
-                                              <Clock size={12} /> Início: {item.inicio}
-                                          </span>
-                                      )}
-                                      {item.saida && (
-                                          <span className="flex items-center gap-1">
-                                              <Clock size={12} /> Saída: {item.saida}
-                                          </span>
-                                      )}
-                                      {item.placa && (
-                                          <span className="flex items-center gap-1">
-                                              Placa: {item.placa}
-                                          </span>
-                                      )}
+                                  <div className="flex flex-wrap gap-3 text-[10px] text-slate-400 dark:text-slate-500 mt-1">
+                                      {item.inicio && <span>Início: {item.inicio}</span>}
+                                      {item.saida && <span>Saída: {item.saida}</span>}
+                                      {item.placa && <span>Placa: {item.placa}</span>}
                                   </div>
                               </div>
                           ))}
                       </div>
                   </div>
-                  <div className="p-4 bg-slate-100 dark:bg-slate-800 border-t dark:border-slate-700 shrink-0">
-                      <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 text-center">
-                          📊 Dados dos últimos 30 dias (fuso de Brasília)
+                  <div className="px-4 py-3 bg-slate-50 dark:bg-slate-800/50 border-t border-slate-200 dark:border-slate-700">
+                      <p className="text-[10px] text-slate-400 dark:text-slate-500 text-center">
+                          Dados dos últimos 30 dias (fuso de Brasília)
                       </p>
                   </div>
               </div>
@@ -7087,6 +7112,144 @@ const RouteDepartureView: React.FC<{
       )}
 
       {/* ⚠️ Popup de Envio Automático REMOVIDO — Envio agora é feito apenas pela tela "Resumo" */}
+
+      {/* ─── Modal: Visualizar Escala ─── */}
+      {isShiftModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[200] flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-[2.5rem] shadow-2xl w-full max-w-5xl max-h-[92vh] flex flex-col">
+            {/* Header */}
+            <div className={`p-6 flex justify-between items-center rounded-t-[2.5rem] border-b ${isDarkMode ? 'bg-slate-800 text-white border-slate-700' : 'bg-slate-100 text-slate-800 border-slate-300'}`}>
+              <div className="flex items-center gap-3">
+                <CalendarDays size={20} className={isDarkMode ? 'text-slate-400' : 'text-slate-500'} />
+                <h3 className="font-black uppercase tracking-widest text-sm">Visualizar Escala</h3>
+              </div>
+              <button
+                onClick={() => setIsShiftModalOpen(false)}
+                className={`p-2 rounded-lg transition-colors ${isDarkMode ? 'hover:bg-slate-700 text-slate-400' : 'hover:bg-slate-200 text-slate-500'}`}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Busca */}
+            <div className="p-6 border-b dark:border-slate-700">
+              <div className="flex items-end gap-4">
+                <div className="flex-1">
+                  <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">
+                    Data da Escala
+                  </label>
+                  <input
+                    type="date"
+                    value={shiftDate}
+                    onChange={e => setShiftDate(e.target.value)}
+                    className="w-full p-3 border dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-sm font-bold outline-none dark:text-white focus:border-indigo-500 transition-colors"
+                  />
+                </div>
+                <button
+                  onClick={handleFetchShift}
+                  disabled={isShiftLoading || !shiftDate}
+                  className="px-6 py-3 bg-indigo-600 text-white font-black uppercase text-[11px] rounded-xl hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                  {isShiftLoading ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
+                  Buscar
+                </button>
+              </div>
+            </div>
+
+            {/* Resultados */}
+            <div className="p-6 flex-1 overflow-y-auto">
+              {isShiftLoading && (
+                <div className="flex flex-col items-center justify-center py-12 gap-3">
+                  <Loader2 size={40} className="text-indigo-600 animate-spin" />
+                  <p className="text-sm font-bold text-slate-500 uppercase tracking-widest">Buscando escala...</p>
+                </div>
+              )}
+
+              {shiftError && (
+                <div className="p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl text-sm text-amber-700 dark:text-amber-300 font-bold text-center">
+                  {shiftError}
+                </div>
+              )}
+
+              {!isShiftLoading && shiftResults.length > 0 && (() => {
+                // Mapeia plantId (Shift API) → nome da operação do usuário
+                const plantIdToOperacao = new Map<number, string>();
+                userConfigs.forEach(c => {
+                  if (c.plantId != null) plantIdToOperacao.set(c.plantId, c.operacao);
+                });
+                const enrichedResults = shiftResults.map(r => ({
+                  ...r,
+                  operacaoNome: plantIdToOperacao.get(Number(r.operacao)) || String(r.operacao)
+                }));
+                // Agrupa por operação
+                const grouped = new Map<string, typeof enrichedResults>();
+                for (const r of enrichedResults) {
+                  const op = r.operacaoNome;
+                  if (!grouped.has(op)) grouped.set(op, []);
+                  grouped.get(op)!.push(r);
+                }
+                // Ordena cada grupo por início previsto
+                for (const items of grouped.values()) {
+                  items.sort((a, b) => (a.inicioPrevisto || '').localeCompare(b.inicioPrevisto || ''));
+                }
+                const operacoesOrdenadas = Array.from(grouped.keys()).sort();
+
+                const formatDateTime = (dt: string | null | undefined): string => {
+                  if (!dt) return '—';
+                  const match = dt.match(/^(\d{4})-(\d{2})-(\d{2})\s*(\d{2}:\d{2})/);
+                  if (match) return `${match[3]}/${match[2]}/${match[1]} ${match[4]}`;
+                  return dt;
+                };
+
+                return (
+                  <div className="space-y-6">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                      {enrichedResults.length} motorista(s) escalado(s) para {shiftDate.split('-').reverse().join('/')}
+                    </p>
+                    {operacoesOrdenadas.map(opNome => {
+                      const items = grouped.get(opNome) || [];
+                      return (
+                        <div key={opNome} className="space-y-1">
+                          <div className={`px-4 py-2 rounded-xl ${isDarkMode ? 'bg-slate-800 text-slate-300 border border-slate-700' : 'bg-slate-100 text-slate-700 border border-slate-300'}`}>
+                            <span className="text-[11px] font-black uppercase tracking-widest">{opNome}</span>
+                            <span className={`ml-3 text-[10px] font-bold ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>{items.length} motorista(s)</span>
+                          </div>
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                                <th className="text-left py-2 px-3">Rota</th>
+                                <th className="text-left py-2 px-3">Motorista</th>
+                                <th className="text-left py-2 px-3">Início Previsto</th>
+                                <th className="text-left py-2 px-3">Término Previsto</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {items.map((item, idx) => (
+                                <tr key={idx} className="border-t dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
+                                  <td className="py-2.5 px-3 font-mono font-bold text-indigo-600 dark:text-indigo-400">{item.rota}</td>
+                                  <td className="py-2.5 px-3 font-bold text-slate-800 dark:text-white">{item.motorista}</td>
+                                  <td className="py-2.5 px-3 font-mono text-slate-600 dark:text-slate-300">{formatDateTime(item.inicioPrevisto)}</td>
+                                  <td className="py-2.5 px-3 font-mono text-slate-600 dark:text-slate-300">{formatDateTime(item.fimPrevisto)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+
+              {!isShiftLoading && !shiftError && shiftResults.length === 0 && shiftDate && (
+                <div className="text-center py-8 text-slate-400 text-sm font-bold uppercase tracking-widest">
+                  Selecione uma data e clique em Buscar
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

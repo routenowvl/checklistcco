@@ -200,16 +200,26 @@ const convertToISO = (dateTimeStr: string): string | null => {
   const matchCompleto = dateTimeStr.match(/(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})/);
   if (matchCompleto) {
     const [, dia, mes, ano, hora, minuto, segundo] = matchCompleto;
-    return new Date(Number(ano), Number(mes) - 1, Number(dia), Number(hora), Number(minuto), Number(segundo)).toISOString();
+    return `${ano}-${mes}-${dia}T${hora}:${minuto}:${segundo}`;
   }
   const matchSemSegundos = dateTimeStr.match(/(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2})/);
   if (matchSemSegundos) {
     const [, dia, mes, ano, hora, minuto] = matchSemSegundos;
-    return new Date(Number(ano), Number(mes) - 1, Number(dia), Number(hora), Number(minuto), 0).toISOString();
+    return `${ano}-${mes}-${dia}T${hora}:${minuto}:00`;
   }
+  // Se já for ISO, retorna como está
+  if (/^\d{4}-\d{2}-\d{2}T/.test(dateTimeStr)) return dateTimeStr;
+  // Fallback: tenta parsear e monta ISO local sem conversão UTC
   const parsed = new Date(dateTimeStr);
-  if (!isNaN(parsed.getTime())) return parsed.toISOString();
-  return new Date().toISOString();
+  if (!isNaN(parsed.getTime())) {
+    const y = parsed.getFullYear(), m = String(parsed.getMonth() + 1).padStart(2, '0'), d = String(parsed.getDate()).padStart(2, '0');
+    const h = String(parsed.getHours()).padStart(2, '0'), min = String(parsed.getMinutes()).padStart(2, '0'), s = String(parsed.getSeconds()).padStart(2, '0');
+    return `${y}-${m}-${d}T${h}:${min}:${s}`;
+  }
+  const now = new Date();
+  const y = now.getFullYear(), m = String(now.getMonth() + 1).padStart(2, '0'), d = String(now.getDate()).padStart(2, '0');
+  const h = String(now.getHours()).padStart(2, '0'), min = String(now.getMinutes()).padStart(2, '0'), s = String(now.getSeconds()).padStart(2, '0');
+  return `${y}-${m}-${d}T${h}:${min}:${s}`;
 };
 
 /**
@@ -510,6 +520,7 @@ export const SharePointService = {
         tolerancia: String(row.tolerancia || '00:00:00'),
         nomeExibicao: String(row.nome_exibicao || row.operacao || ''),
         plantId: row.plant_id != null ? Number(row.plant_id) : null,
+        datalakePlantId: row.datalake_plant_id != null ? Number(row.datalake_plant_id) : null,
         Conteudo: String(row.conteudo || ''),
         ConteudoNcoletas: String(row.conteudo_ncoletas || ''),
         ultimoEnvioSaida: String(row.ultimo_envio_saida || ''),

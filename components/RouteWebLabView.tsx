@@ -1185,9 +1185,6 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
             <div className="space-y-2">
               <div>
                 <h1 className="text-2xl font-black uppercase tracking-tight text-slate-800 dark:text-white">Integração de eventos</h1>
-                <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">
-                  Não coletas automáticas por todas as operações do login
-                </p>
               </div>
               <div className="flex items-center gap-2 flex-wrap pt-2">
                 <span className="inline-flex items-center gap-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200">
@@ -1234,25 +1231,6 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
                   className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-9 pr-3 py-2 text-sm text-slate-100 placeholder-slate-400 outline-none focus:border-slate-500"
                 />
               </div>
-              <select
-                value={filialFilter}
-                onChange={(event) => setFilialFilter(event.target.value)}
-                className="w-full sm:w-[220px] bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 outline-none focus:border-slate-500"
-              >
-                {filialOptions.map((option) => (
-                  <option key={option} value={option}>
-                    {option === 'todas' ? 'Todas as filiais' : option}
-                  </option>
-                ))}
-              </select>
-              <select
-                value={launchStatusFilter}
-                onChange={(event) => setLaunchStatusFilter(event.target.value as LaunchStatusFilter)}
-                className="w-full sm:w-[220px] bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 outline-none focus:border-slate-500"
-              >
-                <option value={LAUNCH_STATUS_FILTER_OPTIONS[0]}>Todas</option>
-                <option value={LAUNCH_STATUS_FILTER_OPTIONS[1]}>Não lançadas</option>
-              </select>
               <select
                 value={String(rowsPerPage)}
                 onChange={(event) => {
