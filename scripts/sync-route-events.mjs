@@ -600,7 +600,7 @@ const syncForDate = async (dateRef, bearerToken, plantConfigs, routesUrlBase) =>
               const nonCollectionOccs = occurrences.filter(isNonCollectionOccurrence);
               const placa = getPlate(event, route);
               const eventId = toOptionalInt(event?.id);
-              const isScheduled = !event?.executed && normalizeText(event?.status) === 'scheduled';
+              const isScheduled = !event?.executed && normalizeText(event?.status).startsWith('scheduled');
 
               // Não coletas (ocorrências)
               if (nonCollectionOccs.length > 0) {
