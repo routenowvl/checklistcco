@@ -6,7 +6,7 @@ import {
   requestRouteWebToken
 } from '../utils/routeWebServer.js';
 import { getPlantConfigsFromSharePoint, type PlantConfig } from '../utils/graphAppAuth.js';
-import { upsertRouteWebEvents, closeRwePool, deleteRouteWebEventsByDate, deleteRouteWebRoutesByDate, type RouteWebEventRow } from '../utils/rweDb.js';
+import { upsertRouteWebEvents, closeRwePool, type RouteWebEventRow } from '../utils/rweDb.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -228,15 +228,6 @@ const syncAll = async (): Promise<{
   // Sincroniza d-2, d-1 e dia atual
   for (const dateRef of dates) {
     console.log(`[CRON_SYNC] Processando data: ${dateRef}`);
-
-    // Deleta tudo da data antes de re-inserir (garante dados atualizados)
-    try {
-      const delEv = await deleteRouteWebEventsByDate(dateRef);
-      const delRt = await deleteRouteWebRoutesByDate(dateRef);
-      console.log(`[CRON_SYNC] Limpos ${delEv} eventos e ${delRt} rotas de ${dateRef}`);
-    } catch (error: any) {
-      errors.push(`DB delete ${dateRef}: ${error?.message || 'erro ao limpar'}`);
-    }
 
   // 2. Buscar rotas por plant
   for (const config of plantConfigs) {

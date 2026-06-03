@@ -740,15 +740,6 @@ const syncAll = async () => {
   const allErrors = [];
 
   for (const dateRef of dates) {
-    // Deleta tudo da data antes de re-inserir (garante que dados antigos/zumbis são removidos)
-    try {
-      const deletedEvents = await deleteRouteWebEventsByDate(dateRef);
-      const deletedRoutes = await deleteRouteWebRoutesByDate(dateRef);
-      console.log(`[SYNC] Limpos ${deletedEvents} eventos e ${deletedRoutes} rotas de ${dateRef}`);
-    } catch (err) {
-      allErrors.push(`DB delete ${dateRef}: ${err?.message || 'erro ao limpar'}`);
-    }
-
     const result = await syncForDate(dateRef, bearerToken, plantConfigs, routesUrlBase);
     grandTotalRoutes += result.totalRoutes;
     grandTotalEvents += result.totalEvents;
