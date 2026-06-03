@@ -140,11 +140,11 @@ const getCurrentDayDate = () => {
 };
 
 const getPreviousDayDate = () => {
-  const now = new Date();
-  const yesterday = new Date(now.toLocaleDateString('en-US', { timeZone: 'America/Sao_Paulo' }));
-  yesterday.setDate(yesterday.getDate() - 1);
-  const parts = yesterday.toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' }).split('-');
-  return `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
+  const today = getCurrentDayDate();
+  const d = new Date(today + 'T12:00:00Z');
+  d.setDate(d.getDate() - 1);
+  const parts = d.toISOString().split('T')[0].split('-');
+  return `${parts[0]}-${parts[1]}-${parts[2]}`;
 };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
