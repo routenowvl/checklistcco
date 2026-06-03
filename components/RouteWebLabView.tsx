@@ -1155,7 +1155,12 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
                                     setFilterPos(null);
                                   } else {
                                     const rect = e.currentTarget.getBoundingClientRect();
-                                    setFilterPos({ top: rect.bottom + 4, left: rect.left });
+                                    const dropdownWidth = 256;
+                                    let left = rect.left;
+                                    if (left + dropdownWidth > window.innerWidth) {
+                                      left = window.innerWidth - dropdownWidth - 8;
+                                    }
+                                    setFilterPos({ top: rect.bottom + 4, left });
                                     setActiveFilterCol(filterColumn);
                                   }
                                 }}

@@ -190,8 +190,27 @@ const FilterDropdown = ({ col, routes, colFilters, setColFilters, selectedFilter
     const values: string[] = Array.from(new Set(routes.map((r: any) => String(r[fieldName] || "")))).sort() as string[];
     const selected = (selectedFilters[col] as string[]) || [];
     const toggleValue = (val: string) => { const next = selected.includes(val) ? selected.filter(v => v !== val) : [...selected, val]; setSelectedFilters({ ...selectedFilters, [col]: next }); };
+
+    // Calcula posição fixed baseada no elemento pai (th) para não cortar na borda
+    const [position, setPosition] = React.useState<{ top: number; left: number } | null>(null);
+
+    React.useEffect(() => {
+        const el = (dropdownRef as React.RefObject<HTMLElement>)?.current?.parentElement;
+        if (el) {
+            const rect = el.getBoundingClientRect();
+            const dropdownWidth = 256;
+            let left = rect.left;
+            if (left + dropdownWidth > window.innerWidth) {
+                left = window.innerWidth - dropdownWidth - 8;
+            }
+            setPosition({ top: rect.bottom + 4, left });
+        }
+    }, []);
+
+    if (!position) return null;
+
     return (
-        <div ref={dropdownRef} className="absolute top-10 left-0 z-[100] bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-xl rounded-xl w-64 p-3 text-slate-700 dark:text-slate-300 animate-in fade-in zoom-in-95 duration-150">
+        <div ref={dropdownRef} className="fixed z-[9999] bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-xl rounded-xl w-64 p-3 text-slate-700 dark:text-slate-300 animate-in fade-in zoom-in-95 duration-150" style={{ top: `${position.top}px`, left: `${position.left}px` }}>
             <div className="flex items-center gap-2 mb-3 p-2 bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700">
                 <Search size={14} className="text-slate-400" />
                 <input type="text" placeholder="Filtrar..." autoFocus value={colFilters[col] || ""} onChange={e => setColFilters({ ...colFilters, [col]: e.target.value })} className="w-full bg-transparent outline-none text-[10px] font-bold text-slate-800 dark:text-white" />
