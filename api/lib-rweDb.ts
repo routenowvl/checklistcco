@@ -210,7 +210,7 @@ export const getRouteWebEventsByDateAndPlants = async (
 ): Promise<RouteWebEventDbRow[]> => {
   const client = getPool();
 
-  const dateFilter = `DATE(expected_arrival AT TIME ZONE 'America/Sao_Paulo') = $1::date`;
+  const dateFilter = `data_referencia = $1::date`;
 
   if (plantIds.length === 0) {
     const result = await client.query(
