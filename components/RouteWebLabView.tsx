@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, Check, Filter, Loader2, Plus, Search, Settings2 } from 'lucide-react';
+import { AlertCircle, Check, CheckSquare, Filter, Loader2, Plus, Search, Settings2, Square } from 'lucide-react';
 import { NonCollection, RouteConfig, User } from '../types';
 import { SharePointService } from '../services/sharepointService';
 import { getValidToken } from '../services/tokenService';
@@ -53,28 +53,17 @@ type CollectionRow = {
   rawEvent: any;
 };
 
-type RouteWebColumnKey =
-  | 'rota'
-  | 'codigoProdutor'
-  | 'produtor'
-  | 'motivo'
-  | 'motorista'
-  | 'placa'
-  | 'horario'
-  | 'operacao'
-  | 'status';
+type FilterColumn = 'rota' | 'codigoProdutor' | 'produtor' | 'motivo' | 'motorista' | 'placa' | 'horario' | 'operacao' | 'status';
+type SelectedFilters = Record<FilterColumn, string[]>;
+type ColFilters = Record<FilterColumn, string>;
 
-const ROUTE_WEB_DEFAULT_COLUMN_WIDTHS: Record<RouteWebColumnKey, number> = {
-  rota: 130,
-  codigoProdutor: 150,
-  produtor: 200,
-  motivo: 360,
-  motorista: 200,
-  placa: 140,
-  horario: 170,
-  operacao: 160,
-  status: 240
-};
+const FILTER_COLUMNS: FilterColumn[] = [
+  'rota', 'codigoProdutor', 'produtor', 'motivo', 'motorista', 'placa', 'horario', 'operacao', 'status'
+];
+
+const createEmptySelectedFilters = (): SelectedFilters => ({
+  rota: [], codigoProdutor: [], produtor: [], motivo: [], motorista: [], placa: [], horario: [], operacao: [], status: []
+});
 
 type RowsCachePayload = {
   version: 1;
@@ -93,56 +82,17 @@ const ROWS_CACHE_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 const LAUNCH_STATUS_FILTER_OPTIONS = ['todas', 'nao-lancadas'] as const;
 type LaunchStatusFilter = (typeof LAUNCH_STATUS_FILTER_OPTIONS)[number];
 type RowsPerPageOption = number | 'all';
-type ExcelFilterColumn = 'rota' | 'codigoProdutor' | 'produtor' | 'motivo' | 'motorista' | 'placa' | 'horario' | 'operacao' | 'status';
-type ExcelFilterValues = Record<ExcelFilterColumn, string[]>;
-type ExcelFilterSearch = Record<ExcelFilterColumn, string>;
 
-const createEmptyExcelFilterValues = (): ExcelFilterValues => ({
-  rota: [],
-  codigoProdutor: [],
-  produtor: [],
-  motivo: [],
-  motorista: [],
-  placa: [],
-  horario: [],
-  operacao: [],
-  status: []
-});
-
-const createEmptyExcelFilterSearch = (): ExcelFilterSearch => ({
-  rota: '',
-  codigoProdutor: '',
-  produtor: '',
-  motivo: '',
-  motorista: '',
-  placa: '',
-  horario: '',
-  operacao: '',
-  status: ''
-});
-
-const EXCEL_FILTER_COLUMNS: ExcelFilterColumn[] = [
-  'rota',
-  'codigoProdutor',
-  'produtor',
-  'motivo',
-  'motorista',
-  'placa',
-  'horario',
-  'operacao',
-  'status'
-];
-
-const TABLE_HEADER_COLUMNS: Array<{ key: RouteWebColumnKey; label: string; filterColumn: ExcelFilterColumn }> = [
-  { key: 'rota', label: 'Rota', filterColumn: 'rota' },
-  { key: 'codigoProdutor', label: 'Código Produtor', filterColumn: 'codigoProdutor' },
-  { key: 'produtor', label: 'Produtor', filterColumn: 'produtor' },
-  { key: 'motivo', label: 'Motivo', filterColumn: 'motivo' },
-  { key: 'motorista', label: 'Motorista', filterColumn: 'motorista' },
-  { key: 'placa', label: 'Placa', filterColumn: 'placa' },
-  { key: 'horario', label: 'Horário', filterColumn: 'horario' },
-  { key: 'operacao', label: 'Operação', filterColumn: 'operacao' },
-  { key: 'status', label: 'Status', filterColumn: 'status' }
+const TABLE_HEADER_COLUMNS: Array<{ key: FilterColumn; label: string }> = [
+  { key: 'rota', label: 'Rota' },
+  { key: 'codigoProdutor', label: 'Código Produtor' },
+  { key: 'produtor', label: 'Produtor' },
+  { key: 'motivo', label: 'Motivo' },
+  { key: 'motorista', label: 'Motorista' },
+  { key: 'placa', label: 'Placa' },
+  { key: 'horario', label: 'Horário' },
+  { key: 'operacao', label: 'Operação' },
+  { key: 'status', label: 'Status' }
 ];
 
 const toNumericId = (value: unknown): number | null => {
@@ -315,6 +265,31 @@ const writeRowsCache = (userEmail: string, dayRef: string, rows: CollectionRow[]
   }
 };
 
+const getMinutesWaiting = (expectedArrival: unknown): number | null => {
+  const raw = String(expectedArrival ?? '').trim();
+  if (!raw) return null;
+  const expected = new Date(raw);
+  if (Number.isNaN(expected.getTime())) return null;
+  const now = new Date();
+  const diffMs = now.getTime() - expected.getTime();
+  return Math.max(0, Math.floor(diffMs / 60000));
+};
+
+const formatWaitingTime = (minutes: number | null): string => {
+  if (minutes == null) return '';
+  if (minutes < 60) return `${minutes}min`;
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  return mins > 0 ? `${hours}h${mins}min` : `${hours}h`;
+};
+
+const getWaitingColorClass = (minutes: number | null): string => {
+  if (minutes == null) return 'text-amber-600 dark:text-amber-400/70';
+  if (minutes >= 120) return 'text-red-600 dark:text-red-400 font-bold';
+  if (minutes >= 60) return 'text-orange-600 dark:text-orange-400';
+  return 'text-amber-600 dark:text-amber-400/70';
+};
+
 const formatHour = (value: unknown): string => {
   const raw = String(value ?? '').trim();
   if (!raw) return '--';
@@ -368,7 +343,7 @@ const getStatusPriority = (statusType: CollectionRow['statusType']): number => {
 const getRowStatusFilterValue = (row: CollectionRow): string =>
   row.isAlreadyLaunched ? 'Não coleta lançada' : 'Não lançada';
 
-const getRowExcelColumnValue = (row: CollectionRow, column: ExcelFilterColumn): string => {
+const getRowColumnValue = (row: CollectionRow, column: FilterColumn): string => {
   if (column === 'rota') return String(row.rota || '-');
   if (column === 'codigoProdutor') return String(row.codigoProdutor || '-');
   if (column === 'produtor') return String(row.produtor || '-');
@@ -414,10 +389,10 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
   const [filialFilter, setFilialFilter] = useState('todas');
   const [launchStatusFilter, setLaunchStatusFilter] = useState<LaunchStatusFilter>('todas');
   const [rowsPerPage, setRowsPerPage] = useState<RowsPerPageOption>(60);
-  const [excelFilterValues, setExcelFilterValues] = useState<ExcelFilterValues>(createEmptyExcelFilterValues);
-  const [excelFilterSearch, setExcelFilterSearch] = useState<ExcelFilterSearch>(createEmptyExcelFilterSearch);
-  const [openExcelFilterColumn, setOpenExcelFilterColumn] = useState<ExcelFilterColumn | null>(null);
-  const [columnWidths, setColumnWidths] = useState<Record<RouteWebColumnKey, number>>(ROUTE_WEB_DEFAULT_COLUMN_WIDTHS);
+  const [selectedFilters, setSelectedFilters] = useState<SelectedFilters>(createEmptySelectedFilters);
+  const [colFilters, setColFilters] = useState<ColFilters>({} as ColFilters);
+  const [filterPos, setFilterPos] = useState<{ top: number; left: number } | null>(null);
+  const [activeFilterCol, setActiveFilterCol] = useState<FilterColumn | null>(null);
   const [addingRowKeys, setAddingRowKeys] = useState<Set<string>>(new Set());
   const [currentPage, setCurrentPage] = useState<number>(1);
 
@@ -427,10 +402,8 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
   const launchedCodeKeysRef = useRef<Set<string>>(new Set());
   const persistRowsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestDayRefRef = useRef<string>(getCurrentDayDate());
-  const resizeColumnRef = useRef<RouteWebColumnKey | null>(null);
-  const resizeStartXRef = useRef<number>(0);
-  const resizeStartWidthRef = useRef<number>(0);
-  const excelFilterPopupRef = useRef<HTMLDivElement | null>(null);
+  const filterDropdownRef = useRef<HTMLDivElement | null>(null);
+  const filterAnchorRef = useRef<HTMLElement | null>(null);
 
   const getRowSignature = useCallback((row: CollectionRow): string => {
     return [
@@ -513,109 +486,36 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
   }, []);
 
   useEffect(() => {
-    const handleMouseMove = (event: MouseEvent) => {
-      const column = resizeColumnRef.current;
-      if (!column) return;
-      const delta = event.clientX - resizeStartXRef.current;
-      const nextWidth = Math.max(100, resizeStartWidthRef.current + delta);
-      setColumnWidths((prev) => ({
-        ...prev,
-        [column]: nextWidth
-      }));
-    };
-
-    const handleMouseUp = () => {
-      if (!resizeColumnRef.current) return;
-      resizeColumnRef.current = null;
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
-
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', handleMouseUp);
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
-  }, []);
-
-  const startColumnResize = useCallback(
-    (column: RouteWebColumnKey, event: React.MouseEvent<HTMLButtonElement>) => {
-      event.preventDefault();
-      event.stopPropagation();
-      resizeColumnRef.current = column;
-      resizeStartXRef.current = event.clientX;
-      resizeStartWidthRef.current = columnWidths[column] || ROUTE_WEB_DEFAULT_COLUMN_WIDTHS[column];
-      document.body.style.cursor = 'col-resize';
-      document.body.style.userSelect = 'none';
-    },
-    [columnWidths]
-  );
-
-  useEffect(() => {
-    if (!openExcelFilterColumn) return;
-
-    const handlePointerDown = (event: MouseEvent) => {
-      const target = event.target as Node;
-      if (excelFilterPopupRef.current?.contains(target)) return;
-      setOpenExcelFilterColumn(null);
-    };
-
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setOpenExcelFilterColumn(null);
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'l') {
+        event.preventDefault();
+        setSelectedFilters(createEmptySelectedFilters());
+        setColFilters({} as ColFilters);
+        setActiveFilterCol(null);
       }
     };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
+  useEffect(() => {
+    if (!activeFilterCol) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (filterDropdownRef.current?.contains(target)) return;
+      setActiveFilterCol(null);
+      setFilterPos(null);
+    };
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { setActiveFilterCol(null); setFilterPos(null); }
+    };
     document.addEventListener('mousedown', handlePointerDown);
     document.addEventListener('keydown', handleEscape);
     return () => {
       document.removeEventListener('mousedown', handlePointerDown);
       document.removeEventListener('keydown', handleEscape);
     };
-  }, [openExcelFilterColumn]);
-
-  const toggleExcelFilterValue = useCallback((column: ExcelFilterColumn, value: string, allOptions: string[]) => {
-    setExcelFilterValues((prev) => {
-      const previousSelection = prev[column] || [];
-      const current = previousSelection.length === 0 ? new Set(allOptions) : new Set(previousSelection);
-      if (current.has(value)) {
-        current.delete(value);
-      } else {
-        current.add(value);
-      }
-      if (current.size === allOptions.length) {
-        return {
-          ...prev,
-          [column]: []
-        };
-      }
-      return {
-        ...prev,
-        [column]: Array.from(current)
-      };
-    });
-  }, []);
-
-  const applyExcelFilterAllValues = useCallback((column: ExcelFilterColumn, values: string[], allOptionsCount: number) => {
-    setExcelFilterValues((prev) => ({
-      ...prev,
-      [column]: values.length === allOptionsCount ? [] : values
-    }));
-  }, []);
-
-  const clearExcelFilterColumn = useCallback((column: ExcelFilterColumn) => {
-    setExcelFilterValues((prev) => ({
-      ...prev,
-      [column]: []
-    }));
-  }, []);
-
-  const toggleExcelFilterPopup = useCallback((column: ExcelFilterColumn) => {
-    setOpenExcelFilterColumn((prev) => (prev === column ? null : column));
-  }, []);
+  }, [activeFilterCol]);
 
   const markRowAsLaunched = useCallback(
     (rowKey: string, dayRefIso: string, producerCode: string) => {
@@ -913,7 +813,7 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     return ['todas', ...options];
   }, [collectionRows]);
 
-  const rowsForExcelFilters = useMemo(() => {
+  const rowsForFilters = useMemo(() => {
     let rows = collectionRows;
 
     if (activeTab === 'nao-coletas') {
@@ -941,43 +841,29 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     return rows;
   }, [collectionRows, filialFilter, launchStatusFilter, searchText, activeTab]);
 
-  const excelFilterOptionsByColumn = useMemo(() => {
-    const next: Record<ExcelFilterColumn, string[]> = {
-      rota: [],
-      codigoProdutor: [],
-      produtor: [],
-      motivo: [],
-      motorista: [],
-      placa: [],
-      horario: [],
-      operacao: [],
-      status: []
-    };
-
-    EXCEL_FILTER_COLUMNS.forEach((column) => {
+  const filterOptionsByColumn = useMemo(() => {
+    const next: Record<FilterColumn, string[]> = { rota: [], codigoProdutor: [], produtor: [], motivo: [], motorista: [], placa: [], horario: [], operacao: [], status: [] };
+    FILTER_COLUMNS.forEach((column) => {
       const set = new Set<string>();
-      rowsForExcelFilters.forEach((row) => {
-        const value = getRowExcelColumnValue(row, column);
+      rowsForFilters.forEach((row) => {
+        const value = getRowColumnValue(row, column);
         if (!value) return;
         set.add(value);
       });
       next[column] = Array.from(set).sort((a, b) => a.localeCompare(b, 'pt-BR'));
     });
-
     return next;
-  }, [rowsForExcelFilters]);
+  }, [rowsForFilters]);
 
   const filteredRows = useMemo(() => {
-    let rows = rowsForExcelFilters;
+    let rows = rowsForFilters;
 
     rows = rows.filter((row) => {
-      for (const column of EXCEL_FILTER_COLUMNS) {
-        const selectedValues = excelFilterValues[column] || [];
+      for (const column of FILTER_COLUMNS) {
+        const selectedValues = selectedFilters[column] || [];
         if (selectedValues.length === 0) continue;
-        const cellValue = getRowExcelColumnValue(row, column);
-        if (!selectedValues.includes(cellValue)) {
-          return false;
-        }
+        const cellValue = getRowColumnValue(row, column);
+        if (!selectedValues.includes(cellValue)) return false;
       }
       return true;
     });
@@ -985,16 +871,17 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     return [...rows].sort((a, b) => {
       const byPriority = getStatusPriority(a.statusType) - getStatusPriority(b.statusType);
       if (byPriority !== 0) return byPriority;
-
+      // Coletas previstas: mais tempo esperando primeiro (descendente)
+      const aWait = getMinutesWaiting(a.rawEvent?.expected_arrival) ?? 0;
+      const bWait = getMinutesWaiting(b.rawEvent?.expected_arrival) ?? 0;
+      if (aWait !== bWait) return bWait - aWait;
       const byFilial = String(a.filial || '').localeCompare(String(b.filial || ''), 'pt-BR');
       if (byFilial !== 0) return byFilial;
-
       const byRota = String(a.rota || '').localeCompare(String(b.rota || ''), 'pt-BR');
       if (byRota !== 0) return byRota;
-
       return (a.eventRowId || 0) - (b.eventRowId || 0);
     });
-  }, [excelFilterValues, rowsForExcelFilters]);
+  }, [selectedFilters, rowsForFilters]);
 
   const tabCounts = useMemo(() => {
     const naoColetas = collectionRows.filter((row) => row.statusType === 'nao-coleta').length;
@@ -1017,46 +904,6 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     return { total, launched, percent };
   }, [collectionRows]);
 
-  const excelFilterVisibleOptions = useMemo(() => {
-    const visible: Record<ExcelFilterColumn, string[]> = {
-      rota: [],
-      codigoProdutor: [],
-      produtor: [],
-      motivo: [],
-      motorista: [],
-      placa: [],
-      horario: [],
-      operacao: [],
-      status: []
-    };
-
-    EXCEL_FILTER_COLUMNS.forEach((column) => {
-      const search = normalizeText(excelFilterSearch[column] || '');
-      const source = excelFilterOptionsByColumn[column] || [];
-      if (!search) {
-        visible[column] = source;
-        return;
-      }
-      visible[column] = source.filter((option) => normalizeText(option).includes(search));
-    });
-
-    return visible;
-  }, [excelFilterOptionsByColumn, excelFilterSearch]);
-
-  const hasActiveExcelFilter = useCallback(
-    (column: ExcelFilterColumn): boolean => (excelFilterValues[column] || []).length > 0,
-    [excelFilterValues]
-  );
-
-  const isExcelOptionChecked = useCallback(
-    (column: ExcelFilterColumn, option: string): boolean => {
-      const selected = excelFilterValues[column] || [];
-      if (selected.length === 0) return true;
-      return selected.includes(option);
-    },
-    [excelFilterValues]
-  );
-
   const totalPages = useMemo(() => {
     if (filteredRows.length === 0) return 1;
     if (rowsPerPage === 'all') return 1;
@@ -1077,14 +924,9 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     return { start, end };
   }, [currentPage, filteredRows.length, rowsPerPage]);
 
-  const tableMinWidth = useMemo(() => {
-    const total = Object.values(columnWidths).reduce((sum, width) => sum + width, 0);
-    return Math.max(1300, total);
-  }, [columnWidths]);
-
   useEffect(() => {
     setCurrentPage(1);
-  }, [activeTab, filialFilter, launchStatusFilter, searchText, rowsPerPage, excelFilterValues]);
+  }, [activeTab, filialFilter, launchStatusFilter, searchText, rowsPerPage, selectedFilters]);
 
   useEffect(() => {
     if (currentPage > totalPages) {
@@ -1130,15 +972,13 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       });
     }
 
-    let afterExcelSelection = afterSearch;
-    afterExcelSelection = afterExcelSelection.filter((row) => {
-      for (const column of EXCEL_FILTER_COLUMNS) {
-        const selectedValues = excelFilterValues[column] || [];
+    let afterColFilters = afterSearch;
+    afterColFilters = afterColFilters.filter((row) => {
+      for (const column of FILTER_COLUMNS) {
+        const selectedValues = selectedFilters[column] || [];
         if (selectedValues.length === 0) continue;
-        const cellValue = getRowExcelColumnValue(row, column);
-        if (!selectedValues.includes(cellValue)) {
-          return false;
-        }
+        const cellValue = getRowColumnValue(row, column);
+        if (!selectedValues.includes(cellValue)) return false;
       }
       return true;
     });
@@ -1147,7 +987,7 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       activeTab,
       filialFilter,
       launchStatusFilter,
-      excelFilterValues,
+      selectedFilters,
       searchText,
       baseCount: collectionRows.length,
       statusCounts,
@@ -1156,7 +996,7 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       afterFilialCount: afterFilial.length,
       afterLaunchCount: afterLaunch.length,
       afterSearchCount: afterSearch.length,
-      afterExcelSelectionCount: afterExcelSelection.length,
+      afterColFiltersCount: afterColFilters.length,
       finalCount: filteredRows.length,
       sample: filteredRows.slice(0, 5).map((row) => ({
         eventId: row.eventRowId,
@@ -1167,7 +1007,7 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
         isAlreadyLaunched: row.isAlreadyLaunched
       }))
     };
-  }, [activeTab, collectionRows, filialFilter, filteredRows, launchStatusFilter, searchText, excelFilterValues]);
+  }, [activeTab, collectionRows, filialFilter, filteredRows, launchStatusFilter, searchText, selectedFilters]);
 
   useEffect(() => {
     if (!result) return;
@@ -1195,28 +1035,28 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
           </div>
         </div>
 
-        <section className="relative rounded-[2rem] border border-slate-800 bg-[#020817] text-slate-100 shadow-2xl overflow-hidden">
-          <div className="p-5 border-b border-slate-800 flex flex-col xl:flex-row xl:items-center gap-3 justify-between">
+        <section className="relative bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-2xl overflow-hidden">
+          <div className="p-5 border-b border-slate-200 dark:border-slate-700 flex flex-col xl:flex-row xl:items-center gap-3 justify-between">
             <div className="flex items-center gap-2 flex-wrap">
               <button
                 type="button"
-                onClick={() => setActiveTab('nao-coletas')}
-                className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition ${activeTab === 'nao-coletas' ? 'bg-slate-700 text-white' : 'text-slate-300 hover:bg-slate-800'}`}
+                onClick={() => { setSelectedFilters(createEmptySelectedFilters()); setColFilters({} as ColFilters); setActiveFilterCol(null); setActiveTab('nao-coletas'); }}
+                className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition ${activeTab === 'nao-coletas' ? 'bg-slate-700 text-white' : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
               >
                 Não Coletas ({tabCounts['nao-coletas']})
               </button>
               <button
                 type="button"
-                onClick={() => setActiveTab('coletas-previstas')}
-                className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition ${activeTab === 'coletas-previstas' ? 'bg-amber-700 text-white' : 'text-amber-300 hover:bg-amber-900/40'}`}
+                onClick={() => { setSelectedFilters(createEmptySelectedFilters()); setColFilters({} as ColFilters); setActiveFilterCol(null); setActiveTab('coletas-previstas'); }}
+                className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition ${activeTab === 'coletas-previstas' ? 'bg-amber-700 text-white' : 'text-amber-600 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-900/40'}`}
               >
                 Coletas Previstas ({tabCounts['coletas-previstas']})
               </button>
-              <div className="px-3 py-1.5 rounded-lg border border-cyan-500/30 bg-cyan-500/10 min-w-[220px]">
-                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-cyan-300/85">% não coletas lançadas</div>
+              <div className="px-3 py-1.5 rounded-lg border border-cyan-500/30 bg-cyan-50 dark:bg-cyan-500/10 min-w-[220px]">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-cyan-600 dark:text-cyan-300/85">% não coletas lançadas</div>
                 <div className="mt-0.5 flex items-baseline gap-2">
-                  <span className="text-xl leading-none font-black text-cyan-200">{launchedStats.percent}%</span>
-                  <span className="text-xs font-semibold text-cyan-100/80">{launchedStats.launched}/{launchedStats.total}</span>
+                  <span className="text-xl leading-none font-black text-cyan-700 dark:text-cyan-200">{launchedStats.percent}%</span>
+                  <span className="text-xs font-semibold text-cyan-600 dark:text-cyan-100/80">{launchedStats.launched}/{launchedStats.total}</span>
                 </div>
               </div>
             </div>
@@ -1228,7 +1068,7 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
                   value={searchText}
                   onChange={(event) => setSearchText(event.target.value)}
                   placeholder="Buscar produtor, código, rota, motivo..."
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-9 pr-3 py-2 text-sm text-slate-100 placeholder-slate-400 outline-none focus:border-slate-500"
+                  className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg pl-9 pr-3 py-2 text-sm text-slate-800 dark:text-slate-100 placeholder-slate-400 outline-none focus:border-slate-400 dark:focus:border-slate-500"
                 />
               </div>
               <select
@@ -1242,7 +1082,7 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
                   const parsed = Number(value);
                   setRowsPerPage(Number.isFinite(parsed) && parsed > 0 ? parsed : 60);
                 }}
-                className="w-full sm:w-[160px] bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 outline-none focus:border-slate-500"
+                className="w-full sm:w-[160px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-800 dark:text-slate-100 outline-none focus:border-slate-400 dark:focus:border-slate-500"
               >
                 <option value="60">60 por página</option>
                 <option value="100">100 por página</option>
@@ -1253,12 +1093,12 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
           {isLoading && (
             <div className="p-8 flex items-center justify-center">
-              <Loader2 size={24} className="animate-spin text-slate-300" />
+              <Loader2 size={24} className="animate-spin text-slate-400" />
             </div>
           )}
 
           {fetchError && (
-            <div className="m-5 rounded-xl border border-red-700/40 bg-red-950/30 px-4 py-3 text-sm font-semibold text-red-300 flex items-start gap-2">
+            <div className="m-5 rounded-xl border border-red-300 dark:border-red-700/40 bg-red-50 dark:bg-red-950/30 px-4 py-3 text-sm font-semibold text-red-700 dark:text-red-300 flex items-start gap-2">
               <AlertCircle size={16} className="mt-0.5 shrink-0" />
               <span>{fetchError}</span>
             </div>
@@ -1266,25 +1106,25 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
           {result && !isLoading && (
             <>
-              <div className="px-5 py-3 border-b border-slate-800 flex items-center justify-between gap-3 text-xs font-semibold text-slate-300">
+              <div className="px-5 py-3 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between gap-3 text-xs font-semibold text-slate-600 dark:text-slate-300">
                 <span>
-                  Exibindo <strong className="text-white">{pageRange.start}-{pageRange.end}</strong> de <strong className="text-white">{filteredRows.length}</strong>
+                  Exibindo <strong className="text-slate-800 dark:text-white">{pageRange.start}-{pageRange.end}</strong> de <strong className="text-slate-800 dark:text-white">{filteredRows.length}</strong>
                 </span>
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
                     onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
                     disabled={rowsPerPage === 'all' || currentPage <= 1}
-                    className="px-3 py-1.5 rounded-md border border-slate-700 text-slate-200 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-800"
+                    className="px-3 py-1.5 rounded-md border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-100 dark:hover:bg-slate-800"
                   >
                     Anterior
                   </button>
-                  <span className="text-slate-300">Página <strong className="text-white">{currentPage}</strong>/{totalPages}</span>
+                  <span className="text-slate-600 dark:text-slate-300">Página <strong className="text-slate-800 dark:text-white">{currentPage}</strong>/{totalPages}</span>
                   <button
                     type="button"
                     onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
                     disabled={rowsPerPage === 'all' || currentPage >= totalPages}
-                    className="px-3 py-1.5 rounded-md border border-slate-700 text-slate-200 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-800"
+                    className="px-3 py-1.5 rounded-md border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-100 dark:hover:bg-slate-800"
                   >
                     Próxima
                   </button>
@@ -1292,113 +1132,89 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
               </div>
 
               <div className="overflow-auto">
-                <table className="w-full text-sm table-fixed" style={{ minWidth: `${tableMinWidth}px` }}>
-                  <thead className="bg-slate-950/70 border-b border-slate-800">
-                    <tr className="text-slate-300">
-                      {TABLE_HEADER_COLUMNS.map((column) => {
-                        const filterColumn = column.filterColumn;
-                        const allOptions = excelFilterOptionsByColumn[filterColumn] || [];
-                        const visibleOptions = excelFilterVisibleOptions[filterColumn] || [];
-                        const selectedValues = excelFilterValues[filterColumn] || [];
-                        const isOpen = openExcelFilterColumn === filterColumn;
-                        const activeFilter = hasActiveExcelFilter(filterColumn);
-                        const selectedLabel = activeFilter ? selectedValues.length : allOptions.length;
+                <table className="w-full border-collapse text-[10px]">
+                  <thead className="sticky top-0 bg-slate-100 dark:bg-slate-800/80 z-10">
+                    <tr>
+                      {TABLE_HEADER_COLUMNS.filter((col) => !(activeTab === 'coletas-previstas' && (col.key === 'motivo' || col.key === 'status'))).map((column) => {
+                        const filterColumn = column.key;
+                        const allValues = filterOptionsByColumn[filterColumn] || [];
+                        const isOpen = activeFilterCol === filterColumn;
+                        const activeFilter = (selectedFilters[filterColumn] || []).length > 0;
+                        const showFilterButton = filterColumn !== 'horario';
 
                         return (
-                          <th key={column.key} className="text-left px-4 py-3 font-semibold relative align-top" style={{ width: `${columnWidths[column.key]}px` }}>
-                            <div className="flex items-center gap-1 pr-4">
+                          <th key={column.key} className="p-2 border-b border-r border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 font-bold text-left group">
+                            <div className="flex items-center justify-between">
                               <span>{column.label}</span>
+                              {showFilterButton && (
                               <button
-                                type="button"
-                                onClick={(event) => {
-                                  event.preventDefault();
-                                  event.stopPropagation();
-                                  toggleExcelFilterPopup(filterColumn);
-                                }}
-                                className={`inline-flex h-5 w-5 items-center justify-center rounded border transition ${
-                                  activeFilter
-                                    ? 'border-cyan-400/70 bg-cyan-500/15 text-cyan-200'
-                                    : 'border-slate-700 bg-slate-900/60 text-slate-400 hover:text-slate-200 hover:border-slate-500'
-                                }`}
-                                title={`Filtrar coluna ${column.label}`}
-                              >
-                                <Filter size={12} />
-                              </button>
-                            </div>
-
-                            {isOpen && (
-                              <div
-                                ref={excelFilterPopupRef}
-                                className="absolute left-0 top-full mt-2 z-40 w-[300px] max-w-[calc(100vw-2rem)] rounded-xl border border-slate-700 bg-slate-900 shadow-2xl p-3"
-                              >
-                                <input
-                                  value={excelFilterSearch[filterColumn] || ''}
-                                  onChange={(event) =>
-                                    setExcelFilterSearch((prev) => ({
-                                      ...prev,
-                                      [filterColumn]: event.target.value
-                                    }))
+                                ref={(el) => { if (isOpen && el) filterAnchorRef.current = el; }}
+                                onClick={(e) => {
+                                  if (activeFilterCol === filterColumn) {
+                                    setActiveFilterCol(null);
+                                    setFilterPos(null);
+                                  } else {
+                                    const rect = e.currentTarget.getBoundingClientRect();
+                                    setFilterPos({ top: rect.bottom + 4, left: rect.left });
+                                    setActiveFilterCol(filterColumn);
                                   }
-                                  placeholder={`Buscar em ${column.label.toLowerCase()}`}
-                                  className="w-full bg-slate-950 border border-slate-700 rounded-md px-2 py-1.5 text-xs text-slate-100 placeholder-slate-500 outline-none focus:border-slate-500"
-                                />
+                                }}
+                                className={`p-1 rounded transition-all opacity-0 group-hover:opacity-100 ${
+                                  activeFilter
+                                    ? 'opacity-100 bg-primary-600 text-white'
+                                    : 'hover:bg-slate-300 dark:hover:bg-slate-600'
+                                }`}
+                              >
+                                <Filter size={10} />
+                              </button>
+                              )}
+                            </div>
+                            {isOpen && (() => {
+                              const selected = selectedFilters[filterColumn] || [];
+                              const colFilter = colFilters[filterColumn] || '';
+                              const filteredValues = allValues.filter((v) => v.toLowerCase().includes(colFilter.toLowerCase()));
+                              const toggleValue = (val: string) => {
+                                const next = selected.includes(val) ? selected.filter((v) => v !== val) : [...selected, val];
+                                setSelectedFilters({ ...selectedFilters, [filterColumn]: next });
+                              };
 
-                                <div className="mt-2 flex items-center justify-between text-[11px] text-slate-300">
-                                  <span>{selectedLabel}/{allOptions.length} selecionados</span>
-                                  <div className="flex items-center gap-2">
-                                    <button
-                                      type="button"
-                                      onClick={() => clearExcelFilterColumn(filterColumn)}
-                                      className="text-cyan-300 hover:text-cyan-200 font-semibold"
-                                    >
-                                      Selecionar todos
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => applyExcelFilterAllValues(filterColumn, visibleOptions, allOptions.length)}
-                                      className="text-slate-300 hover:text-white font-semibold"
-                                    >
-                                      Aplicar visíveis
-                                    </button>
+                              return (
+                                <div
+                                  ref={filterDropdownRef}
+                                  className="fixed z-[9999] bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-2xl rounded-xl w-64 flex flex-col"
+                                  style={{ top: filterPos?.top ?? 0, left: filterPos?.left ?? 0, height: '380px' }}
+                                >
+                                  <div className="flex items-center gap-2 p-3 pb-2 bg-slate-50 dark:bg-slate-900 rounded-t-xl border-b border-slate-200 dark:border-slate-700 shrink-0">
+                                    <Search size={14} className="text-slate-400 shrink-0" />
+                                    <input type="text" placeholder="Filtrar..." autoFocus value={colFilter} onChange={(e) => {
+                                      const val = e.target.value;
+                                      setColFilters({ ...colFilters, [filterColumn]: val });
+                                      if (val.trim()) {
+                                        const matched = allValues.filter((v) => v.toLowerCase().includes(val.toLowerCase()));
+                                        setSelectedFilters({ ...selectedFilters, [filterColumn]: matched });
+                                      } else {
+                                        setSelectedFilters({ ...selectedFilters, [filterColumn]: [] });
+                                      }
+                                    }} className="w-full bg-transparent outline-none text-[10px] font-bold text-slate-800 dark:text-white" />
+                                  </div>
+                                  <div className="overflow-y-auto p-2 space-y-1 flex-1">
+                                    {filteredValues.length === 0 ? (
+                                      <div className="px-3 py-3 text-xs text-slate-400">Nenhum valor encontrado.</div>
+                                    ) : (
+                                      filteredValues.map((v) => (
+                                        <div key={v} onClick={() => toggleValue(v)} className="flex items-center gap-2 p-2.5 hover:bg-slate-50 dark:hover:bg-slate-700 rounded-lg cursor-pointer transition-all">
+                                          {selected.includes(v) ? <CheckSquare size={14} className="text-blue-600 shrink-0" /> : <Square size={14} className="text-slate-300 shrink-0" />}
+                                          <span className="text-[10px] font-bold uppercase truncate text-slate-700 dark:text-slate-300">{v || '(VAZIO)'}</span>
+                                        </div>
+                                      ))
+                                    )}
+                                  </div>
+                                  <div className="p-2 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50 rounded-b-xl shrink-0">
+                                    <button onClick={() => { setColFilters({ ...colFilters, [filterColumn]: '' }); setSelectedFilters({ ...selectedFilters, [filterColumn]: [] }); setActiveFilterCol(null); setFilterPos(null); }} className="w-full py-2.5 text-[10px] font-black uppercase text-red-600 bg-red-50 dark:bg-red-900/30 hover:bg-red-100 dark:hover:bg-red-900/50 rounded-lg border border-red-100 dark:border-red-900/50 transition-colors"> Limpar Filtro </button>
                                   </div>
                                 </div>
-
-                                <div className="mt-2 max-h-56 overflow-auto rounded-md border border-slate-800">
-                                  {visibleOptions.length === 0 ? (
-                                    <div className="px-3 py-3 text-xs text-slate-400">Nenhum valor encontrado.</div>
-                                  ) : (
-                                    visibleOptions.map((option) => (
-                                      <label key={`${filterColumn}-${option}`} className="flex items-center gap-2 px-3 py-2 text-xs text-slate-200 hover:bg-slate-800/70 cursor-pointer">
-                                        <input
-                                          type="checkbox"
-                                          checked={isExcelOptionChecked(filterColumn, option)}
-                                          onChange={() => toggleExcelFilterValue(filterColumn, option, allOptions)}
-                                          className="h-3.5 w-3.5 rounded border-slate-600 bg-slate-900 text-cyan-500"
-                                        />
-                                        <span className="truncate" title={option}>{option}</span>
-                                      </label>
-                                    ))
-                                  )}
-                                </div>
-
-                                <div className="mt-2 flex justify-end">
-                                  <button
-                                    type="button"
-                                    onClick={() => setOpenExcelFilterColumn(null)}
-                                    className="px-2.5 py-1 text-xs font-semibold rounded-md border border-slate-700 text-slate-200 hover:bg-slate-800"
-                                  >
-                                    Fechar
-                                  </button>
-                                </div>
-                              </div>
-                            )}
-
-                            <button
-                              type="button"
-                              aria-label={`Redimensionar coluna ${column.label}`}
-                              onMouseDown={(event) => startColumnResize(column.key, event)}
-                              className="absolute top-0 right-0 h-full w-2 cursor-col-resize"
-                            />
+                              );
+                            })()}
                           </th>
                         );
                       })}
@@ -1407,84 +1223,78 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
                   <tbody>
                     {paginatedRows.length === 0 ? (
                       <tr>
-                        <td colSpan={9} className="px-4 py-8 text-center text-slate-400 font-medium">
+                        <td colSpan={activeTab === 'coletas-previstas' ? 7 : 9} className="p-4 text-center text-slate-400 font-medium">
                           Nenhum registro encontrado com os filtros atuais.
                         </td>
                       </tr>
                     ) : (
-                      paginatedRows.map((row) => (
-                        <tr key={row.key} className="border-b border-slate-800/70 hover:bg-slate-900/40 transition">
-                          <td className="px-4 py-3 text-slate-300" style={{ width: `${columnWidths.rota}px`, maxWidth: `${columnWidths.rota}px` }}>
-                            <span className="block w-full overflow-hidden text-ellipsis whitespace-nowrap" title={row.rota}>
-                              {row.rota}
-                            </span>
+                      paginatedRows.map((row) => {
+                        const isPrevista = activeTab === 'coletas-previstas';
+                        return (
+                        <tr key={row.key} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 border-b border-slate-100 dark:border-slate-800">
+                          <td className="p-2 border-r border-slate-100 dark:border-slate-800 text-slate-700 dark:text-slate-300">
+                            <span className="font-bold">{row.rota}</span>
                           </td>
-                          <td className="px-4 py-3 text-slate-300" style={{ width: `${columnWidths.codigoProdutor}px`, maxWidth: `${columnWidths.codigoProdutor}px` }}>
-                            <span className="block w-full overflow-hidden text-ellipsis whitespace-nowrap" title={row.codigoProdutor}>
-                              {row.codigoProdutor}
-                            </span>
+                          <td className="p-2 border-r border-slate-100 dark:border-slate-800 text-slate-700 dark:text-slate-300">
+                            {row.codigoProdutor}
                           </td>
-                          <td className="px-4 py-3 text-slate-100 font-semibold" style={{ width: `${columnWidths.produtor}px`, maxWidth: `${columnWidths.produtor}px` }}>
-                            <span className="block w-full overflow-hidden text-ellipsis whitespace-nowrap" title={row.produtor}>
-                              {row.produtor}
-                            </span>
+                          <td className="p-2 border-r border-slate-100 dark:border-slate-800 text-slate-700 dark:text-slate-300 font-semibold">
+                            {row.produtor}
                           </td>
-                          <td className="px-4 py-3 text-slate-300" style={{ width: `${columnWidths.motivo}px`, maxWidth: `${columnWidths.motivo}px` }}>
-                            <span className="block w-full overflow-hidden text-ellipsis whitespace-nowrap" title={row.motivo || '-'}>
-                              {row.motivo || '-'}
-                            </span>
+                          {!isPrevista && (
+                          <td className="p-2 border-r border-slate-100 dark:border-slate-800 text-slate-700 dark:text-slate-300">
+                            {row.motivo || '-'}
                           </td>
-                          <td className="px-4 py-3 text-slate-300" style={{ width: `${columnWidths.motorista}px`, maxWidth: `${columnWidths.motorista}px` }}>
-                            <span className="block w-full overflow-hidden text-ellipsis whitespace-nowrap" title={row.motorista}>
-                              {row.motorista}
-                            </span>
+                          )}
+                          <td className="p-2 border-r border-slate-100 dark:border-slate-800 text-slate-700 dark:text-slate-300">
+                            {row.motorista}
                           </td>
-                          <td className="px-4 py-3 text-slate-300" style={{ width: `${columnWidths.placa}px`, maxWidth: `${columnWidths.placa}px` }}>
-                            <span className="block w-full overflow-hidden text-ellipsis whitespace-nowrap" title={row.placa}>
-                              {row.placa}
-                            </span>
+                          <td className="p-2 border-r border-slate-100 dark:border-slate-800 text-slate-700 dark:text-slate-300">
+                            {row.placa}
                           </td>
-                          <td className="px-4 py-3 text-slate-200" style={{ width: `${columnWidths.horario}px`, maxWidth: `${columnWidths.horario}px` }}>
+                          <td className="p-2 border-r border-slate-100 dark:border-slate-800 text-slate-700 dark:text-slate-300">
                             <div className="leading-tight">
-                              <div>Previsto: {row.horarioPrevisto}</div>
-                              {row.statusType === 'coleta-prevista' ? (
-                                <div className="text-amber-300/70">Aguardando coleta</div>
-                              ) : (
-                                <div className="text-emerald-300">Justificado: {row.horarioRealizado}</div>
+                              <div>Prev: {row.horarioPrevisto}</div>
+                              {row.statusType === 'coleta-prevista' ? (() => {
+                                const waitMin = getMinutesWaiting(row.rawEvent?.expected_arrival);
+                                return <div className={getWaitingColorClass(waitMin)}>{formatWaitingTime(waitMin)}</div>;
+                              })() : (
+                                <div className="text-emerald-600 dark:text-emerald-400">Justificado: {row.horarioRealizado}</div>
                               )}
                             </div>
                           </td>
-                          <td className="px-4 py-3 text-slate-300" style={{ width: `${columnWidths.operacao}px`, maxWidth: `${columnWidths.operacao}px` }}>
-                            <span className="block w-full overflow-hidden text-ellipsis whitespace-nowrap" title={row.operacao}>
-                              {row.operacao}
-                            </span>
+                          <td className="p-2 border-r border-slate-100 dark:border-slate-800 text-slate-700 dark:text-slate-300">
+                            {row.operacao}
                           </td>
-                          <td className="px-4 py-3" style={{ width: `${columnWidths.status}px`, maxWidth: `${columnWidths.status}px` }}>
+                          {!isPrevista && (
+                          <td className="p-2 text-slate-700 dark:text-slate-300">
                             <div className="flex items-center gap-2 flex-wrap">
-                              <span className={`inline-flex items-center px-2.5 py-1 rounded-md text-xs font-bold ${getStatusBadgeClass(row.statusType)}`}>
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded text-[9px] font-bold ${getStatusBadgeClass(row.statusType)}`}>
                                 {row.statusLabel}
                               </span>
                               {row.statusType === 'coleta-prevista' ? null : row.isAlreadyLaunched ? (
-                                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                                  <Check size={12} />
-                                  Não coleta lançada
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold bg-emerald-100 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-500/30">
+                                  <Check size={10} />
+                                  Lançada
                                 </span>
                               ) : (
                                 <button
                                   type="button"
                                   onClick={() => void handleLaunchNonCollection(row)}
                                   disabled={addingRowKeys.has(row.key)}
-                                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-bold bg-sky-500/20 text-sky-200 border border-sky-500/40 hover:bg-sky-500/30 disabled:opacity-60 disabled:cursor-not-allowed"
+                                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-sky-100 dark:bg-sky-500/20 text-sky-700 dark:text-sky-200 border border-sky-300 dark:border-sky-500/40 hover:bg-sky-200 dark:hover:bg-sky-500/30 disabled:opacity-60 disabled:cursor-not-allowed"
                                   title="Adicionar na tabela de não coletas"
                                 >
-                                  {addingRowKeys.has(row.key) ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
+                                  {addingRowKeys.has(row.key) ? <Loader2 size={10} className="animate-spin" /> : <Plus size={10} />}
                                   {addingRowKeys.has(row.key) ? 'Lançando' : 'Lançar'}
                                 </button>
                               )}
                             </div>
                           </td>
+                          )}
                         </tr>
-                      ))
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
