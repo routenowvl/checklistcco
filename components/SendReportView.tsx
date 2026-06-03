@@ -3,7 +3,6 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { SharePointService } from '../services/sharepointService';
 import { getValidToken } from '../services/tokenService';
 import { getBrazilDate, getBrazilHours, getBrazilLocaleDateTime, isAfter10amBrazil } from '../utils/dateUtils';
-import { isDealeUser, getDealeFilteredConfigs, getDealeAnchorOperation, getDealeOperationsToSend, getDealeRealOperations, getDealeCombinedLastEnvio, getDealeEffectiveConfig } from '../utils/dealeUtils';
 import { RouteDeparture, Task, User, RouteConfig, ColetaPrevista } from '../types';
 import {
   TowerControl, Send, RefreshCw, Loader2,
@@ -28,9 +27,6 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [userConfigs, setUserConfigs] = useState<RouteConfig[]>([]);
   const [lastSync, setLastSync] = useState(new Date());
-
-  // Estado para usuários DEALE (ARATIBA + CATUIPE + ALMIRANTE)
-  const [isDeale, setIsDeale] = useState(false);
 
   // Estados para seleção e envio
   const [selectedOperacao, setSelectedOperacao] = useState<string>('');
@@ -217,10 +213,6 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
         SharePointService.getNonCollections(token, currentUser.email)
       ]);
 
-      // Detecta se é usuário DEALE (tem ARATIBA + CATUIPE + ALMIRANTE)
-      const deale = isDealeUser(configs || []);
-      setIsDeale(deale);
-
       // FILTRA rotas APENAS das operações do usuário logado
       const myOps = new Set((configs || []).map(c => c.operacao));
       const filteredRoutes = (depData || []).filter(route => {
@@ -256,10 +248,6 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
       try {
         const configs = await SharePointService.getRouteConfigs(token, currentUser.email, force);
-
-        // Detecta DEALE e mantém estado atualizado
-        const deale = isDealeUser(configs || []);
-        setIsDeale(deale);
 
         // Manter TODAS as configs originais
         setUserConfigs(configs);
@@ -347,37 +335,16 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       return;
     }
 
-    // Para usuários DEALE, a operação selecionada "DEALE" corresponde às 3 operações reais
-    // Para operações NÃO-DEALE, trata normalmente
-    const isDealeSelection = isDeale && selectedOperacao === 'DEALE';
-    const realOperations = isDealeSelection
-      ? getDealeOperationsToSend()
-      : [selectedOperacao];
-
-    // Para DEALE, a operação âncora (ALMIRANTE) é usada para trava e configs
-    // Para operações normais, usa a própria operação selecionada
-    const anchorOperation = isDealeSelection ? getDealeAnchorOperation() : selectedOperacao;
-
     // VALIDAÇÃO DE SEGURANÇA: Verifica se a operação selecionada pertence ao usuário
-    // Para DEALE, verifica se o usuário tem TODAS as 3 operações do grupo
     const myOps = new Set(userConfigs.map(c => c.operacao));
-    if (isDealeSelection) {
-      // Para DEALE, verifica se o usuário tem todas as operações do grupo
-      const hasAllDealeOps = getDealeOperationsToSend().every(op => myOps.has(op));
-      if (!hasAllDealeOps) {
-        console.error(`[SEND_DEPARTURES_BLOCKED] Usuário tentou enviar DEALE sem ter todas as operações necessárias`);
-        setSendError(`Erro: Você não tem permissão para enviar esta operação.`);
-        setTimeout(() => setSendError(null), 5000);
-        return;
-      }
-    } else if (!myOps.has(selectedOperacao)) {
+    if (!myOps.has(selectedOperacao)) {
       console.error(`[SEND_DEPARTURES_BLOCKED] Usuário tentou enviar operação não pertencente: ${selectedOperacao}`);
       setSendError(`Erro: Você não tem permissão para enviar esta operação.`);
       setTimeout(() => setSendError(null), 5000);
       return;
     }
 
-    const operationCooldownKey = `saida_operacao_${anchorOperation}`;
+    const operationCooldownKey = `saida_operacao_${selectedOperacao}`;
     const cooldownRemaining = getCooldownRemainingMs(operationCooldownKey);
     if (cooldownRemaining > 0) {
       const tempoRestante = formatRemainingTime(cooldownRemaining);
@@ -386,7 +353,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       return;
     }
 
-    // VERIFICA TRAVA PARA EVITAR ENVIO DUPLICADO (usa operação âncora para DEALE)
+    // VERIFICA TRAVA PARA EVITAR ENVIO DUPLICADO
     const token = await getValidToken() || currentUser.accessToken;
     if (!token) {
       setSendError("Erro de autenticação. Tente novamente.");
@@ -394,7 +361,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     }
 
     // Verifica se já há envio em andamento para esta operação
-    const lockResult = await SharePointService.checkSendLock(token, anchorOperation);
+    const lockResult = await SharePointService.checkSendLock(token, selectedOperacao);
     if (lockResult && lockResult.locked && !lockResult.expired) {
       const errorMsg = `⚠️ Já existe envio em andamento para ${selectedOperacao} por ${lockResult.user}. Aguarde alguns segundos e tente novamente.`;
       setSendError(errorMsg);
@@ -403,8 +370,8 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       return;
     }
 
-    // Adquire trava (na operação âncora para DEALE)
-    const acquireResult = await SharePointService.acquireSendLock(token, anchorOperation, currentUser.email);
+    // Adquire trava
+    const acquireResult = await SharePointService.acquireSendLock(token, selectedOperacao, currentUser.email);
     if (!acquireResult.success) {
       setSendError(`⚠️ Não foi possível adquirir trava para ${selectedOperacao}: ${acquireResult.message}. Tente novamente.`);
       setTimeout(() => setSendError(null), 8000);
@@ -416,19 +383,8 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
     try {
 
-    // Para DEALE, pega todas as rotas das 3 operações
-    const selectedDepartures = departures.filter(d => realOperations.includes(d.operacao));
-    // Configs: para DEALE (selecionando DEALE), usa config de ALMIRANTE; para ops normais, usa a config da própria operação
-    const config = isDealeSelection
-      ? userConfigs.find(c => c.operacao.toUpperCase() === getDealeAnchorOperation())
-      : userConfigs.find(c => c.operacao === selectedOperacao);
-
-    // Debug DEALE: log completo de todas as configs do usuário
-    if (isDealeSelection) {
-      if (!config) {
-        console.error('[SEND_DEPARTURES][DEALE_DEBUG] Config de ALMIRANTE NÃO encontrada!');
-      }
-    }
+    const selectedDepartures = departures.filter(d => d.operacao === selectedOperacao);
+    const config = userConfigs.find(c => c.operacao === selectedOperacao);
 
     if (selectedDepartures.length === 0) {
       setSendError("Nenhuma saída encontrada para esta operação.");
@@ -460,7 +416,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
     const payload = {
       tipo: "SAIDA",
-      operacao: isDealeSelection ? realOperations.join(',') : selectedOperacao,
+      operacao: selectedOperacao,
       nomeExibicao: config?.nomeExibicao || selectedOperacao,
       tolerancia: config?.tolerancia || "00:00:00",
       atualizacao: isAtualizacao ? "sim" : "não",
@@ -486,35 +442,18 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     try {
       const token = await getValidToken() || currentUser.accessToken;
       if (token) {
-        const opParaSalvar = isDealeSelection ? anchorOperation : selectedOperacao;
         const dataHoraAgora = getBrazilLocaleDateTime();
 
         // Atualiza ultimo_envio_saida
         try {
-          await SharePointService.updateUltimoEnvioSaida(token, opParaSalvar, dataHoraAgora);
-          if (isDealeSelection) {
-            const realOps = getDealeRealOperations();
-            for (const op of realOps) {
-              if (op !== anchorOperation) {
-                try { await SharePointService.updateUltimoEnvioSaida(token, op, dataHoraAgora); } catch (_) { /* ignore */ }
-              }
-            }
-          }
+          await SharePointService.updateUltimoEnvioSaida(token, selectedOperacao, dataHoraAgora);
         } catch (err: any) {
           console.error('[PG_ENVIO_SAIDA] Erro ao atualizar UltimoEnvioSaida:', err.message);
         }
 
         // Atualiza status
         try {
-          await SharePointService.updateStatusOperacao(token, opParaSalvar, statusDeterminado);
-          if (isDealeSelection) {
-            const realOps = getDealeRealOperations();
-            for (const op of realOps) {
-              if (op !== anchorOperation) {
-                try { await SharePointService.updateStatusOperacao(token, op, statusDeterminado); } catch (_) { /* ignore */ }
-              }
-            }
-          }
+          await SharePointService.updateStatusOperacao(token, selectedOperacao, statusDeterminado);
         } catch (err: any) {
           console.error('[PG_STATUS] Erro ao atualizar Status:', err.message);
         }
@@ -552,16 +491,8 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
           if (dataHoraEnvio) {
             const token2 = await getValidToken() || currentUser.accessToken;
             if (token2) {
-              const opParaSalvar = isDealeSelection ? anchorOperation : selectedOperacao;
               try {
-                await SharePointService.updateUltimoEnvioSaida(token2, opParaSalvar, dataHoraEnvio);
-                if (isDealeSelection) {
-                  for (const op of getDealeRealOperations()) {
-                    if (op !== anchorOperation) {
-                      try { await SharePointService.updateUltimoEnvioSaida(token2, op, dataHoraEnvio); } catch (_) { /* ignore */ }
-                    }
-                  }
-                }
+                await SharePointService.updateUltimoEnvioSaida(token2, selectedOperacao, dataHoraEnvio);
               } catch (_) { /* ignore */ }
             }
           }
@@ -573,16 +504,8 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
               webhookStatus.toLowerCase() === 'ok' ? 'OK' : webhookStatus;
             const token3 = await getValidToken() || currentUser.accessToken;
             if (token3) {
-              const opParaSalvar = isDealeSelection ? anchorOperation : selectedOperacao;
               try {
-                await SharePointService.updateStatusOperacao(token3, opParaSalvar, statusFinal);
-                if (isDealeSelection) {
-                  for (const op of getDealeRealOperations()) {
-                    if (op !== anchorOperation) {
-                      try { await SharePointService.updateStatusOperacao(token3, op, statusFinal); } catch (_) { /* ignore */ }
-                    }
-                  }
-                }
+                await SharePointService.updateStatusOperacao(token3, selectedOperacao, statusFinal);
               } catch (_) { /* ignore */ }
             }
           }
@@ -606,8 +529,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       try {
         const token4 = await getValidToken() || currentUser.accessToken;
         if (token4) {
-          const opParaLiberar = isDealeSelection ? anchorOperation : selectedOperacao;
-          await SharePointService.releaseSendLock(token4, opParaLiberar);
+          await SharePointService.releaseSendLock(token4, selectedOperacao);
         }
       } catch (_) { /* ignore */ }
       setIsSending(false);
@@ -628,37 +550,16 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       return;
     }
 
-    // Para usuários DEALE, a operação selecionada "DEALE" corresponde às 3 operações reais
-    // Para operações NÃO-DEALE, trata normalmente
-    const isDealeSelectionNC = isDeale && selectedOperacaoNC === 'DEALE';
-    const realOperations = isDealeSelectionNC
-      ? getDealeOperationsToSend()
-      : [selectedOperacaoNC];
-
-    // Para DEALE, a operação âncora (ALMIRANTE) é usada para trava e configs
-    // Para operações normais, usa a própria operação selecionada
-    const anchorOperation = isDealeSelectionNC ? getDealeAnchorOperation() : selectedOperacaoNC;
-
     // VALIDAÇÃO DE SEGURANÇA: Verifica se a operação selecionada pertence ao usuário
-    // Para DEALE, verifica se o usuário tem TODAS as 3 operações do grupo
     const myOps = new Set(userConfigs.map(c => c.operacao));
-    if (isDealeSelectionNC) {
-      // Para DEALE, verifica se o usuário tem todas as operações do grupo
-      const hasAllDealeOps = getDealeOperationsToSend().every(op => myOps.has(op));
-      if (!hasAllDealeOps) {
-        console.error(`[SEND_NAO_COLETA_BLOCKED] Usuário tentou enviar DEALE sem ter todas as operações necessárias`);
-        setNcSendError(`Erro: Você não tem permissão para enviar esta operação.`);
-        setTimeout(() => setNcSendError(null), 5000);
-        return;
-      }
-    } else if (!myOps.has(selectedOperacaoNC)) {
+    if (!myOps.has(selectedOperacaoNC)) {
       console.error(`[SEND_NAO_COLETA_BLOCKED] Usuário tentou enviar operação não pertencente: ${selectedOperacaoNC}`);
       setNcSendError(`Erro: Você não tem permissão para enviar esta operação.`);
       setTimeout(() => setNcSendError(null), 5000);
       return;
     }
 
-    const operationCooldownKey = `naocoleta_operacao_${anchorOperation}`;
+    const operationCooldownKey = `naocoleta_operacao_${selectedOperacaoNC}`;
     const cooldownRemaining = getCooldownRemainingMs(operationCooldownKey);
     if (cooldownRemaining > 0) {
       const tempoRestante = formatRemainingTime(cooldownRemaining);
@@ -667,7 +568,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       return;
     }
 
-    // VERIFICA TRAVA PARA EVITAR ENVIO DUPLICADO (usa operação âncora para DEALE)
+    // VERIFICA TRAVA PARA EVITAR ENVIO DUPLICADO
     const token = await getValidToken() || currentUser.accessToken;
     if (!token) {
       setNcSendError("Erro de autenticação. Tente novamente.");
@@ -675,7 +576,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     }
 
     // Verifica se já há envio em andamento para esta operação
-    const lockResult = await SharePointService.checkSendLock(token, anchorOperation);
+    const lockResult = await SharePointService.checkSendLock(token, selectedOperacaoNC);
     if (lockResult && lockResult.locked && !lockResult.expired) {
       const errorMsg = `⚠️ Já existe envio em andamento para ${selectedOperacaoNC} por ${lockResult.user}. Aguarde alguns segundos e tente novamente.`;
       setNcSendError(errorMsg);
@@ -684,8 +585,8 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       return;
     }
 
-    // Adquire trava (na operação âncora para DEALE)
-    const acquireResult = await SharePointService.acquireSendLock(token, anchorOperation, currentUser.email);
+    // Adquire trava
+    const acquireResult = await SharePointService.acquireSendLock(token, selectedOperacaoNC, currentUser.email);
     if (!acquireResult.success) {
       setNcSendError(`⚠️ Não foi possível adquirir trava para ${selectedOperacaoNC}: ${acquireResult.message}. Tente novamente.`);
       setTimeout(() => setNcSendError(null), 8000);
@@ -697,16 +598,12 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
     try {
 
-    // Para DEALE, pega todas as rotas das 3 operações
-    const selectedDepartures = departures.filter(d => realOperations.includes(d.operacao));
-    // Configs: para DEALE (selecionando DEALE), usa config de ALMIRANTE; para ops normais, usa a config da própria operação
-    const config = isDealeSelectionNC
-      ? userConfigs.find(c => c.operacao.toUpperCase() === getDealeAnchorOperation())
-      : userConfigs.find(c => c.operacao === selectedOperacaoNC);
+    const selectedDepartures = departures.filter(d => d.operacao === selectedOperacaoNC);
+    const config = userConfigs.find(c => c.operacao === selectedOperacaoNC);
 
     // BUSCA NÃO COLETAS REAIS NO SHAREPOINT PARA ESTA OPERAÇÃO
     const spNonCollections = await SharePointService.getNonCollections(token, currentUser.email);
-    const ncFiltradas = spNonCollections.filter(nc => realOperations.includes(nc.operacao));
+    const ncFiltradas = spNonCollections.filter(nc => nc.operacao === selectedOperacaoNC);
 
     // BUSCA COLETAS PREVISTAS DA DATA DAS NÃO COLETAS PARA INCLUIR NO PAYLOAD
     // Pega a data da primeira não coleta encontrada (todas são da mesma data)
@@ -732,19 +629,17 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
     // Soma coletas previstas por operação
     const coletasPorOperacao: Record<string, number> = {};
-    realOperations.forEach(op => {
-      const previstas = coletasPrev.filter(c => c.Title === op);
-      coletasPorOperacao[op] = previstas.reduce((sum, c) => sum + (c.QntColeta || 0), 0);
-    });
+    const previstas = coletasPrev.filter(c => c.Title === selectedOperacaoNC);
+    coletasPorOperacao[selectedOperacaoNC] = previstas.reduce((sum, c) => sum + (c.QntColeta || 0), 0);
 
-    const totalColetasPrevistas = Object.values(coletasPorOperacao).reduce((sum, n) => sum + n, 0);
+    const totalColetasPrevistas = coletasPorOperacao[selectedOperacaoNC] || 0;
 
     if (ncFiltradas.length === 0) {
       setNcSendError(`⚠️ Nenhuma não coleta lançada para ${selectedOperacaoNC} na tabela. Não há dados para enviar.`);
       setTimeout(() => setNcSendError(null), 6000);
       setIsSending(false);
       // Libera a trava já que não há dados para enviar
-      await SharePointService.releaseSendLock(token, anchorOperation);
+      await SharePointService.releaseSendLock(token, selectedOperacaoNC);
       return;
     }
 
@@ -761,11 +656,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       const routeDate = dm ? `${dm[3]}-${dm[2]}-${dm[1]}` : rawDate;
       if (routeDate !== today) return false;
 
-      // Verifica se a coluna saida está vazia (nula, undefined, string vazia, ou apenas espaços)
-      // IMPORTANTE: "00:00:00" é um horário válido (meia-noite) e NÃO é considerado vazio
-      // Se tiver "-" na coluna saida, considera como rota que já saiu (não é pendente)
       const saidaVazia = !d.saida || d.saida.trim() === '';
-      
       return saidaVazia;
     });
 
@@ -774,7 +665,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
     const payload = {
       tipo: "NAO_COLETA",
-      operacao: isDealeSelectionNC ? realOperations.join(',') : selectedOperacaoNC,
+      operacao: selectedOperacaoNC,
       nomeExibicao: config?.nomeExibicao || selectedOperacaoNC,
       tolerancia: config?.tolerancia || "00:00:00",
       atualizacao: isAtualizacao ? "sim" : "não",
@@ -805,35 +696,18 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     try {
       const token = await getValidToken() || currentUser.accessToken;
       if (token) {
-        const opParaSalvar = isDealeSelectionNC ? anchorOperation : selectedOperacaoNC;
         const dataHoraAgora = getBrazilLocaleDateTime();
 
         // Atualiza ultimo_envio_ncoleta
         try {
-          await SharePointService.updateUltimoEnvioNaoColetas(token, opParaSalvar, dataHoraAgora);
-          if (isDealeSelectionNC) {
-            const realOps = getDealeRealOperations();
-            for (const op of realOps) {
-              if (op !== anchorOperation) {
-                try { await SharePointService.updateUltimoEnvioNaoColetas(token, op, dataHoraAgora); } catch (_) { /* ignore */ }
-              }
-            }
-          }
+          await SharePointService.updateUltimoEnvioNaoColetas(token, selectedOperacaoNC, dataHoraAgora);
         } catch (err: any) {
           console.error('[PG_ENVIO_NC] Erro ao atualizar UltimoEnvioNcoleta:', err.message);
         }
 
         // Atualiza status
         try {
-          await SharePointService.updateStatusOperacao(token, opParaSalvar, statusDeterminado);
-          if (isDealeSelectionNC) {
-            const realOps = getDealeRealOperations();
-            for (const op of realOps) {
-              if (op !== anchorOperation) {
-                try { await SharePointService.updateStatusOperacao(token, op, statusDeterminado); } catch (_) { /* ignore */ }
-              }
-            }
-          }
+          await SharePointService.updateStatusOperacao(token, selectedOperacaoNC, statusDeterminado);
         } catch (err: any) {
           console.error('[PG_STATUS_NC] Erro ao atualizar Status:', err.message);
         }
@@ -867,16 +741,8 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
           if (dataHoraEnvio) {
             const token2 = await getValidToken() || currentUser.accessToken;
             if (token2) {
-              const opParaSalvar = isDealeSelectionNC ? anchorOperation : selectedOperacaoNC;
               try {
-                await SharePointService.updateUltimoEnvioNaoColetas(token2, opParaSalvar, dataHoraEnvio);
-                if (isDealeSelectionNC) {
-                  for (const op of getDealeRealOperations()) {
-                    if (op !== anchorOperation) {
-                      try { await SharePointService.updateUltimoEnvioNaoColetas(token2, op, dataHoraEnvio); } catch (_) { /* ignore */ }
-                    }
-                  }
-                }
+                await SharePointService.updateUltimoEnvioNaoColetas(token2, selectedOperacaoNC, dataHoraEnvio);
               } catch (_) { /* ignore */ }
             }
           }
@@ -888,16 +754,8 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
               webhookStatus.toLowerCase() === 'ok' ? 'OK' : webhookStatus;
             const token3 = await getValidToken() || currentUser.accessToken;
             if (token3) {
-              const opParaSalvar = isDealeSelectionNC ? anchorOperation : selectedOperacaoNC;
               try {
-                await SharePointService.updateStatusOperacao(token3, opParaSalvar, statusFinal);
-                if (isDealeSelectionNC) {
-                  for (const op of getDealeRealOperations()) {
-                    if (op !== anchorOperation) {
-                      try { await SharePointService.updateStatusOperacao(token3, op, statusFinal); } catch (_) { /* ignore */ }
-                    }
-                  }
-                }
+                await SharePointService.updateStatusOperacao(token3, selectedOperacaoNC, statusFinal);
               } catch (_) { /* ignore */ }
             }
           }
@@ -921,8 +779,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       try {
         const token4 = await getValidToken() || currentUser.accessToken;
         if (token4) {
-          const opParaLiberar = isDealeSelectionNC ? anchorOperation : selectedOperacaoNC;
-          await SharePointService.releaseSendLock(token4, opParaLiberar);
+          await SharePointService.releaseSendLock(token4, selectedOperacaoNC);
         }
       } catch (_) { /* ignore */ }
       setIsSending(false);
@@ -1362,17 +1219,11 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     }
   };
 
-  // Lógica para processar a lista de SAÍDAS - agrupa DEALE se aplicável
+  // Lógica para processar a lista de SAÍDAS
   const departuresSummary = useMemo(() => {
-    // Separa configs DEALE e não-DEALE
-    const dealeOps = new Set(['ARATIBA', 'CATUIPE', 'ALMIRANTE']);
-    const dealeConfigs = userConfigs.filter(c => dealeOps.has(c.operacao.toUpperCase()));
-    const nonDealeConfigs = userConfigs.filter(c => !dealeOps.has(c.operacao.toUpperCase()));
-
     const result: SummaryItem[] = [];
 
-    // Adiciona operações não-DEALE normalmente
-    nonDealeConfigs.forEach(config => {
+    userConfigs.forEach(config => {
       const ultimoEnvio = config.ultimoEnvioSaida || "";
       const webhookStatus = config.Status || "";
 
@@ -1462,113 +1313,15 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
       });
     });
 
-    // Se é usuário DEALE e tem configs DEALE, agrupa em uma entrada DEALE
-    if (dealeConfigs.length > 0) {
-      // Pega o último envio mais recente entre as 3 operações
-      const ultimoEnvio = getDealeCombinedLastEnvio(dealeConfigs);
-
-      // Pega o webhookStatus da operação âncora (ALMIRANTE)
-      const anchorConfig = dealeConfigs.find(c => c.operacao.toUpperCase() === 'ALMIRANTE');
-      const webhookStatus = anchorConfig?.Status || "";
-
-      let timestamp: string;
-      let relativeTime: string;
-
-      if (ultimoEnvio) {
-        let parsedDate: Date | null = null;
-        if (ultimoEnvio.includes('T')) {
-          parsedDate = new Date(ultimoEnvio);
-        } else if (ultimoEnvio.includes('/')) {
-          const [data, hora] = ultimoEnvio.split(' ');
-          const [dia, mes, ano] = data.split('/');
-          const [h, m, s] = hora ? hora.split(':') : ['00', '00', '00'];
-          parsedDate = new Date(Number(ano), Number(mes) - 1, Number(dia), Number(h), Number(m), Number(s));
-        } else {
-          parsedDate = new Date(ultimoEnvio);
-        }
-
-        if (parsedDate && !isNaN(parsedDate.getTime())) {
-          timestamp = parsedDate.toISOString();
-          const now = new Date();
-          const diffMs = now.getTime() - parsedDate.getTime();
-          const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-          if (diffHours === 0) {
-            const diffMin = Math.max(0, Math.floor(diffMs / (1000 * 60)));
-            relativeTime = `há ${diffMin} min`;
-          } else {
-            relativeTime = `há ${diffHours} horas`;
-          }
-        } else {
-          timestamp = new Date().toISOString();
-          relativeTime = "há -- horas";
-        }
-      } else {
-        timestamp = new Date().toISOString();
-        relativeTime = "Não enviado";
-      }
-
-      let status = "PREVISTO";
-      let color = "bg-slate-300 text-slate-600";
-
-      const todayBrazil = getBrazilDate();
-      const [todayY, todayM, todayD] = todayBrazil.split('-').map(Number);
-      const today = new Date(todayY, todayM - 1, todayD);
-      today.setHours(0, 0, 0, 0);
-
-      let envioDateObj: Date | null = null;
-      if (ultimoEnvio) {
-        if (ultimoEnvio.includes('T')) {
-          envioDateObj = new Date(ultimoEnvio);
-        } else if (ultimoEnvio.includes('/')) {
-          const [data, hora] = ultimoEnvio.split(' ');
-          const [dia, mes, ano] = data.split('/');
-          const [h, m, s] = hora ? hora.split(':') : ['00', '00', '00'];
-          envioDateObj = new Date(Number(ano), Number(mes) - 1, Number(dia), Number(h), Number(m), Number(s));
-        }
-      }
-
-      if (envioDateObj && !isNaN(envioDateObj.getTime())) {
-        envioDateObj.setHours(0, 0, 0, 0);
-        const isToday = envioDateObj.getTime() === today.getTime();
-
-        if (isToday && webhookStatus) {
-          if (webhookStatus.toUpperCase() === 'OK') {
-            status = "OK";
-            color = "bg-emerald-500 text-white";
-          } else if (webhookStatus.toUpperCase() === 'ATUALIZAR') {
-            status = "ATUALIZAR";
-            color = "bg-blue-500 text-white";
-          } else {
-            status = webhookStatus.toUpperCase();
-            color = "bg-slate-500 text-white";
-          }
-        }
-      }
-
-      result.push({
-        id: 'DEALE',
-        operacao: 'DEALE',
-        timestamp,
-        relativeTime,
-        status,
-        statusColor: color,
-        webhookStatus,
-        ultimoEnvioFormatado: ultimoEnvio ? formatarDataHora(ultimoEnvio) : "Nunca"
-      });
-    }
-
     return result;
   }, [departures, userConfigs]);
 
-  // Lógica para processar a lista de NÃO COLETAS (agrupa DEALE se aplicável)
+  // Lógica para processar a lista de NÃO COLETAS
   // Usa NÃO COLETAS REAIS do SharePoint, não rotas com status NOK
   const nonCollectionsSummary = useMemo(() => {
-    const dealeOps = new Set(['ARATIBA', 'CATUIPE', 'ALMIRANTE']);
     const allOps = Array.from(new Set(userConfigs.map(c => c.operacao)));
-    const nonDealeOps = allOps.filter(op => !dealeOps.has(op.toUpperCase()));
-    const hasDealeOps = allOps.some(op => dealeOps.has(op.toUpperCase()));
 
-    const result = nonDealeOps.map(op => {
+    const result = allOps.map(op => {
       // Usa a quantidade registrada na coluna separada do operacao_config
       const config = userConfigs.find(c => c.operacao === op);
       const ncCount = config?.quantidadeNcoletasRegistrada || 0;
@@ -1584,23 +1337,6 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
         statusColor: ncCount > 0 ? "bg-red-500 text-white" : "bg-emerald-500 text-white"
       };
     });
-
-    // Adiciona DEALE agrupado se aplicável
-    if (hasDealeOps) {
-      const dealeConfigs = userConfigs.filter(c => dealeOps.has(c.operacao.toUpperCase()));
-      const dealeNcCount = dealeConfigs.reduce((sum, c) => sum + (c.quantidadeNcoletasRegistrada || 0), 0);
-      const ultimoEnvioDealeNC = getLatestNaoColetasEnvio(dealeConfigs);
-      const parsedUltimoEnvioDeale = parseConfigDateTime(ultimoEnvioDealeNC);
-
-      result.push({
-        id: 'DEALE',
-        operacao: 'DEALE',
-        timestamp: parsedUltimoEnvioDeale ? parsedUltimoEnvioDeale.toISOString() : new Date().toISOString(),
-        relativeTime: ultimoEnvioDealeNC ? getRelativeTime(ultimoEnvioDealeNC) : "Não enviado",
-        status: dealeNcCount > 0 ? `${dealeNcCount} NÃO COLETAS` : "TODOS COLETADOS",
-        statusColor: dealeNcCount > 0 ? "bg-red-500 text-white" : "bg-emerald-500 text-white"
-      });
-    }
 
     return result;
   }, [userConfigs]);
@@ -1639,18 +1375,10 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     return { status: 'NÃO ENVIADO', color: 'bg-slate-500 text-white', data: dataEnvio };
   }, [userConfigs]);
 
-  // Lista de operações para os selects de envio (agrupa DEALE se aplicável)
+  // Lista de operações para os selects de envio
   const sendOptions = useMemo(() => {
-    const dealeOps = new Set(['ARATIBA', 'CATUIPE', 'ALMIRANTE']);
     const allOps = Array.from(new Set(userConfigs.map(c => c.operacao)));
-    const nonDealeOps = allOps.filter(op => !dealeOps.has(op.toUpperCase()));
-    const hasDealeOps = allOps.some(op => dealeOps.has(op.toUpperCase()));
-
-    const options = nonDealeOps.map(op => ({ value: op, label: op }));
-    if (hasDealeOps) {
-      options.push({ value: 'DEALE', label: 'DEALE' });
-    }
-    return options;
+    return allOps.map(op => ({ value: op, label: op }));
   }, [userConfigs]);
 
   if (isLoading && departures.length === 0) {
