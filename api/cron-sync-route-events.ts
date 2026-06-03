@@ -147,10 +147,16 @@ const pickEventsArray = (payload: any): any[] => {
 
 const getCurrentDayDate = (): string => {
   const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  const parts = now.toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' }).split('-');
+  return `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
+};
+
+const getPreviousDayDate = (offset: number): string => {
+  const today = getCurrentDayDate();
+  const d = new Date(today + 'T12:00:00Z');
+  d.setDate(d.getDate() - offset);
+  const parts = d.toISOString().split('T')[0].split('-');
+  return `${parts[0]}-${parts[1]}-${parts[2]}`;
 };
 
 const parseUpstreamResponse = async (response: Response): Promise<{ contentType: string; raw: string; data: any }> => {
@@ -181,9 +187,9 @@ const syncAll = async (): Promise<{
 }> => {
   const errors: string[] = [];
   const startedAt = Date.now();
-  const dateRef = getCurrentDayDate();
+  const dates = [getPreviousDayDate(2), getPreviousDayDate(1), getCurrentDayDate()];
 
-  console.log(`[CRON_SYNC] Iniciando sincronização para ${dateRef}`);
+  console.log(`[CRON_SYNC] Iniciando sincronização para ${dates.join(', ')}`);
 
   // 1. Obter token Route Web
   let bearerToken: string;
@@ -219,6 +225,10 @@ const syncAll = async (): Promise<{
   const doneKeys: { route_id: number; event_id: number }[] = [];
   let totalRoutes = 0;
   let totalEvents = 0;
+
+  // Sincroniza d-2, d-1 e dia atual
+  for (const dateRef of dates) {
+    console.log(`[CRON_SYNC] Processando data: ${dateRef}`);
 
   // 2. Buscar rotas por plant
   for (const config of plantConfigs) {
@@ -402,6 +412,8 @@ const syncAll = async (): Promise<{
       errors.push(`Plant ${config.plantId}: ${error?.message || 'erro'}`);
     }
   }
+
+  } // fim do loop de datas
 
   // 4. Persistir no banco
   let totalUpserted = 0;

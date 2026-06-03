@@ -147,6 +147,14 @@ const getPreviousDayDate = () => {
   return `${parts[0]}-${parts[1]}-${parts[2]}`;
 };
 
+const getD2Date = () => {
+  const today = getCurrentDayDate();
+  const d = new Date(today + 'T12:00:00Z');
+  d.setDate(d.getDate() - 2);
+  const parts = d.toISOString().split('T')[0].split('-');
+  return `${parts[0]}-${parts[1]}-${parts[2]}`;
+};
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const normalizeString = (str) =>
@@ -708,9 +716,9 @@ const syncForDate = async (dateRef, bearerToken, plantConfigs, routesUrlBase) =>
 const syncAll = async () => {
   const startedAt = Date.now();
 
-  // Sincroniza sempre 2 dias: dia anterior e dia atual
-  const dates = [getPreviousDayDate(), getCurrentDayDate()];
-  console.log(`[SYNC] Iniciando sincronização para ${dates.join(' e ')}`);
+  // Sincroniza sempre 3 dias: d-2, d-1 e dia atual
+  const dates = [getD2Date(), getPreviousDayDate(), getCurrentDayDate()];
+  console.log(`[SYNC] Iniciando sincronização para ${dates.join(', ')}`);
 
   // 1. Token
   console.log('[SYNC] Obtendo token Route Web...');
