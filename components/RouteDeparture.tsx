@@ -6,7 +6,7 @@ import { getValidToken } from '../services/tokenService';
 import { useWriteBehind } from '../hooks/useWriteBehind';
 import * as XLSX from 'xlsx';
 import { getBrazilDate, getBrazilHours, getBrazilMinutes, toBrazilDate, getWeekString, getRouteDateForCurrentTime } from '../utils/dateUtils';
-import { isDealeUser, getDealeFilteredConfigs, getDealeAnchorOperation, getDealeRealOperations } from '../utils/dealeUtils';
+import { getDealeRealOperations } from '../utils/dealeUtils';
 import {
   Clock, X, Loader2, RefreshCw, ShieldCheck, Truck,
   CheckCircle2, ChevronDown,
@@ -390,9 +390,6 @@ const RouteDepartureView: React.FC<{
     return saved !== 'false'; // Default: true (dark mode)
   });
 
-  // Estado para usuários DEALE (usado apenas no modal de configurar emails)
-  const [isDeale, setIsDeale] = useState(false);
-
   const [ghostRow, setGhostRow] = useState<Partial<RouteDeparture>>({
     id: 'ghost', rota: '', data: getRouteDateForCurrentTime(), inicio: '', saida: '', motorista: '', placa: '', statusGeral: '', aviso: 'NÃO', operacao: '', statusOp: 'Previsto', tempo: '', semana: '', causaRaiz: ''
   });
@@ -479,8 +476,7 @@ const RouteDepartureView: React.FC<{
     if (!token) return;
 
     try {
-      // Se a operação for "DEALE", usa a operação âncora (ALMIRANTE)
-      const operacaoReal = (operacao === 'DEALE') ? getDealeAnchorOperation() : operacao;
+      const operacaoReal = operacao;
 
       const config = userConfigs.find(c => c.operacao === operacaoReal);
       if (!config) return;
@@ -1196,8 +1192,7 @@ const RouteDepartureView: React.FC<{
     if (isConfigModalOpen && userConfigs.length > 0) {
       setIsEmailConfigModalOpen(true);
 
-      // Para usuários DEALE, usa configs filtradas (agrupa como DEALE)
-      const modalConfigs = isDeale ? getDealeFilteredConfigs(userConfigs) : userConfigs;
+      const modalConfigs = userConfigs;
 
       // Seleciona a primeira operação por padrão e carrega configs APENAS se ainda não foi carregado
       if (!selectedOperacaoConfig) {
@@ -1221,7 +1216,7 @@ const RouteDepartureView: React.FC<{
       setConfigEnvio('');
       setConfigCopia('');
     }
-  }, [isConfigModalOpen, userConfigs, isDeale, canEditData, setIsConfigModalOpen]);
+  }, [isConfigModalOpen, userConfigs, canEditData, setIsConfigModalOpen]);
 
   // Carrega dados da configuração quando seleciona operação
   // SÓ executa quando o usuário TROCA a operação selecionada, NÃO quando userConfigs muda por polling
@@ -1233,10 +1228,7 @@ const RouteDepartureView: React.FC<{
     if (emailConfigLoadedRef.current[selectedOperacaoConfig]) return;
 
     // Determina qual operação buscar no userConfigs
-    // Se for "DEALE", busca na operação âncora (ALMIRANTE)
-    const operacaoParaBuscar = (isDeale && selectedOperacaoConfig === 'DEALE')
-      ? getDealeAnchorOperation()
-      : selectedOperacaoConfig;
+    const operacaoParaBuscar = selectedOperacaoConfig;
 
     const config = userConfigs.find(c =>
       c.operacao.toUpperCase() === operacaoParaBuscar.toUpperCase()
@@ -1246,7 +1238,7 @@ const RouteDepartureView: React.FC<{
       setConfigCopia(config.Copia || '');
       emailConfigLoadedRef.current[selectedOperacaoConfig] = true;
     }
-  }, [selectedOperacaoConfig, isEmailConfigModalOpen, userConfigs, isDeale]);
+  }, [selectedOperacaoConfig, isEmailConfigModalOpen, userConfigs]);
 
   // Função para salvar configuração de emails
   const handleSaveEmailConfig = async () => {
@@ -1268,12 +1260,7 @@ const RouteDepartureView: React.FC<{
         return;
       }
 
-      // Para usuários DEALE, se a operação selecionada é "DEALE", salva na operação âncora (ALMIRANTE)
-      // Caso contrário, salva na operação selecionada normalmente
-      let operacaoParaSalvar = selectedOperacaoConfig;
-      if (isDeale && selectedOperacaoConfig === 'DEALE') {
-        operacaoParaSalvar = getDealeAnchorOperation();
-      }
+      const operacaoParaSalvar = selectedOperacaoConfig;
 
       await SharePointService.updateRouteConfigEmails(token, operacaoParaSalvar, configEnvio, configCopia);
 
@@ -2020,9 +2007,6 @@ const RouteDepartureView: React.FC<{
       const configs = routeAccess.configs || [];
       setCanEditData(Boolean(routeAccess.canEdit));
 
-      // Detecta se é usuário DEALE (para o modal de configurar emails)
-      const deale = isDealeUser(configs || []);
-      setIsDeale(deale);
       setUserConfigs(configs || []);
 
       if (!routeAccess.canEdit) {
@@ -7233,7 +7217,7 @@ const RouteDepartureView: React.FC<{
                     }}
                     className="w-full p-4 border border-slate-200 dark:border-slate-700 rounded-2xl bg-white dark:bg-slate-900 text-sm font-bold outline-none dark:text-white shadow-sm focus:ring-2 focus:ring-blue-500"
                   >
-                    {(isDeale ? getDealeFilteredConfigs(userConfigs) : userConfigs).map(config => (
+                    {userConfigs.map(config => (
                       <option key={config.operacao} value={config.operacao}>
                         {config.nomeExibicao}
                       </option>
