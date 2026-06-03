@@ -14,7 +14,7 @@ import {
   ChevronRight, Maximize2, Minimize2,
   Archive, Database, Save, LinkIcon,
   Layers, Trash2, Settings2, Check, Table, SortAsc,
-  Sun, Moon, AlertTriangle, Calendar, CalendarDays, ArrowUpDown, MessageCircle, LogOut, Wrench, Info
+  Sun, Moon, AlertTriangle, Calendar, CalendarDays, ArrowUpDown, MessageCircle, LogOut, Wrench, Info, Plus
 } from 'lucide-react';
 
 const MOTIVOS = [
@@ -2792,6 +2792,85 @@ const RouteDepartureView: React.FC<{
     }
   };
 
+  // ─── Adicionar rota da Escala ao painel principal ──────────────────────
+  const handleAddRouteFromShift = async (item: any) => {
+    if (!canEditData) {
+      alert('Esta conta possui acesso somente visualização.');
+      return;
+    }
+
+    // Extrai data e horário do inicioPrevisto (formato: "YYYY-MM-DD HH:MM" ou similar)
+    const inicioRaw = item.inicioPrevisto || '';
+    let dataStr = item.data || shiftDate; // fallback para a data selecionada
+    let horaStr = '';
+
+    const dtMatch = inicioRaw.match(/^(\d{4})-(\d{2})-(\d{2})\s*(\d{2}):(\d{2})/);
+    if (dtMatch) {
+      dataStr = `${dtMatch[3]}/${dtMatch[2]}/${dtMatch[1]}`; // DD/MM/YYYY
+      horaStr = `${dtMatch[4]}:${dtMatch[5]}:00`; // HH:MM:SS
+    } else {
+      const hmMatch = inicioRaw.match(/(\d{2}):(\d{2})/);
+      if (hmMatch) {
+        horaStr = `${hmMatch[1]}:${hmMatch[2]}:00`;
+      }
+    }
+
+    if (!horaStr) {
+      alert('Não foi possível extrair o horário de início previsto.');
+      return;
+    }
+
+    // Mapeia plantId para nome da operação do usuário
+    const operacaoNome = (() => {
+      const found = userConfigs.find(c => c.plantId != null && String(c.plantId) === String(item.operacao));
+      return found ? found.operacao : String(item.operacao);
+    })();
+
+    if (!canEditOperation(operacaoNome)) {
+      alert('Você não tem permissão para adicionar rotas desta operação.');
+      return;
+    }
+
+    setIsAddingRoute(true);
+    const token = await getAccessToken();
+
+    try {
+      const config = userConfigs.find(c => c.operacao === operacaoNome);
+      const { status, gap } = calculateStatusWithTolerance(horaStr, '', config?.tolerancia || '00:00:00', dataStr);
+
+      const newRoute: RouteDeparture = {
+        id: '',
+        semana: getWeekString(dataStr),
+        rota: item.rota,
+        data: dataStr,
+        inicio: horaStr,
+        motorista: item.motorista || '',
+        placa: '',
+        saida: '',
+        motivo: '',
+        observacao: '',
+        statusGeral: '',
+        aviso: 'NÃO',
+        operacao: operacaoNome,
+        statusOp: status,
+        tempo: gap,
+        createdAt: new Date().toISOString(),
+        causaRaiz: '',
+        tempoResposta: ''
+      };
+
+      await SharePointService.updateDeparture(token, newRoute);
+      await loadData(true);
+      setIsSortByTimeEnabled(false);
+      setIsSortByOperacao(false);
+    } catch (e: any) {
+      console.error('[SHIFT_ADD_ROUTE] Erro:', e.message);
+      alert(`Erro ao adicionar rota: ${e.message}`);
+    } finally {
+      setIsAddingRoute(false);
+    }
+  };
+
   // ─── Shift API: Consultar Escala ──────────────────────────────────────
   const handleFetchShift = async () => {
     if (!shiftDate) {
@@ -2831,6 +2910,13 @@ const RouteDepartureView: React.FC<{
           body: JSON.stringify({ action: 'schedules', plant_id: plantId, code })
         });
         const schedData = await schedRes.json();
+        console.log(`[SHIFT] schedules response plant_id=${plantId}:`, {
+          success: schedData.success,
+          upstreamStatus: schedData.upstreamStatus,
+          dataType: typeof schedData.data,
+          dataKeys: schedData.data ? Object.keys(schedData.data) : null,
+          error: schedData.error
+        });
 
         if (!schedData.success) {
           console.warn(`[SHIFT] Falha schedules plant_id ${plantId}:`, {
@@ -2874,14 +2960,76 @@ const RouteDepartureView: React.FC<{
           body: JSON.stringify({ action: 'consolidation', schedule_id: scheduleId })
         });
         const consData = await consRes.json();
+        console.log(`[SHIFT] consolidation response schedule ${scheduleId}:`, {
+          success: consData.success,
+          upstreamStatus: consData.upstreamStatus,
+          resultadoLength: consData.resultado?.length,
+          dataKeys: consData.data ? Object.keys(consData.data) : null
+        });
 
         if (!consData.success) {
           console.warn(`[SHIFT] Falha consolidation schedule ${scheduleId}:`, consData.error || consData.upstreamStatus, consData);
           continue;
         }
 
-        // Filtra pelo dia selecionado
-        const dayResults = (consData.resultado || []).filter((r: any) => r.data === selectedDay);
+        // Extrai direto dos dados brutos da API (resposta completa da consolidação)
+        let dayResults: any[] = [];
+        if (consData.data?.data?.shifts) {
+          const rawConsolidation = consData.data.data;
+          const plantIdStr = String(rawConsolidation.plantId || plantId);
+
+          // Passo 1: Coleta todas as rotas únicas e seus horários do dia selecionado
+          // Depois faz fallback para outro dia se a rota não rodar no dia selecionado
+          const rotasDia = new Map<string, { rotaId: string; rota: string; inicioPrevisto: string; fimPrevisto: string }>();
+          const motoristasDia = new Map<string, { motoristaId: string; motorista: string }[]>();
+
+          for (const shift of rawConsolidation.shifts) {
+            if (!shift?.drivers) continue;
+            for (const driver of shift.drivers) {
+              if (!driver?.days) continue;
+              for (const [dateKey, dayInfo] of Object.entries(driver.days)) {
+                if (dateKey !== selectedDay) continue;
+                const di = dayInfo as any;
+                if (di?.status !== 'WORKING' || !di?.routePlan) continue;
+                const rp = di.routePlan;
+                const key = rp.code;
+                if (!rotasDia.has(key)) {
+                  rotasDia.set(key, { rotaId: rp.id, rota: rp.code, inicioPrevisto: rp.expectedStart, fimPrevisto: rp.expectedEnd });
+                  motoristasDia.set(key, []);
+                }
+                motoristasDia.get(key)!.push({ motoristaId: driver.id, motorista: driver.name });
+              }
+            }
+          }
+
+          // Monta resultados apenas com as rotas do dia selecionado
+          for (const [key, rotaInfo] of rotasDia) {
+            const motoristas = motoristasDia.get(key) || [];
+            if (motoristas.length > 0) {
+              for (const m of motoristas) {
+                dayResults.push({
+                  motoristaId: m.motoristaId, motorista: m.motorista,
+                  data: selectedDay, rotaId: rotaInfo.rotaId, rota: rotaInfo.rota,
+                  inicioPrevisto: rotaInfo.inicioPrevisto, fimPrevisto: rotaInfo.fimPrevisto,
+                  operacao: plantIdStr
+                });
+              }
+            } else {
+              dayResults.push({
+                motoristaId: null, motorista: '—',
+                data: selectedDay, rotaId: rotaInfo.rotaId, rota: rotaInfo.rota,
+                inicioPrevisto: rotaInfo.inicioPrevisto, fimPrevisto: rotaInfo.fimPrevisto,
+                operacao: plantIdStr
+              });
+            }
+          }
+        } else {
+          // Fallback para resultado do backend
+          const allConsResults = consData.resultado || [];
+          dayResults = allConsResults.filter((r: any) => r.data === selectedDay);
+        }
+
+        console.log(`[SHIFT] consolidation: ${dayResults.length} resultados para data ${selectedDay}`);
         allResults.push(...dayResults);
       }
 
@@ -4180,7 +4328,7 @@ const RouteDepartureView: React.FC<{
           <button onClick={() => setIsDarkMode(!isDarkMode)} className={`p-2 rounded-lg font-bold border transition-all shadow-sm ${isDarkMode ? 'bg-slate-800 text-yellow-400 border-slate-700 hover:bg-slate-700' : 'bg-white text-slate-700 border-slate-400 hover:bg-slate-50 hover:border-slate-500'}`} title={isDarkMode ? 'Modo Claro' : 'Modo Escuro'}>
             {isDarkMode ? <Sun size={18} /> : <Moon size={18} />}
           </button>
-          {/* Botão ESCALA oculto temporariamente */}
+          {/* Botão Escala ocultado temporariamente */}
           {/* <button onClick={() => { setShiftResults([]); setShiftError(null); setShiftDate(''); setShiftFilterOperacao(''); setIsShiftModalOpen(true); }} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] tracking-wide transition-all shadow-sm ${isDarkMode ? 'bg-slate-800 text-slate-300 hover:bg-slate-700 border-slate-700' : 'bg-white text-slate-800 hover:bg-slate-50 hover:border-slate-500 border-slate-400'}`} title="Consultar Escala de Motoristas"><CalendarDays size={16} /> Escala</button> */}
           <button onClick={() => setIsSortByTimeEnabled(!isSortByTimeEnabled)} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] transition-all shadow-sm ${isSortByTimeEnabled ? 'bg-primary-600 text-white border-primary-600' : isDarkMode ? 'bg-slate-800 text-slate-300 border-slate-700' : 'bg-white text-slate-800 border-slate-400 hover:bg-slate-50 hover:border-slate-500'}`}><SortAsc size={16} /> Horário</button>
           {canEditData && (
@@ -7204,7 +7352,7 @@ const RouteDepartureView: React.FC<{
                 return (
                   <div className="space-y-6">
                     <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                      {enrichedResults.length} motorista(s) escalado(s) para {shiftDate.split('-').reverse().join('/')}
+                      {enrichedResults.length} rotas encontradas para {shiftDate.split('-').reverse().join('/')}
                     </p>
                     {operacoesOrdenadas.map(opNome => {
                       const items = grouped.get(opNome) || [];
@@ -7212,7 +7360,7 @@ const RouteDepartureView: React.FC<{
                         <div key={opNome} className="space-y-1">
                           <div className={`px-4 py-2 rounded-xl ${isDarkMode ? 'bg-slate-800 text-slate-300 border border-slate-700' : 'bg-slate-100 text-slate-700 border border-slate-300'}`}>
                             <span className="text-[11px] font-black uppercase tracking-widest">{opNome}</span>
-                            <span className={`ml-3 text-[10px] font-bold ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>{items.length} motorista(s)</span>
+                            <span className={`ml-3 text-[10px] font-bold ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>{items.length} rota(s)</span>
                           </div>
                           <table className="w-full text-sm">
                             <thead>
@@ -7221,6 +7369,7 @@ const RouteDepartureView: React.FC<{
                                 <th className="text-left py-2 px-3">Motorista</th>
                                 <th className="text-left py-2 px-3">Início Previsto</th>
                                 <th className="text-left py-2 px-3">Término Previsto</th>
+                                <th className="text-center py-2 px-3">Ação</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -7230,6 +7379,15 @@ const RouteDepartureView: React.FC<{
                                   <td className="py-2.5 px-3 font-bold text-slate-800 dark:text-white">{item.motorista}</td>
                                   <td className="py-2.5 px-3 font-mono text-slate-600 dark:text-slate-300">{formatDateTime(item.inicioPrevisto)}</td>
                                   <td className="py-2.5 px-3 font-mono text-slate-600 dark:text-slate-300">{formatDateTime(item.fimPrevisto)}</td>
+                                  <td className="py-2.5 px-3 text-center">
+                                    <button
+                                      onClick={() => handleAddRouteFromShift(item)}
+                                      disabled={isAddingRoute}
+                                      className="inline-flex items-center gap-1 px-3 py-1.5 bg-emerald-600 text-white text-[10px] font-black uppercase rounded-lg hover:bg-emerald-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                      <Plus size={12} /> Adicionar
+                                    </button>
+                                  </td>
                                 </tr>
                               ))}
                             </tbody>

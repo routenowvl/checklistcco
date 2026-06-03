@@ -139,6 +139,14 @@ const getCurrentDayDate = () => {
   return `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
 };
 
+const getPreviousDayDate = () => {
+  const now = new Date();
+  const yesterday = new Date(now.toLocaleDateString('en-US', { timeZone: 'America/Sao_Paulo' }));
+  yesterday.setDate(yesterday.getDate() - 1);
+  const parts = yesterday.toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' }).split('-');
+  return `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
+};
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const normalizeString = (str) =>
@@ -457,26 +465,8 @@ const toNumericOrNull = (value) => {
 // Main sync
 // ---------------------------------------------------------------------------
 
-const syncAll = async () => {
-  const startedAt = Date.now();
-  const dateRef = getCurrentDayDate();
-  console.log(`[SYNC] Iniciando sincronização para ${dateRef}`);
-
-  // 1. Token
-  console.log('[SYNC] Obtendo token Route Web...');
-  const bearerToken = await requestRouteWebToken();
-  console.log('[SYNC] Token obtido');
-
-  // 2. SharePoint configs
-  console.log('[SYNC] Lendo configs do SharePoint...');
-  const plantConfigs = await getPlantConfigsFromSharePoint();
-  if (plantConfigs.length === 0) {
-    console.error('[SYNC] Nenhuma plant config encontrada');
-    return;
-  }
-
-  // 3. Routes URL
-  const routesUrlBase = readRequiredEnv('ROUTE_WEB_ROUTES_URL').replace(/\/+$/, '');
+const syncForDate = async (dateRef, bearerToken, plantConfigs, routesUrlBase) => {
+  console.log(`[SYNC] Sincronizando data: ${dateRef}`);
 
   const allRows = [];
   const allRouteRows = [];
@@ -484,7 +474,7 @@ const syncAll = async () => {
   let totalEvents = 0;
   const errors = [];
 
-  // 4. Fetch routes per plant
+  // Fetch routes per plant
   for (const config of plantConfigs) {
     try {
       const query = new URLSearchParams({
@@ -518,7 +508,7 @@ const syncAll = async () => {
       totalRoutes += routes.length;
       console.log(`[SYNC] Plant ${config.plantId} (${config.filial}): ${routes.length} rotas`);
 
-      // 4a. Extrair dados das rotas para a tabela route_web_routes
+      // Extrair dados das rotas para a tabela route_web_routes
       for (const route of routes) {
         const routeId = toOptionalInt(route?.id);
         if (routeId == null) continue;
@@ -563,7 +553,7 @@ const syncAll = async () => {
         });
       }
 
-      // 5. Fetch events per route (batch of 4)
+      // Fetch events per route (batch of 4)
       const batchSize = 4;
       for (let i = 0; i < routes.length; i += batchSize) {
         const batch = routes.slice(i, i + batchSize);
@@ -689,38 +679,76 @@ const syncAll = async () => {
     }
   }
 
-  // 6. Persist events
-  let totalUpserted = 0;
-  if (allRows.length > 0) {
-    console.log(`[SYNC] Persistindo ${allRows.length} eventos no banco...`);
-    try {
-      totalUpserted = await upsertRouteWebEvents(allRows);
-    } catch (err) {
-      errors.push(`DB events: ${err?.message || 'erro ao persistir'}`);
-    }
+  return { allRows, allRouteRows, totalRoutes, totalEvents, errors };
+};
+
+const syncAll = async () => {
+  const startedAt = Date.now();
+
+  // Sincroniza sempre 2 dias: dia anterior e dia atual
+  const dates = [getPreviousDayDate(), getCurrentDayDate()];
+  console.log(`[SYNC] Iniciando sincronização para ${dates.join(' e ')}`);
+
+  // 1. Token
+  console.log('[SYNC] Obtendo token Route Web...');
+  const bearerToken = await requestRouteWebToken();
+  console.log('[SYNC] Token obtido');
+
+  // 2. SharePoint configs
+  console.log('[SYNC] Lendo configs do SharePoint...');
+  const plantConfigs = await getPlantConfigsFromSharePoint();
+  if (plantConfigs.length === 0) {
+    console.error('[SYNC] Nenhuma plant config encontrada');
+    return;
   }
 
-  // 6b. Persist routes
-  let totalRoutesUpserted = 0;
-  if (allRouteRows.length > 0) {
-    console.log(`[SYNC] Persistindo ${allRouteRows.length} rotas no banco...`);
-    try {
-      totalRoutesUpserted = await upsertRouteWebRoutes(allRouteRows);
-    } catch (err) {
-      errors.push(`DB routes: ${err?.message || 'erro ao persistir rotas'}`);
+  // 3. Routes URL
+  const routesUrlBase = readRequiredEnv('ROUTE_WEB_ROUTES_URL').replace(/\/+$/, '');
+
+  let grandTotalRoutes = 0;
+  let grandTotalEvents = 0;
+  let grandTotalUpserted = 0;
+  let grandTotalRoutesUpserted = 0;
+  const allErrors = [];
+
+  for (const dateRef of dates) {
+    const result = await syncForDate(dateRef, bearerToken, plantConfigs, routesUrlBase);
+    grandTotalRoutes += result.totalRoutes;
+    grandTotalEvents += result.totalEvents;
+
+    // Persist events
+    if (result.allRows.length > 0) {
+      console.log(`[SYNC] Persistindo ${result.allRows.length} eventos (${dateRef}) no banco...`);
+      try {
+        grandTotalUpserted += await upsertRouteWebEvents(result.allRows);
+      } catch (err) {
+        allErrors.push(`DB events ${dateRef}: ${err?.message || 'erro ao persistir'}`);
+      }
     }
+
+    // Persist routes
+    if (result.allRouteRows.length > 0) {
+      console.log(`[SYNC] Persistindo ${result.allRouteRows.length} rotas (${dateRef}) no banco...`);
+      try {
+        grandTotalRoutesUpserted += await upsertRouteWebRoutes(result.allRouteRows);
+      } catch (err) {
+        allErrors.push(`DB routes ${dateRef}: ${err?.message || 'erro ao persistir rotas'}`);
+      }
+    }
+
+    allErrors.push(...result.errors);
   }
 
-  // 7. Close pool
+  // Close pool
   if (pool) {
     await pool.end().catch(() => {});
     pool = null;
   }
 
   const durationMs = Date.now() - startedAt;
-  console.log(`[SYNC] Concluído em ${(durationMs / 1000).toFixed(1)}s: ${totalRoutes} rotas, ${totalEvents} eventos, ${totalUpserted} events upserted, ${totalRoutesUpserted} routes upserted, ${errors.length} erros`);
-  if (errors.length > 0) {
-    console.error('[SYNC] Erros:', errors);
+  console.log(`[SYNC] Concluído em ${(durationMs / 1000).toFixed(1)}s: ${grandTotalRoutes} rotas, ${grandTotalEvents} eventos, ${grandTotalUpserted} events upserted, ${grandTotalRoutesUpserted} routes upserted, ${allErrors.length} erros`);
+  if (allErrors.length > 0) {
+    console.error('[SYNC] Erros:', allErrors);
   }
 };
 

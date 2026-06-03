@@ -121,18 +121,17 @@ const handleConsolidation = async (body: any, res: VercelResponse) => {
         if (!driver?.days) continue;
         for (const [data, infoDia] of Object.entries(driver.days)) {
           const dayInfo = infoDia as any;
-          if (dayInfo?.status === 'WORKING' && dayInfo?.routePlan) {
-            resultado.push({
-              motoristaId: driver.id,
-              motorista: driver.name,
-              data,
-              rotaId: dayInfo.routePlan.id,
-              rota: dayInfo.routePlan.code,
-              inicioPrevisto: dayInfo.routePlan.expectedStart,
-              fimPrevisto: dayInfo.routePlan.expectedEnd,
-              operacao: consolidation.data.plantId
-            });
-          }
+          resultado.push({
+            motoristaId: driver.id,
+            motorista: driver.name,
+            data,
+            status: dayInfo?.status || 'UNKNOWN',
+            rotaId: dayInfo?.routePlan?.id || null,
+            rota: dayInfo?.routePlan?.code || null,
+            inicioPrevisto: dayInfo?.routePlan?.expectedStart || null,
+            fimPrevisto: dayInfo?.routePlan?.expectedEnd || null,
+            operacao: consolidation.data.plantId
+          });
         }
       }
     }
