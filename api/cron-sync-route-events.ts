@@ -6,7 +6,7 @@ import {
   requestRouteWebToken
 } from '../utils/routeWebServer.js';
 import { getPlantConfigsFromSharePoint, type PlantConfig } from '../utils/graphAppAuth.js';
-import { upsertRouteWebEvents, closeRwePool, type RouteWebEventRow } from '../utils/rweDb.js';
+import { upsertRouteWebEvents, closeRwePool, deleteDoneEvents, type RouteWebEventRow } from '../utils/rweDb.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -216,6 +216,7 @@ const syncAll = async (): Promise<{
   console.log(`[CRON_SYNC] ${plantConfigs.length} plants obtidas do SharePoint`);
 
   const allRows: RouteWebEventRow[] = [];
+  const doneKeys: { route_id: number; event_id: number }[] = [];
   let totalRoutes = 0;
   let totalEvents = 0;
 
@@ -379,6 +380,11 @@ const syncAll = async (): Promise<{
                     data_referencia: dateRef
                   });
                 }
+
+                // Eventos DONE/executed sem ocorrências de não-coleta: remover do banco
+                if (event?.executed && normalizeText(event?.status) === 'done' && nonCollectionOccs.length === 0) {
+                  doneKeys.push({ route_id: routeId, event_id: eventId });
+                }
               }
             } catch (error: any) {
               errors.push(`Route ${routeId}: ${error?.message || 'erro'}`);
@@ -402,6 +408,15 @@ const syncAll = async (): Promise<{
       totalUpserted = await upsertRouteWebEvents(allRows);
     } catch (error: any) {
       errors.push(`DB: ${error?.message || 'erro ao persistir'}`);
+    }
+  }
+
+  // 5. Remover eventos DONE do banco
+  if (doneKeys.length > 0) {
+    try {
+      await deleteDoneEvents(doneKeys);
+    } catch (error: any) {
+      errors.push(`DB delete done: ${error?.message || 'erro ao deletar'}`);
     }
   }
 

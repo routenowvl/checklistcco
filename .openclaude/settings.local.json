@@ -51,7 +51,9 @@
       "Bash(find . -name *.tsx -type f)",
       "Bash(find /c/Projetos/checklistcco -maxdepth 4 -name *cron* -o -name *sync* -o -name *schedule*)",
       "Bash(find /c/Projetos/checklistcco/utils -name rweDb* -o -name *db* -not -path */node_modules/*)",
-      "Bash(find /c/Projetos/checklistcco -type f \\\\\\(-name *.html -o -name *.css -o -name *.js -o -name *.ts -o -name *.vue -o -name *.jsx -o -name *.tsx -o -name *.svelte \\\\\\))"
+      "Bash(find /c/Projetos/checklistcco -type f \\\\\\(-name *.html -o -name *.css -o -name *.js -o -name *.ts -o -name *.vue -o -name *.jsx -o -name *.tsx -o -name *.svelte \\\\\\))",
+      "Bash(find /c/Projetos/checklistcco -type f -iname *.php)",
+      "Bash(find /c/Projetos/checklistcco -maxdepth 3 -path */utils/rweDb* -o -path */utils/routeWebServer* -o -path */utils/graphAppAuth*)"
     ]
   }
 }

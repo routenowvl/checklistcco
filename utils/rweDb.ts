@@ -171,6 +171,21 @@ export const deleteRouteWebEventsByDate = async (dataReferencia: string): Promis
   return result.rowCount ?? 0;
 };
 
+export const deleteDoneEvents = async (keys: { route_id: number; event_id: number }[]): Promise<number> => {
+  if (keys.length === 0) return 0;
+  const client = getPool();
+  let deleted = 0;
+  for (const key of keys) {
+    const result = await client.query(
+      'DELETE FROM route_web_events WHERE route_id = $1 AND event_id = $2',
+      [key.route_id, key.event_id]
+    );
+    deleted += result.rowCount ?? 0;
+  }
+  console.log(`[SYNC] ${deleted} eventos DONE removidos do banco`);
+  return deleted;
+};
+
 export type RouteWebEventDbRow = {
   id: number;
   route_id: number;

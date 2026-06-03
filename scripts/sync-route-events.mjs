@@ -374,6 +374,21 @@ const upsertRouteWebEvents = async (rows) => {
   return inserted;
 };
 
+const deleteDoneEvents = async (keys) => {
+  if (keys.length === 0) return 0;
+  const client = getPool();
+  let deleted = 0;
+  for (const key of keys) {
+    const result = await client.query(
+      'DELETE FROM route_web_events WHERE route_id = $1 AND event_id = $2',
+      [key.route_id, key.event_id]
+    );
+    deleted += result.rowCount || 0;
+  }
+  console.log(`[SYNC] ${deleted} eventos DONE removidos do banco`);
+  return deleted;
+};
+
 // ---------------------------------------------------------------------------
 // Route Web Routes DB
 // ---------------------------------------------------------------------------
@@ -470,6 +485,7 @@ const syncForDate = async (dateRef, bearerToken, plantConfigs, routesUrlBase) =>
 
   const allRows = [];
   const allRouteRows = [];
+  const doneKeys = [];
   let totalRoutes = 0;
   let totalEvents = 0;
   const errors = [];
@@ -666,6 +682,11 @@ const syncForDate = async (dateRef, bearerToken, plantConfigs, routesUrlBase) =>
                   data_referencia: dateRef
                 });
               }
+
+              // Eventos DONE/executed sem ocorrências de não-coleta: remover do banco
+              if (event?.executed && normalizeText(event?.status) === 'done' && nonCollectionOccs.length === 0) {
+                doneKeys.push({ route_id: routeId, event_id: eventId });
+              }
             }
           } catch (err) {
             errors.push(`Route ${routeId}: ${err?.message || 'erro'}`);
@@ -679,7 +700,7 @@ const syncForDate = async (dateRef, bearerToken, plantConfigs, routesUrlBase) =>
     }
   }
 
-  return { allRows, allRouteRows, totalRoutes, totalEvents, errors };
+  return { allRows, allRouteRows, doneKeys, totalRoutes, totalEvents, errors };
 };
 
 const syncAll = async () => {
@@ -723,6 +744,15 @@ const syncAll = async () => {
         grandTotalUpserted += await upsertRouteWebEvents(result.allRows);
       } catch (err) {
         allErrors.push(`DB events ${dateRef}: ${err?.message || 'erro ao persistir'}`);
+      }
+    }
+
+    // Remove eventos DONE do banco
+    if (result.doneKeys.length > 0) {
+      try {
+        await deleteDoneEvents(result.doneKeys);
+      } catch (err) {
+        allErrors.push(`DB delete done ${dateRef}: ${err?.message || 'erro ao deletar'}`);
       }
     }
 
