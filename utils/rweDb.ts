@@ -442,6 +442,15 @@ export type RouteWebRouteDbRow = {
   fetched_at: string;
 };
 
+export const deleteRouteWebRoutesByDate = async (dataReferencia: string): Promise<number> => {
+  const client = getPool();
+  const result = await client.query(
+    'DELETE FROM route_web_routes WHERE data_referencia = $1',
+    [dataReferencia]
+  );
+  return result.rowCount ?? 0;
+};
+
 export const getRouteWebRoutesByDateAndPlants = async (
   dataReferencia: string,
   plantIds: number[]

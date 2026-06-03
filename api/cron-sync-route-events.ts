@@ -6,7 +6,7 @@ import {
   requestRouteWebToken
 } from '../utils/routeWebServer.js';
 import { getPlantConfigsFromSharePoint, type PlantConfig } from '../utils/graphAppAuth.js';
-import { upsertRouteWebEvents, closeRwePool, deleteDoneEvents, type RouteWebEventRow } from '../utils/rweDb.js';
+import { upsertRouteWebEvents, closeRwePool, deleteRouteWebEventsByDate, deleteRouteWebRoutesByDate, type RouteWebEventRow } from '../utils/rweDb.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -222,13 +222,21 @@ const syncAll = async (): Promise<{
   console.log(`[CRON_SYNC] ${plantConfigs.length} plants obtidas do SharePoint`);
 
   const allRows: RouteWebEventRow[] = [];
-  const doneKeys: { route_id: number; event_id: number }[] = [];
   let totalRoutes = 0;
   let totalEvents = 0;
 
   // Sincroniza d-2, d-1 e dia atual
   for (const dateRef of dates) {
     console.log(`[CRON_SYNC] Processando data: ${dateRef}`);
+
+    // Deleta tudo da data antes de re-inserir (garante dados atualizados)
+    try {
+      const delEv = await deleteRouteWebEventsByDate(dateRef);
+      const delRt = await deleteRouteWebRoutesByDate(dateRef);
+      console.log(`[CRON_SYNC] Limpos ${delEv} eventos e ${delRt} rotas de ${dateRef}`);
+    } catch (error: any) {
+      errors.push(`DB delete ${dateRef}: ${error?.message || 'erro ao limpar'}`);
+    }
 
   // 2. Buscar rotas por plant
   for (const config of plantConfigs) {
@@ -390,13 +398,6 @@ const syncAll = async (): Promise<{
                     data_referencia: dateRef
                   });
                 }
-
-                // Eventos concluídos: DONE, ou SKIPPED com "COLETADO POR OUTRA ROTA"
-                const isDone = event?.executed && normalizeText(event?.status) === 'done' && nonCollectionOccs.length === 0;
-                const isCollectedByOtherRoute = event?.executed && occurrences.some((o) => normalizeText(getOccurrenceDescription(o)).includes('coletado por outra rota'));
-                if (isDone || isCollectedByOtherRoute) {
-                  doneKeys.push({ route_id: routeId, event_id: eventId });
-                }
               }
             } catch (error: any) {
               errors.push(`Route ${routeId}: ${error?.message || 'erro'}`);
@@ -422,15 +423,6 @@ const syncAll = async (): Promise<{
       totalUpserted = await upsertRouteWebEvents(allRows);
     } catch (error: any) {
       errors.push(`DB: ${error?.message || 'erro ao persistir'}`);
-    }
-  }
-
-  // 5. Remover eventos DONE do banco
-  if (doneKeys.length > 0) {
-    try {
-      await deleteDoneEvents(doneKeys);
-    } catch (error: any) {
-      errors.push(`DB delete done: ${error?.message || 'erro ao deletar'}`);
     }
   }
 
