@@ -382,24 +382,6 @@ const upsertRouteWebEvents = async (rows) => {
   return inserted;
 };
 
-const deleteRouteWebEventsByDate = async (dataReferencia) => {
-  const client = getPool();
-  const result = await client.query(
-    'DELETE FROM route_web_events WHERE data_referencia = $1',
-    [dataReferencia]
-  );
-  return result.rowCount || 0;
-};
-
-const deleteRouteWebRoutesByDate = async (dataReferencia) => {
-  const client = getPool();
-  const result = await client.query(
-    'DELETE FROM route_web_routes WHERE data_referencia = $1',
-    [dataReferencia]
-  );
-  return result.rowCount || 0;
-};
-
 // ---------------------------------------------------------------------------
 // Route Web Routes DB
 // ---------------------------------------------------------------------------
