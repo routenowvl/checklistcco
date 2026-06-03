@@ -381,8 +381,10 @@ const syncAll = async (): Promise<{
                   });
                 }
 
-                // Eventos DONE/executed sem ocorrências de não-coleta: remover do banco
-                if (event?.executed && normalizeText(event?.status) === 'done' && nonCollectionOccs.length === 0) {
+                // Eventos concluídos: DONE, ou SKIPPED com "COLETADO POR OUTRA ROTA"
+                const isDone = event?.executed && normalizeText(event?.status) === 'done' && nonCollectionOccs.length === 0;
+                const isCollectedByOtherRoute = event?.executed && occurrences.some((o) => normalizeText(getOccurrenceDescription(o)).includes('coletado por outra rota'));
+                if (isDone || isCollectedByOtherRoute) {
                   doneKeys.push({ route_id: routeId, event_id: eventId });
                 }
               }
