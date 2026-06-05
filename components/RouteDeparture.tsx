@@ -2994,6 +2994,13 @@ const RouteDepartureView: React.FC<{
           // Map: rotaCode → { melhor motorista + distância }
           const rotasMap = new Map<string, { motoristaId: string; motorista: string; rotaId: string | null; rota: string | null; inicioPrevisto: string | null; fimPrevisto: string | null; dist: number }>();
 
+          // Substitui a data do expectedStart/expectedEnd pelo selectedDay, mantendo o horário
+          const extractTime = (dt: string | null | undefined) => {
+            if (!dt) return null;
+            const m = dt.match(/\d{4}-\d{2}-\d{2}\s+(\d{2}:\d{2}:\d{2})/);
+            return m ? m[1] : null;
+          };
+
           for (const shift of rawConsolidation.shifts) {
             if (!shift?.drivers) continue;
             for (const driver of shift.drivers) {
@@ -3004,9 +3011,9 @@ const RouteDepartureView: React.FC<{
                 if (!rp) continue;
                 if (di?.status !== 'WORKING') continue;
 
-                // Verifica se expectedStart bate com o dia selecionado
-                const expectedDay = rp.expectedStart ? rp.expectedStart.substring(0, 10) : null;
-                if (expectedDay !== selectedDay) continue;
+                // Verifica se o dateKey (chave do objeto) bate com o dia selecionado
+                // Usa dateKey ao invés de expectedStart, pois expectedStart pode ser de outro dia
+                if (dateKey !== selectedDay) continue;
 
                 // Dedup por código de rota — uma rota por dia
                 const rotaCode = String(rp.code || '').trim().toUpperCase();
@@ -3016,12 +3023,17 @@ const RouteDepartureView: React.FC<{
                 const dateKeyTime = new Date(dateKey + 'T00:00:00').getTime();
                 const dist = Math.abs(dateKeyTime - selectedTime);
 
+                const horaInicio = extractTime(rp.expectedStart);
+                const horaFim = extractTime(rp.expectedEnd);
+                const inicioPrevisto = horaInicio ? `${selectedDay} ${horaInicio}` : rp.expectedStart;
+                const fimPrevisto = horaFim ? `${selectedDay} ${horaFim}` : rp.expectedEnd;
+
                 const existing = rotasMap.get(rotaCode);
                 if (!existing || dist < existing.dist) {
                   rotasMap.set(rotaCode, {
                     motoristaId: String(driver.id), motorista: driver.name,
                     rotaId: rp.id, rota: rp.code,
-                    inicioPrevisto: rp.expectedStart, fimPrevisto: rp.expectedEnd,
+                    inicioPrevisto, fimPrevisto,
                     dist
                   });
                 }
@@ -7393,7 +7405,7 @@ const RouteDepartureView: React.FC<{
                             <tbody>
                               {items.map((item, idx) => (
                                 <tr key={idx} className="border-t dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
-                                  <td className="py-2.5 px-3 font-mono font-bold text-indigo-600 dark:text-indigo-400">{item.rota}</td>
+                                  <td className="py-2.5 px-3 font-mono font-bold text-slate-800 dark:text-white">{item.rota}</td>
                                   <td className="py-2.5 px-3 font-bold text-slate-800 dark:text-white">{item.motorista}</td>
                                   <td className="py-2.5 px-3 font-mono text-slate-600 dark:text-slate-300">{formatDateTime(item.inicioPrevisto)}</td>
                                   <td className="py-2.5 px-3 font-mono text-slate-600 dark:text-slate-300">{formatDateTime(item.fimPrevisto)}</td>

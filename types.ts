@@ -134,6 +134,7 @@ export interface NonCollection {
   Culpabilidade: string;
   operacao: string;
   causaRaiz?: string;
+  naoColetaReal: boolean;
 }
 
 export interface ColetaPrevista {

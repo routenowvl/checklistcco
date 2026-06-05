@@ -29,6 +29,7 @@ interface NonCollection {
   Culpabilidade: string;
   operacao: string;
   causaRaiz?: string;
+  naoColetaReal: boolean;
 }
 
 type NonCollectionArchiveDivergence = {
@@ -189,7 +190,7 @@ const NonCollectionsView: React.FC<{
     data: 120,
     codigo: 90,
     produtor: 220,
-    motivo: 180,
+    motivo: 220,
     observacao: 300,
     acao: 200,
     dataAcao: 120,
@@ -245,7 +246,8 @@ const NonCollectionsView: React.FC<{
     ultimaColeta: '',
     Culpabilidade: '',
     operacao: '',
-    causaRaiz: ''
+    causaRaiz: '',
+    naoColetaReal: false
   });
 
   const [showCausaRaiz, setShowCausaRaiz] = useState(false);
@@ -411,12 +413,12 @@ const NonCollectionsView: React.FC<{
     }));
   };
 
-  const updateGhostCell = (field: keyof NonCollection, value: string) => {
+  const updateGhostCell = (field: keyof NonCollection, value: string | boolean) => {
     if (!canEditData) return;
 
     const updatedGhost = { ...ghostRow, [field]: value };
 
-    if (field === 'motivo') {
+    if (field === 'motivo' && typeof value === 'string') {
       // Preenche Culpabilidade automaticamente baseado no motivo
       const CulpabilidadeAuto = MOTIVOS_CulpabilidadeS[value];
       if (CulpabilidadeAuto) {
@@ -553,7 +555,8 @@ const NonCollectionsView: React.FC<{
         ultimaColeta: '',
         Culpabilidade: ghostRow.Culpabilidade || 'Não se aplica',
         operacao: ghostRow.operacao!,
-        causaRaiz: ghostRow.causaRaiz || ''
+        causaRaiz: ghostRow.causaRaiz || '',
+        naoColetaReal: ghostRow.naoColetaReal || false
       };
 
       // Salva no SharePoint e obtém o ID real
@@ -580,7 +583,8 @@ const NonCollectionsView: React.FC<{
         ultimaColeta: '',
         Culpabilidade: '',
         operacao: '',
-        causaRaiz: ''
+        causaRaiz: '',
+        naoColetaReal: false
       });
       setShowCausaRaiz(false);
     } catch (e: any) {
@@ -649,7 +653,8 @@ const NonCollectionsView: React.FC<{
           ultimaColeta: '',
           Culpabilidade: 'Não se aplica',
           operacao: operacaoSelecionada,
-          causaRaiz: ''
+          causaRaiz: '',
+          naoColetaReal: false
         });
 
         // 1) Primeiro preenche linhas já existentes com rota vazia (da mesma operação)
@@ -857,7 +862,8 @@ const NonCollectionsView: React.FC<{
             ultimaColeta: field === 'ultimaColeta' ? finalValue : '',
             Culpabilidade: field === 'Culpabilidade' ? finalValue : 'Não se aplica',
             operacao: operacaoSelecionada,
-            causaRaiz: ''
+            causaRaiz: '',
+            naoColetaReal: false
           };
 
           updatedRecords.push(newRecord);
@@ -1336,7 +1342,8 @@ const NonCollectionsView: React.FC<{
         ultimaColeta: '',
         Culpabilidade: 'Não se aplica',
         operacao: newNonCollectionData.operacao,
-        causaRaiz: ''
+        causaRaiz: '',
+        naoColetaReal: false
       };
 
       // Salva no SharePoint e obtém o ID real
@@ -1863,6 +1870,7 @@ const NonCollectionsView: React.FC<{
       'Data Ação': formatDisplayDate(item.dataAcao),
       'Última Coleta': formatDisplayDate(item.ultimaColeta),
       Culpabilidade: item.Culpabilidade || '',
+      'Não Coleta Real': item.naoColetaReal ? 'Sim' : 'Não',
       'Operação': item.operacao || ''
     }));
 
@@ -1881,6 +1889,7 @@ const NonCollectionsView: React.FC<{
       { wch: 12 }, // Data Ação
       { wch: 14 }, // Última Coleta
       { wch: 16 }, // Culpabilidade
+      { wch: 16 }, // Não Coleta Real
       { wch: 20 }  // Operação
     ];
 
@@ -1977,7 +1986,7 @@ const NonCollectionsView: React.FC<{
             }`}>
               <div className="text-center flex-1">
                 <p className={`text-[9px] font-black uppercase tracking-wider mb-1 ${isDarkMode ? 'text-blue-400' : 'text-blue-700'}`}>Total</p>
-                <p className={`text-2xl font-black leading-none ${isDarkMode ? 'text-blue-400' : 'text-blue-700'}`}>{nonCollections.length}</p>
+                <p className={`text-2xl font-black leading-none ${isDarkMode ? 'text-blue-400' : 'text-blue-700'}`}>{nonCollections.filter(nc => nc.naoColetaReal).length}</p>
               </div>
               <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse shrink-0"></div>
             </div>
@@ -1998,7 +2007,7 @@ const NonCollectionsView: React.FC<{
             {/* Card Atendimento Interno */}
             {(() => {
               const totalPrevistas = coletasPrevistas.reduce((sum, c) => sum + c.QntColeta, 0);
-              const ncVia = nonCollections.filter(nc => nc.Culpabilidade === 'VIA').length;
+              const ncVia = nonCollections.filter(nc => nc.naoColetaReal && nc.Culpabilidade === 'VIA').length;
               const pct = totalPrevistas > 0 ? ((totalPrevistas - ncVia) / totalPrevistas * 100) : 0;
               const cor = pct >= 90 ? 'text-amber-400' : pct >= 70 ? 'text-orange-400' : 'text-red-400';
               const corBorder = pct >= 90 ? 'border-amber-700/50' : pct >= 70 ? 'border-orange-700/50' : 'border-red-700/50';
@@ -2027,7 +2036,7 @@ const NonCollectionsView: React.FC<{
             {/* Card Atendimento Geral */}
             {(() => {
               const totalPrevistas = coletasPrevistas.reduce((sum, c) => sum + c.QntColeta, 0);
-              const todasNc = nonCollections.length;
+              const todasNc = nonCollections.filter(nc => nc.naoColetaReal).length;
               const pct = totalPrevistas > 0 ? ((totalPrevistas - todasNc) / totalPrevistas * 100) : 0;
               const cor = pct >= 90 ? 'text-amber-400' : pct >= 70 ? 'text-orange-400' : 'text-red-400';
               const corBorder = pct >= 90 ? 'border-amber-700/50' : pct >= 70 ? 'border-orange-700/50' : 'border-red-700/50';
@@ -2399,7 +2408,7 @@ const NonCollectionsView: React.FC<{
                       );
                     }
 
-                    // MOTIVO - Select editável
+                    // MOTIVO - Select editável + pill switch "Não Coleta Real"
                     if (key === 'motivo') {
                       return (
                         <td
@@ -2409,40 +2418,66 @@ const NonCollectionsView: React.FC<{
                           }`}
                           style={{ minWidth: colWidths[key] }}
                         >
-                          <select
-                            value={row.motivo}
-                            onChange={(e) => {
-                              const selectedMotivo = e.target.value;
-                              const CulpabilidadeAuto = MOTIVOS_CulpabilidadeS[selectedMotivo];
+                          <div className="flex items-center w-full h-full">
+                            <select
+                              value={row.motivo}
+                              onChange={(e) => {
+                                const selectedMotivo = e.target.value;
+                                const CulpabilidadeAuto = MOTIVOS_CulpabilidadeS[selectedMotivo];
 
-                              const updated = {
-                                ...row,
-                                motivo: selectedMotivo,
-                                Culpabilidade: CulpabilidadeAuto || row.Culpabilidade || '',
-                                causaRaiz: isMotivoComCausaRaizObrigatoria(selectedMotivo) ? (row.causaRaiz || '') : ''
-                              };
-                              setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
-                            }}
-                            onBlur={() => {
-                              if (row.id !== 'ghost' && !row.id.startsWith('temp')) {
-                                void persistNonCollectionRow(row.id, 'Motivo');
-                              }
-                            }}
-                            className={`w-full px-3 py-2 text-[11px] text-left truncate transition-all cursor-pointer outline-none border-none bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700 focus:ring-2 focus:ring-blue-500 rounded ${
-                              isDarkMode ? 'dark-mode-select' : ''
-                            }`}
-                          >
-                            <option value="" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white">Selecione...</option>
-                            {Object.keys(MOTIVOS_CulpabilidadeS).map(label => (
-                              <option
-                                key={label}
-                                value={label}
-                                className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
-                              >
-                                {label}
-                              </option>
-                            ))}
-                          </select>
+                                const updated = {
+                                  ...row,
+                                  motivo: selectedMotivo,
+                                  Culpabilidade: CulpabilidadeAuto || row.Culpabilidade || '',
+                                  causaRaiz: isMotivoComCausaRaizObrigatoria(selectedMotivo) ? (row.causaRaiz || '') : ''
+                                };
+                                setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
+                              }}
+                              onBlur={() => {
+                                if (row.id !== 'ghost' && !row.id.startsWith('temp')) {
+                                  void persistNonCollectionRow(row.id, 'Motivo');
+                                }
+                              }}
+                              className={`flex-1 min-w-0 px-2 py-2 text-[11px] text-left truncate transition-all cursor-pointer outline-none border-none bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700 focus:ring-2 focus:ring-blue-500 rounded-l ${
+                                isDarkMode ? 'dark-mode-select' : ''
+                              }`}
+                            >
+                              <option value="" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white">Selecione...</option>
+                              {Object.keys(MOTIVOS_CulpabilidadeS).map(label => (
+                                <option
+                                  key={label}
+                                  value={label}
+                                  className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white"
+                                >
+                                  {label}
+                                </option>
+                              ))}
+                            </select>
+                            <button
+                              type="button"
+                              title={row.naoColetaReal ? 'Não Coleta Real (ON)' : 'Não Coleta Real (OFF)'}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const updated = { ...row, naoColetaReal: !row.naoColetaReal };
+                                setNonCollections(prev => prev.map(r => r.id === row.id ? updated : r));
+                                if (row.id !== 'ghost' && !row.id.startsWith('temp')) {
+                                  void persistNonCollectionRow(row.id, 'Não Coleta Real', updated);
+                                }
+                              }}
+                              className={`shrink-0 w-[28px] h-[28px] flex items-center justify-center rounded-r transition-colors duration-200 cursor-pointer ${
+                                row.naoColetaReal
+                                  ? 'bg-green-500 text-white'
+                                  : 'bg-slate-300 dark:bg-slate-600 text-slate-500 dark:text-slate-400'
+                              }`}
+                            >
+                              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                                {row.naoColetaReal
+                                  ? <><polyline points="20 6 9 17 4 12" /></>
+                                  : <><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></>
+                                }
+                              </svg>
+                            </button>
+                          </div>
                         </td>
                       );
                     }
@@ -2897,23 +2932,42 @@ const NonCollectionsView: React.FC<{
                   if (key === 'motivo') {
                     return (
                       <td key={`ghost-${key}`} className="p-0 border border-slate-200/30 dark:border-slate-800/30" style={{ verticalAlign: 'middle' }}>
-                        <select
-                          value={ghostRow.motivo || ''}
-                          onChange={(e) => {
-                            const selectedMotivo = e.target.value;
-                            const CulpabilidadeAuto = MOTIVOS_CulpabilidadeS[selectedMotivo];
+                        <div className="flex items-center w-full h-full">
+                          <select
+                            value={ghostRow.motivo || ''}
+                            onChange={(e) => {
+                              const selectedMotivo = e.target.value;
+                              const CulpabilidadeAuto = MOTIVOS_CulpabilidadeS[selectedMotivo];
 
-                            updateGhostCell('motivo', selectedMotivo);
-                            if (CulpabilidadeAuto) updateGhostCell('Culpabilidade', CulpabilidadeAuto);
-                            if (!isMotivoComCausaRaizObrigatoria(selectedMotivo)) updateGhostCell('causaRaiz', '');
-                          }}
-                          className={`${inputClass} text-left cursor-pointer`}
-                        >
-                          <option value="" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white">Selecione...</option>
-                          {Object.keys(MOTIVOS_CulpabilidadeS).map(label => (
-                            <option key={label} value={label} className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white">{label}</option>
-                          ))}
-                        </select>
+                              updateGhostCell('motivo', selectedMotivo);
+                              if (CulpabilidadeAuto) updateGhostCell('Culpabilidade', CulpabilidadeAuto);
+                              if (!isMotivoComCausaRaizObrigatoria(selectedMotivo)) updateGhostCell('causaRaiz', '');
+                            }}
+                            className={`flex-1 min-w-0 rounded-l ${inputClass} text-left cursor-pointer`}
+                          >
+                            <option value="" className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white">Selecione...</option>
+                            {Object.keys(MOTIVOS_CulpabilidadeS).map(label => (
+                              <option key={label} value={label} className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white">{label}</option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            title={ghostRow.naoColetaReal ? 'Não Coleta Real (ON)' : 'Não Coleta Real (OFF)'}
+                            onClick={(e) => { e.stopPropagation(); updateGhostCell('naoColetaReal', !ghostRow.naoColetaReal); }}
+                            className={`shrink-0 w-[28px] h-[28px] flex items-center justify-center rounded-r transition-colors duration-200 cursor-pointer ${
+                              ghostRow.naoColetaReal
+                                ? 'bg-green-500 text-white'
+                                : 'bg-slate-300 dark:bg-slate-600 text-slate-500 dark:text-slate-400'
+                            }`}
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                              {ghostRow.naoColetaReal
+                                ? <><polyline points="20 6 9 17 4 12" /></>
+                                : <><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></>
+                              }
+                            </svg>
+                          </button>
+                        </div>
                       </td>
                     );
                   }
@@ -3957,30 +4011,59 @@ const NonCollectionsView: React.FC<{
                           </td>
 
                           <td className={`px-3 py-2 max-w-[260px] ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>
-                            {editingHistoryId === nc.id && editingHistoryField === 'motivo' ? (
-                              <select
-                                value={pending.motivo ?? nc.motivo}
-                                onChange={(e) => handleUpdateHistoryCell(nc.id, 'motivo', e.target.value)}
-                                onBlur={() => { setEditingHistoryId(null); setEditingHistoryField(null); }}
-                                className="w-full bg-blue-100 dark:bg-blue-900/30 border-2 border-blue-500 px-2 py-1 rounded font-bold outline-none"
-                                autoFocus
-                              >
-                                <option value="">---</option>
-                                {Object.keys(MOTIVOS_CulpabilidadeS).map(label => (
-                                  <option key={label} value={label}>{label}</option>
-                                ))}
-                              </select>
-                            ) : (
-                              <div
-                                onClick={() => startHistoryCellEdit(nc, 'motivo')}
-                                className={`font-bold cursor-pointer hover:bg-slate-200/60 dark:hover:bg-slate-700/60 rounded px-1 truncate ${
-                                  pending.motivo ? 'bg-amber-200 dark:bg-amber-800/50' : ''
-                                }`}
-                                title={pending.motivo || nc.motivo}
-                              >
-                                {pending.motivo || nc.motivo || '---'}
+                            <div className="flex items-center gap-1">
+                              <div className="flex-1 min-w-0">
+                                {editingHistoryId === nc.id && editingHistoryField === 'motivo' ? (
+                                  <select
+                                    value={pending.motivo ?? nc.motivo}
+                                    onChange={(e) => handleUpdateHistoryCell(nc.id, 'motivo', e.target.value)}
+                                    onBlur={() => { setEditingHistoryId(null); setEditingHistoryField(null); }}
+                                    className="w-full bg-blue-100 dark:bg-blue-900/30 border-2 border-blue-500 px-2 py-1 rounded font-bold outline-none"
+                                    autoFocus
+                                  >
+                                    <option value="">---</option>
+                                    {Object.keys(MOTIVOS_CulpabilidadeS).map(label => (
+                                      <option key={label} value={label}>{label}</option>
+                                    ))}
+                                  </select>
+                                ) : (
+                                  <div
+                                    onClick={() => startHistoryCellEdit(nc, 'motivo')}
+                                    className={`font-bold cursor-pointer hover:bg-slate-200/60 dark:hover:bg-slate-700/60 rounded px-1 truncate ${
+                                      pending.motivo ? 'bg-amber-200 dark:bg-amber-800/50' : ''
+                                    }`}
+                                    title={pending.motivo || nc.motivo}
+                                  >
+                                    {pending.motivo || nc.motivo || '---'}
+                                  </div>
+                                )}
                               </div>
-                            )}
+                              <button
+                                type="button"
+                                title={nc.naoColetaReal ? 'Não Coleta Real (ON)' : 'Não Coleta Real (OFF)'}
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  const updated = { ...nc, naoColetaReal: !nc.naoColetaReal };
+                                  setArchivedResults(prev => prev.map(r => r.id === nc.id ? updated : r));
+                                  const tkn = await getValidToken() || currentUser.accessToken;
+                                  if (tkn) {
+                                    void SharePointService.updateArchivedNonCollection(tkn, updated);
+                                  }
+                                }}
+                                className={`shrink-0 w-[28px] h-[28px] flex items-center justify-center rounded transition-colors duration-200 cursor-pointer ${
+                                  nc.naoColetaReal
+                                    ? 'bg-green-500 text-white'
+                                    : 'bg-slate-300 dark:bg-slate-600 text-slate-500 dark:text-slate-400'
+                                }`}
+                              >
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                                  {nc.naoColetaReal
+                                    ? <><polyline points="20 6 9 17 4 12" /></>
+                                    : <><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></>
+                                  }
+                                </svg>
+                              </button>
+                            </div>
                           </td>
 
                           <td className={`px-3 py-2 min-w-[220px] max-w-[320px] ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>

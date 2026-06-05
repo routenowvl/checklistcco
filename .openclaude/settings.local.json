@@ -57,7 +57,8 @@
       "Bash(find . -type f -name *event*)",
       "Bash(find . -type f -name *sync*)",
       "Bash(find . -type f -name *route*)",
-      "Bash(find . -type f -name *cron*)"
+      "Bash(find . -type f -name *cron*)",
+      "Bash(find C:/Projetos/checklistcco -type f \\\\\\(-name *.ts -o -name *.tsx \\\\\\))"
     ]
   }
 }

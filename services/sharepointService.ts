@@ -1749,7 +1749,8 @@ export const SharePointService = {
         ultimaColeta: pgDateToBR(row.ultima_coleta),
         Culpabilidade: String(row.culpabilidade || ''),
         operacao: String(row.operacao || ''),
-        causaRaiz: String(row.causa_raiz || '')
+        causaRaiz: String(row.causa_raiz || ''),
+        naoColetaReal: Boolean(row.nao_coleta_real || false)
       }));
     } catch (e: any) {
       console.error('[PG_NC] Erro ao buscar non-collections:', e.message);
@@ -1842,6 +1843,7 @@ export const SharePointService = {
       if (nonCollection.Culpabilidade) payload.Culpabilidade = nonCollection.Culpabilidade;
       if (nonCollection.operacao) payload.Opera_x00e7__x00e3_o = nonCollection.operacao;
       if (nonCollection.causaRaiz) payload.CausaRaiz = nonCollection.causaRaiz;
+      if (nonCollection.naoColetaReal !== undefined) payload.NaoColetaReal = nonCollection.naoColetaReal;
 
       await graphFetch(`/sites/${siteId}/lists/${historyListId}/items/${nonCollection.id}`, token, {
         method: 'PATCH',
@@ -1950,7 +1952,8 @@ export const SharePointService = {
             ultimaColeta: ultimaColetaStr,
             Culpabilidade: f[resolveFieldName(mapping, 'Culpabilidade')] || "",
             operacao: f[colOp] || "",
-            causaRaiz: f[resolveFieldName(mapping, 'CausaRaiz')] || ""
+            causaRaiz: f[resolveFieldName(mapping, 'CausaRaiz')] || "",
+            naoColetaReal: Boolean(f[resolveFieldName(mapping, 'Não Coleta Real')] || false)
           };
         });
 
@@ -2131,7 +2134,8 @@ export const SharePointService = {
           'Código': item.codigo, Produtor: item.produtor, Motivo: item.motivo,
           'Observação': item.observacao, Observacao: item.observacao, 'Observa_x00e7__x00e3_o': item.observacao,
           Ação: item.acao, 'DataAção': safeToISO(item.dataAcao), 'ÚltimaColeta': safeToISO(item.ultimaColeta),
-          Culpabilidade: item.Culpabilidade, 'Operação': item.operacao, CausaRaiz: item.causaRaiz || ''
+          Culpabilidade: item.Culpabilidade, 'Operação': item.operacao, CausaRaiz: item.causaRaiz || '',
+          'Não Coleta Real': item.naoColetaReal || false
         };
         const readOnlyFields = new Set(['LinkTitle','LinkTitleNoMenu','ID','ContentType','Modified','Created','Author','Editor','_UIVersionString','Attachments','Edit','DocIcon','ItemChildCount','FolderChildCount','_ComplianceFlags','_ComplianceTag','_ComplianceTagWrittenTime','_ComplianceTagUserId','_IsRecord','AppAuthor','AppEditor','Title']);
         const histFields: any = { Title: item.rota };

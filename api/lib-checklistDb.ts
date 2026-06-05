@@ -374,6 +374,7 @@ export type NonCollectionRow = {
   ultima_coleta: string;
   culpabilidade: string;
   causa_raiz: string;
+  nao_coleta_real: boolean;
   criado_em: string;
   atualizado_em: string;
 };
@@ -392,8 +393,8 @@ export const insertNonCollection = async (nc: Record<string, unknown>): Promise<
   const dataOperacao = dm ? `${dm[3]}-${dm[2]}-${dm[1]}` : (dataRaw || '1970-01-01');
   const result = await client.query(
     `INSERT INTO non_collections (operacao, data_operacao, rota, observacao, semana, data, codigo,
-     produtor, motivo, acao, data_acao, ultima_coleta, culpabilidade, causa_raiz)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+     produtor, motivo, acao, data_acao, ultima_coleta, culpabilidade, causa_raiz, nao_coleta_real)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
      RETURNING id`,
     [
       String(nc.operacao || ''),
@@ -409,7 +410,8 @@ export const insertNonCollection = async (nc: Record<string, unknown>): Promise<
       String(nc.dataAcao || nc.data_acao || ''),
       String(nc.ultimaColeta || nc.ultima_coleta || ''),
       String(nc.Culpabilidade || nc.culpabilidade || ''),
-      String(nc.causaRaiz || nc.causa_raiz || '')
+      String(nc.causaRaiz || nc.causa_raiz || ''),
+      Boolean(nc.naoColetaReal || nc.nao_coleta_real || false)
     ]
   );
   return result.rows[0].id;
@@ -425,8 +427,8 @@ export const updateNonCollection = async (nc: Record<string, unknown>): Promise<
   await client.query(
     `UPDATE non_collections SET operacao=$1, data_operacao=$2, rota=$3, observacao=$4, semana=$5,
      data=$6, codigo=$7, produtor=$8, motivo=$9, acao=$10, data_acao=$11,
-     ultima_coleta=$12, culpabilidade=$13, causa_raiz=$14, atualizado_em=NOW()
-     WHERE id = $15`,
+     ultima_coleta=$12, culpabilidade=$13, causa_raiz=$14, nao_coleta_real=$15, atualizado_em=NOW()
+     WHERE id = $16`,
     [
       String(nc.operacao || ''),
       dataOperacao,
@@ -442,6 +444,7 @@ export const updateNonCollection = async (nc: Record<string, unknown>): Promise<
       String(nc.ultimaColeta || nc.ultima_coleta || ''),
       String(nc.Culpabilidade || nc.culpabilidade || ''),
       String(nc.causaRaiz || nc.causa_raiz || ''),
+      Boolean(nc.naoColetaReal || nc.nao_coleta_real || false),
       id
     ]
   );

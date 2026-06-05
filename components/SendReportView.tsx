@@ -603,7 +603,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
     // BUSCA NÃO COLETAS REAIS NO SHAREPOINT PARA ESTA OPERAÇÃO
     const spNonCollections = await SharePointService.getNonCollections(token, currentUser.email);
-    const ncFiltradas = spNonCollections.filter(nc => nc.operacao === selectedOperacaoNC);
+    const ncFiltradas = spNonCollections.filter(nc => nc.operacao === selectedOperacaoNC && nc.naoColetaReal === true);
 
     // BUSCA COLETAS PREVISTAS DA DATA DAS NÃO COLETAS PARA INCLUIR NO PAYLOAD
     // Pega a data da primeira não coleta encontrada (todas são da mesma data)
@@ -977,7 +977,7 @@ const SendReportView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
     // Filtra não coletas apenas das operações do usuário logado
     const userNCs = realNonCollections.filter(nc => {
       const pertence = !nc.operacao || myOps.has(nc.operacao);
-      return pertence;
+      return pertence && nc.naoColetaReal === true;
     });
 
     // Busca coletas previstas da DATA das não coletas (usa a data da primeira NC encontrada)
