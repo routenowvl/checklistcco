@@ -148,7 +148,15 @@ async function requestShiftOwnToken(): Promise<string> {
 export { getTokenPreview };
 
 export async function requestShiftToken(): Promise<string> {
-  if (hasShiftOwnCredentials()) {
+  const hasShift = hasShiftOwnCredentials();
+  const shiftUrl = readOptionalEnv('SHIFT_URL');
+  const shiftClientId = readOptionalEnv('SHIFT_CLIENT_ID');
+  const shiftClientSecret = readOptionalEnv('SHIFT_CLIENT_SECRET');
+  const shiftUsername = readOptionalEnv('SHIFT_USERNAME');
+  const shiftPassword = readOptionalEnv('SHIFT_PASSWORD');
+  console.log(`[SHIFT_TOKEN] hasShiftOwnCredentials=${hasShift}, SHIFT_URL=${shiftUrl ? 'SET' : 'EMPTY'}, SHIFT_CLIENT_ID=${shiftClientId ? 'SET' : 'EMPTY'}, SHIFT_CLIENT_SECRET=${shiftClientSecret ? 'SET' : 'EMPTY'}, SHIFT_USERNAME=${shiftUsername ? 'SET' : 'EMPTY'}, SHIFT_PASSWORD=${shiftPassword ? 'SET' : 'EMPTY'}`);
+
+  if (hasShift) {
     return requestShiftOwnToken();
   }
   console.log('[SHIFT_TOKEN] Sem credenciais próprias, usando token Route Web');
