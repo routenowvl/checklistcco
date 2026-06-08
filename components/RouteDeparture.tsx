@@ -2932,7 +2932,9 @@ const RouteDepartureView: React.FC<{
             error: schedData.error,
             upstreamStatus: schedData.upstreamStatus,
             url: schedData.upstreamUrl,
-            raw: String(schedData.raw || '').slice(0, 300)
+            raw: String(schedData.raw || '').slice(0, 300),
+            _envDebug: schedData._envDebug,
+            tokenPreview: schedData.tokenPreview,
           });
           // Mostra o primeiro erro no modal para ajudar no debug
           if (!shiftError && schedData.upstreamStatus) {
