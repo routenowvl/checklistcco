@@ -83,7 +83,15 @@ const handleSchedules = async (body: any, res: VercelResponse) => {
     plantId,
     code,
     data: parsed.data,
-    raw: parsed.raw
+    raw: parsed.raw,
+    _envDebug: {
+      SHIFT_URL: process.env.SHIFT_URL ? 'SET' : 'EMPTY',
+      SHIFT_CLIENT_ID: process.env.SHIFT_CLIENT_ID ? 'SET' : 'EMPTY',
+      SHIFT_CLIENT_SECRET: process.env.SHIFT_CLIENT_SECRET ? 'SET' : 'EMPTY',
+      SHIFT_USERNAME: process.env.SHIFT_USERNAME ? 'SET' : 'EMPTY',
+      SHIFT_PASSWORD: process.env.SHIFT_PASSWORD ? 'SET' : 'EMPTY',
+      SHIFT_API_URL: process.env.SHIFT_API_URL ? 'SET' : 'EMPTY',
+    }
   });
 };
 
@@ -168,6 +176,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const { action } = req.body || {};
     if (!action) return res.status(400).json({ success: false, error: 'action é obrigatório (schedules, consolidation)' });
+
+    // Debug: expor estado das env vars para diagnosticar token 401
+    const envDebug = {
+      SHIFT_URL: process.env.SHIFT_URL ? 'SET' : 'EMPTY',
+      SHIFT_CLIENT_ID: process.env.SHIFT_CLIENT_ID ? 'SET' : 'EMPTY',
+      SHIFT_CLIENT_SECRET: process.env.SHIFT_CLIENT_SECRET ? 'SET' : 'EMPTY',
+      SHIFT_USERNAME: process.env.SHIFT_USERNAME ? 'SET' : 'EMPTY',
+      SHIFT_PASSWORD: process.env.SHIFT_PASSWORD ? 'SET' : 'EMPTY',
+      SHIFT_API_URL: process.env.SHIFT_API_URL ? 'SET' : 'EMPTY',
+      ROUTE_WEB_URL: process.env.ROUTE_WEB_URL ? 'SET' : 'EMPTY',
+      cwd: process.cwd(),
+    };
+    console.log('[SHIFT][DEBUG] Env vars:', JSON.stringify(envDebug));
 
     switch (action) {
       case 'schedules': return await handleSchedules(req.body, res);
