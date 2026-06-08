@@ -2981,10 +2981,30 @@ const RouteDepartureView: React.FC<{
           continue;
         }
 
+        // Debug: log da estrutura real da resposta
+        console.log(`[SHIFT] consolidation estrutura:`, {
+          hasDataDataShifts: !!(consData.data?.data?.shifts),
+          hasDataShifts: !!(consData.data?.shifts),
+          hasResultado: !!(consData.resultado?.length),
+          dataKeys: consData.data ? Object.keys(consData.data) : null,
+          dataDataKeys: consData.data?.data ? Object.keys(consData.data.data) : null,
+        });
+
         // Extrai direto dos dados brutos da API (resposta completa da consolidação)
         let dayResults: any[] = [];
+        // Tenta múltiplos níveis de aninhamento possíveis na resposta
+        let rawConsolidation: any = null;
         if (consData.data?.data?.shifts) {
-          const rawConsolidation = consData.data.data;
+          rawConsolidation = consData.data.data;
+        } else if (consData.data?.shifts) {
+          rawConsolidation = consData.data;
+        } else if (consData.resultado && consData.resultado.length > 0) {
+          // Fallback para resultado do backend
+          const allConsResults = consData.resultado;
+          dayResults = allConsResults.filter((r: any) => r.data === selectedDay);
+        }
+
+        if (rawConsolidation) {
           const plantIdStr = String(rawConsolidation.plantId || plantId);
 
           // Coleta todas as combinações motorista+rota com expectedStart = selectedDay,
@@ -3050,10 +3070,6 @@ const RouteDepartureView: React.FC<{
               operacao: plantIdStr
             });
           }
-        } else {
-          // Fallback para resultado do backend
-          const allConsResults = consData.resultado || [];
-          dayResults = allConsResults.filter((r: any) => r.data === selectedDay);
         }
 
         console.log(`[SHIFT] consolidation: ${dayResults.length} resultados para data ${selectedDay}`);

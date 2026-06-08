@@ -114,8 +114,18 @@ const handleConsolidation = async (body: any, res: VercelResponse) => {
   const resultado: any[] = [];
   const consolidation = parsed.data;
 
+  // Tenta múltiplos níveis de aninhamento possíveis na resposta da API
+  let shiftsContainer: any = null;
   if (consolidation?.data?.shifts) {
-    for (const shift of consolidation.data.shifts) {
+    shiftsContainer = consolidation.data;
+  } else if (consolidation?.shifts) {
+    shiftsContainer = consolidation;
+  } else if (consolidation?.data?.data?.shifts) {
+    shiftsContainer = consolidation.data.data;
+  }
+
+  if (shiftsContainer) {
+    for (const shift of shiftsContainer.shifts) {
       if (!shift?.drivers) continue;
       for (const driver of shift.drivers) {
         if (!driver?.days) continue;
@@ -130,7 +140,7 @@ const handleConsolidation = async (body: any, res: VercelResponse) => {
             rota: dayInfo?.routePlan?.code || null,
             inicioPrevisto: dayInfo?.routePlan?.expectedStart || null,
             fimPrevisto: dayInfo?.routePlan?.expectedEnd || null,
-            operacao: consolidation.data.plantId
+            operacao: shiftsContainer.plantId || consolidation?.data?.plantId || null
           });
         }
       }

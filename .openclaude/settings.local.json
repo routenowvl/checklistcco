@@ -58,7 +58,8 @@
       "Bash(find . -type f -name *sync*)",
       "Bash(find . -type f -name *route*)",
       "Bash(find . -type f -name *cron*)",
-      "Bash(find C:/Projetos/checklistcco -type f \\\\\\(-name *.ts -o -name *.tsx \\\\\\))"
+      "Bash(find C:/Projetos/checklistcco -type f \\\\\\(-name *.ts -o -name *.tsx \\\\\\))",
+      "Bash(find . -type f \\\\\\(-name *.ts -o -name *.tsx -o -name *.js -o -name *.jsx -o -name *.vue -o -name *.php -o -name *.json -o -name *.css -o -name *.scss -o -name *.html \\\\\\) ! -path */node_modules/* ! -path */.git/* ! -path */vendor/* ! -path */dist/* ! -path */build/*)"
     ]
   }
 }
