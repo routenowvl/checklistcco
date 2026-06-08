@@ -59,7 +59,10 @@
       "Bash(find . -type f -name *route*)",
       "Bash(find . -type f -name *cron*)",
       "Bash(find C:/Projetos/checklistcco -type f \\\\\\(-name *.ts -o -name *.tsx \\\\\\))",
-      "Bash(find . -type f \\\\\\(-name *.ts -o -name *.tsx -o -name *.js -o -name *.jsx -o -name *.vue -o -name *.php -o -name *.json -o -name *.css -o -name *.scss -o -name *.html \\\\\\) ! -path */node_modules/* ! -path */.git/* ! -path */vendor/* ! -path */dist/* ! -path */build/*)"
+      "Bash(find . -type f \\\\\\(-name *.ts -o -name *.tsx -o -name *.js -o -name *.jsx -o -name *.vue -o -name *.php -o -name *.json -o -name *.css -o -name *.scss -o -name *.html \\\\\\) ! -path */node_modules/* ! -path */.git/* ! -path */vendor/* ! -path */dist/* ! -path */build/*)",
+      "Bash(find /c/Projetos/checklistcco -type f -name *coleta* -o -name *collection*)",
+      "Bash(find /c/Projetos/checklistcco/src -type f \\\\\\(-name *.tsx -o -name *.ts -o -name *.jsx -o -name *.js \\\\\\))",
+      "Bash(find /c/Projetos/checklistcco -path /c/Projetos/checklistcco/node_modules -prune -o -type f \\\\\\(-name *.tsx -o -name *.ts -o -name *.jsx -o -name *.js \\\\\\) -print)"
     ]
   }
 }

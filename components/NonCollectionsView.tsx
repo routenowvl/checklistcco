@@ -66,6 +66,7 @@ const MOTIVOS_CulpabilidadeS: Record<string, string> = {
   'Resfriador Vazio': 'Outros',
   'Volume Insuficiente Para Medida': 'Outros',
   'Coletado Por Outra Transportadora': 'VIA',
+  'Coletado Por Outra Rota': 'VIA',
   'Descumprimento de roteirização': 'VIA',
   'A rota Não foi realizada': 'Outros',
   'Falta De Acesso': 'Outros',
