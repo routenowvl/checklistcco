@@ -645,6 +645,9 @@ const syncForDate = async (dateRef, bearerToken, plantConfigs, routesUrlBase) =>
               const typeNameNormalized = normalizeText(event?.type_name);
               if (typeNameNormalized !== 'coleta') continue;
 
+              // Eventos DONE/executed não interessam - serão removidos pelo cleanup
+              if (event?.executed || normalizeText(event?.status) === 'done') continue;
+
               const eventId = toOptionalInt(event?.id);
               const occurrences = Array.isArray(event?.occurrences) ? event.occurrences : [];
               const nonCollectionOccs = occurrences.filter(isNonCollectionOccurrence);
