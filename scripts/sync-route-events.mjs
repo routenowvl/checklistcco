@@ -78,7 +78,8 @@ const NON_COLLECTION_TECHNICAL_OCCURRENCE_IDS = new Set([2]);
 const NON_COLLECTION_EXCLUDED_REASON_PATTERNS = [
   'troca de caminhao', 'troca de caminhão', 'evento extra', 'evento_extra',
   'tanque comunitario', 'tanque_comunitario', 'alteracao de horario',
-  'troca de reboque', 'falta de sinal do rastreador'
+  'troca de reboque', 'falta de sinal do rastreador',
+  'executado em outro ponto'
 ];
 
 const isTechnicalOccurrence = (occ) => {
@@ -644,9 +645,6 @@ const syncForDate = async (dateRef, bearerToken, plantConfigs, routesUrlBase) =>
             for (const event of events) {
               const typeNameNormalized = normalizeText(event?.type_name);
               if (typeNameNormalized !== 'coleta') continue;
-
-              // Eventos DONE/executed não interessam - serão removidos pelo cleanup
-              if (event?.executed || normalizeText(event?.status) === 'done') continue;
 
               const eventId = toOptionalInt(event?.id);
               const occurrences = Array.isArray(event?.occurrences) ? event.occurrences : [];
