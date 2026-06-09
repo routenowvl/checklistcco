@@ -504,8 +504,8 @@ const deleteStaleEvents = async (dateRef, syncedKeys, syncedPlantIds) => {
     console.log(`  ... e mais ${toDelete.length - 20} eventos`);
   }
 
-  const idsToDelete = toDelete.map((r) => r.id);
-  const idPlaceholders = idsToDelete.map((_, i) => `$${i + 2}`).join(',');
+  const idsToDelete = toDelete.map((r) => Number(r.id));
+  const idPlaceholders = idsToDelete.map((_, i) => `$${i + 2}::bigint`).join(',');
   const result = await client.query(
     `DELETE FROM route_web_events WHERE id = ANY(ARRAY[${idPlaceholders}]) AND data_referencia = $1`,
     [dateRef, ...idsToDelete]
