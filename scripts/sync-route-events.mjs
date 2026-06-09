@@ -646,10 +646,6 @@ const syncForDate = async (dateRef, bearerToken, plantConfigs, routesUrlBase) =>
               if (typeNameNormalized !== 'coleta') continue;
 
               const eventId = toOptionalInt(event?.id);
-              if (routeId != null && eventId != null) {
-                syncedKeys.add(`${routeId}:${eventId}`);
-              }
-
               const occurrences = Array.isArray(event?.occurrences) ? event.occurrences : [];
               const nonCollectionOccs = occurrences.filter(isNonCollectionOccurrence);
               const placa = getPlate(event, route);
@@ -657,6 +653,9 @@ const syncForDate = async (dateRef, bearerToken, plantConfigs, routesUrlBase) =>
 
               // Não coletas (ocorrências)
               if (nonCollectionOccs.length > 0) {
+                if (routeId != null && eventId != null) {
+                  syncedKeys.add(`${routeId}:${eventId}`);
+                }
                 totalEvents += 1;
                 const scraperReason = getScraperOccurrenceReason(event);
                 const fallbackReason = getOccurrenceDescription(nonCollectionOccs[0]);
@@ -697,6 +696,9 @@ const syncForDate = async (dateRef, bearerToken, plantConfigs, routesUrlBase) =>
 
               // Coletas previstas (scheduled, not executed, sem ocorrências relevantes)
               if (isScheduled) {
+                if (routeId != null && eventId != null) {
+                  syncedKeys.add(`${routeId}:${eventId}`);
+                }
                 totalEvents += 1;
                 allRows.push({
                   route_id: routeId,
