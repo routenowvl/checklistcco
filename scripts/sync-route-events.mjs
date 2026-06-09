@@ -79,7 +79,7 @@ const NON_COLLECTION_EXCLUDED_REASON_PATTERNS = [
   'troca de caminhao', 'troca de caminhão', 'evento extra', 'evento_extra',
   'tanque comunitario', 'tanque_comunitario', 'alteracao de horario',
   'troca de reboque', 'falta de sinal do rastreador',
-  'executado em outro ponto'
+  'executado - em outro ponto (positivo - km previsto'
 ];
 
 const isTechnicalOccurrence = (occ) => {
