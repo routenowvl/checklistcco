@@ -470,6 +470,52 @@ const toNumericOrNull = (value) => {
 };
 
 // ---------------------------------------------------------------------------
+// Cleanup de eventos obsoletos
+// ---------------------------------------------------------------------------
+
+const deleteStaleEvents = async (dateRef, syncedKeys, syncedPlantIds) => {
+  const client = getPool();
+  const plantIds = [...syncedPlantIds];
+  if (plantIds.length === 0) return 0;
+
+  const plantPlaceholders = plantIds.map((_, i) => `$${i + 2}::int`).join(',');
+  const { rows } = await client.query(
+    `SELECT id, route_id, event_id, status_type, operacao, reference FROM route_web_events WHERE data_referencia = $1::date AND plant_id = ANY(ARRAY[${plantPlaceholders}])`,
+    [dateRef, ...plantIds]
+  );
+
+  if (rows.length === 0) return 0;
+
+  const toDelete = [];
+  for (const row of rows) {
+    const key = `${row.route_id}:${row.event_id}`;
+    if (!syncedKeys.has(key)) {
+      toDelete.push(row);
+    }
+  }
+
+  if (toDelete.length === 0) return 0;
+
+  console.log(`[CLEANUP] ${toDelete.length} eventos obsoletos encontrados para ${dateRef}:`);
+  for (const row of toDelete.slice(0, 20)) {
+    console.log(`  - route_id=${row.route_id} event_id=${row.event_id} status_type=${row.status_type} ref=${row.reference}`);
+  }
+  if (toDelete.length > 20) {
+    console.log(`  ... e mais ${toDelete.length - 20} eventos`);
+  }
+
+  const idsToDelete = toDelete.map((r) => r.id);
+  const idPlaceholders = idsToDelete.map((_, i) => `$${i + 2}`).join(',');
+  const result = await client.query(
+    `DELETE FROM route_web_events WHERE id = ANY(ARRAY[${idPlaceholders}]) AND data_referencia = $1`,
+    [dateRef, ...idsToDelete]
+  );
+
+  console.log(`[CLEANUP] ${result.rowCount} eventos removidos do banco para ${dateRef}`);
+  return result.rowCount;
+};
+
+// ---------------------------------------------------------------------------
 // Main sync
 // ---------------------------------------------------------------------------
 
@@ -478,6 +524,8 @@ const syncForDate = async (dateRef, bearerToken, plantConfigs, routesUrlBase) =>
 
   const allRows = [];
   const allRouteRows = [];
+  const syncedKeys = new Set();
+  const syncedPlantIds = new Set();
 
   let totalRoutes = 0;
   let totalEvents = 0;
@@ -515,6 +563,7 @@ const syncForDate = async (dateRef, bearerToken, plantConfigs, routesUrlBase) =>
       const payload = await response.json().catch(() => null);
       const routes = pickRoutesArray(payload);
       totalRoutes += routes.length;
+      syncedPlantIds.add(config.plantId);
       console.log(`[SYNC] Plant ${config.plantId} (${config.filial}): ${routes.length} rotas`);
 
       // Extrair dados das rotas para a tabela route_web_routes
@@ -596,10 +645,14 @@ const syncForDate = async (dateRef, bearerToken, plantConfigs, routesUrlBase) =>
               const typeNameNormalized = normalizeText(event?.type_name);
               if (typeNameNormalized !== 'coleta') continue;
 
+              const eventId = toOptionalInt(event?.id);
+              if (routeId != null && eventId != null) {
+                syncedKeys.add(`${routeId}:${eventId}`);
+              }
+
               const occurrences = Array.isArray(event?.occurrences) ? event.occurrences : [];
               const nonCollectionOccs = occurrences.filter(isNonCollectionOccurrence);
               const placa = getPlate(event, route);
-              const eventId = toOptionalInt(event?.id);
               const isScheduled = !event?.executed && normalizeText(event?.status).startsWith('scheduled');
 
               // Não coletas (ocorrências)
@@ -689,7 +742,7 @@ const syncForDate = async (dateRef, bearerToken, plantConfigs, routesUrlBase) =>
     }
   }
 
-  return { allRows, allRouteRows, totalRoutes, totalEvents, errors };
+  return { allRows, allRouteRows, syncedKeys, syncedPlantIds, totalRoutes, totalEvents, errors };
 };
 
 const syncAll = async () => {
@@ -719,6 +772,7 @@ const syncAll = async () => {
   let grandTotalEvents = 0;
   let grandTotalUpserted = 0;
   let grandTotalRoutesUpserted = 0;
+  let grandTotalDeleted = 0;
   const allErrors = [];
 
   for (const dateRef of dates) {
@@ -746,6 +800,13 @@ const syncAll = async () => {
       }
     }
 
+    // Cleanup: remover eventos do banco que não vieram na API
+    try {
+      grandTotalDeleted += await deleteStaleEvents(dateRef, result.syncedKeys, result.syncedPlantIds);
+    } catch (err) {
+      allErrors.push(`Cleanup ${dateRef}: ${err?.message || 'erro ao limpar eventos obsoletos'}`);
+    }
+
     allErrors.push(...result.errors);
   }
 
@@ -756,7 +817,7 @@ const syncAll = async () => {
   }
 
   const durationMs = Date.now() - startedAt;
-  console.log(`[SYNC] Concluído em ${(durationMs / 1000).toFixed(1)}s: ${grandTotalRoutes} rotas, ${grandTotalEvents} eventos, ${grandTotalUpserted} events upserted, ${grandTotalRoutesUpserted} routes upserted, ${allErrors.length} erros`);
+  console.log(`[SYNC] Concluído em ${(durationMs / 1000).toFixed(1)}s: ${grandTotalRoutes} rotas, ${grandTotalEvents} eventos, ${grandTotalUpserted} events upserted, ${grandTotalRoutesUpserted} routes upserted, ${grandTotalDeleted} events deleted, ${allErrors.length} erros`);
   if (allErrors.length > 0) {
     console.error('[SYNC] Erros:', allErrors);
   }
