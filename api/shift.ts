@@ -3,7 +3,7 @@ import {
   getShiftApiBaseUrl,
   requestShiftToken,
   getTokenPreview
-} from './lib-shiftApi.js';
+} from './lib/lib-shiftApi.js';
 
 /**
  * Endpoint Shift API — Escala de Motoristas.

@@ -5,7 +5,7 @@ import {
   closeRwePool,
   type RouteWebEventDbRow,
   type RouteWebRouteDbRow
-} from './lib-rweDb.js';
+} from './lib/lib-rweDb.js';
 
 /**
  * Endpoint consolidado Route Web DB.

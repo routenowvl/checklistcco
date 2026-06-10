@@ -19,8 +19,8 @@ import {
   deleteNonCollection,
   insertConfig,
   fixNonCollectionsRoutes
-} from './lib-checklistDb.js';
-import { getGraphAppToken } from './lib-graphAppAuth.js';
+} from './lib/lib-checklistDb.js';
+import { getGraphAppToken } from './lib/lib-graphAppAuth.js';
 
 const validateToken = async (authHeader: string | undefined): Promise<boolean> => {
   if (!authHeader) return false;
