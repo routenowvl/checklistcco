@@ -696,7 +696,8 @@ const syncForDate = async (dateRef, bearerToken, plantConfigs, routesUrlBase) =>
               }
 
               // Coletas previstas (scheduled, not executed, sem ocorrências relevantes)
-              if (isScheduled) {
+              // Não gera coleta-prevista se já gerou nao-coleta para este evento
+              if (isScheduled && nonCollectionOccs.length === 0) {
                 if (routeId != null && eventId != null) {
                   syncedKeys.add(`${routeId}:${eventId}`);
                 }

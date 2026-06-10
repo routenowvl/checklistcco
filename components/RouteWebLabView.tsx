@@ -691,8 +691,11 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
 
       let dbEvents: any[] = eventsData.events || [];
 
-      // Deduplicar: um único registro por event_id (manter o com occurrence_inserted_at mais recente)
+      // Deduplicar: um único registro por event_id
+      // Prioridade: nao-coleta > coleta-prevista (se ambas existirem, nao-coleta sempre vence)
+      // Desempate por timestamp mais recente
       const seenEvents = new Map<string, any>();
+      const statusPriority: Record<string, number> = { 'nao-coleta': 2, 'coleta-prevista': 1 };
       for (const row of dbEvents) {
         const key = String(row.event_id ?? '');
         if (!key) continue;
@@ -701,10 +704,18 @@ const RouteWebLabView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
           seenEvents.set(key, row);
           continue;
         }
-        const existingTime = String(existing.occurrence_inserted_at || existing.event_updated_at || '');
-        const rowTime = String(row.occurrence_inserted_at || row.event_updated_at || '');
-        if (rowTime > existingTime) {
+        const existingPriority = statusPriority[String(existing.status_type || '')] || 0;
+        const rowPriority = statusPriority[String(row.status_type || '')] || 0;
+        if (rowPriority > existingPriority) {
           seenEvents.set(key, row);
+          continue;
+        }
+        if (rowPriority === existingPriority) {
+          const existingTime = String(existing.occurrence_inserted_at || existing.event_updated_at || '');
+          const rowTime = String(row.occurrence_inserted_at || row.event_updated_at || '');
+          if (rowTime > existingTime) {
+            seenEvents.set(key, row);
+          }
         }
       }
       if (seenEvents.size > 0) {

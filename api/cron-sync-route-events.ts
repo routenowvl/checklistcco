@@ -357,7 +357,8 @@ const syncAll = async (): Promise<{
                 }
 
                 // Coletas previstas (scheduled, not executed, sem ocorrências relevantes)
-                if (isScheduled) {
+                // Não gera coleta-prevista se já gerou nao-coleta para este evento
+                if (isScheduled && nonCollectionOccs.length === 0) {
                   totalEvents += 1;
                   allRows.push({
                     route_id: routeId,
