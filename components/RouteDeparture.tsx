@@ -97,7 +97,8 @@ const CAUSAS_RAIZ_MANUTENCAO = [
   'Barra de direção',
   'Levante do Trcuk',
   'Bolsa de ar Suspensor do truck',
-  'Atrasos por manutenção anterior'
+  'Atrasos por manutenção anterior',
+  'Troca de filtro/óleo'
 ];
 
 const normalizeCauseText = (value: string): string =>

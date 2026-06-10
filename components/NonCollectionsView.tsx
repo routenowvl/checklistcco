@@ -156,7 +156,8 @@ const CAUSAS_RAIZ_MANUTENCAO = [
   'Barra de direção',
   'Levante do Trcuk',
   'Bolsa de ar Suspensor do truck',
-  'Atrasos por manutenção anterior'
+  'Atrasos por manutenção anterior',
+  'Troca de filtro/óleo'
 ];
 const COLETAS_PREVISTAS_CACHE_TTL_MS = 30 * 60 * 1000;
 const COLETAS_PREVISTAS_CACHE_PREFIX = 'nc_coletas_previstas_cache_v1';
